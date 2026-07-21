@@ -232,35 +232,52 @@ def run_version_detect_task():
         set_done()
 
 
-def run_test_task(version: str, grade: str, modules: list):
-    """后台执行检测流程"""
+def run_full_task(version: str, grade: str, modules: list):
+    """一键全流程：登录 → 切换版本 → 选年级 → 测模块"""
     try:
-        set_running("test")
+        set_running("full")
         config = load_config()
         adb = get_adb()
 
-        total_steps = 5 + len(modules) * 3
-        current = 0
+        total = 8 + len(modules) * 3
+        cur = 0
 
-        # 1. 启动APP + 登录
-        current += 1
-        log_msg(f"启动APP... ({current}/{total_steps})")
-        update_progress(current, total_steps, "启动APP")
+        # 1. 启动APP
+        cur += 1
+        log_msg(f"1/{total} 启动APP")
+        update_progress(cur, total, "启动APP")
         adb.launch_app(config.app.package)
         time.sleep(5)
 
-        current += 1
-        log_msg(f"关闭广告... ({current}/{total_steps})")
-        update_progress(current, total_steps, "关闭广告")
+        # 2. 关闭广告
+        cur += 1
+        log_msg(f"2/{total} 关闭广告")
+        update_progress(cur, total, "关闭广告")
         adb.tap(*AD_CLOSE)
         time.sleep(2)
 
-        # 2. 版本切换
-        current += 1
-        log_msg(f"切换版本到: {version} ({current}/{total_steps})")
-        update_progress(current, total_steps, f"切换版本: {version}")
+        # 3. 登录流程
+        cur += 1
+        log_msg(f"3/{total} 自动登录")
+        update_progress(cur, total, "自动登录")
+        # 勾协议
+        adb.click_element(text="我已阅读并同意", exact=False)
+        time.sleep(1)
+        # 点登录
+        adb.click_element(text="登录", exact=True)
+        time.sleep(3)
+        # 处理弹窗
+        if adb.wait_for_element(text="同意", timeout=3):
+            adb.click_element(resource_id="agree_tv", exact=False)
+            time.sleep(3)
+        adb.tap(*AD_CLOSE)
+        time.sleep(2)
+        adb.screenshot("01_login_done.png")
 
-        # 切换到版本选择页
+        # 4. 切到版本选择页 → 选版本
+        cur += 1
+        log_msg(f"4/{total} 切换版本: {version}")
+        update_progress(cur, total, f"切换版本: {version}")
         adb.tap(*TABS["我"])
         time.sleep(3)
         adb.tap(*SETTINGS_ICON)
@@ -269,83 +286,94 @@ def run_test_task(version: str, grade: str, modules: list):
         time.sleep(2)
         adb.click_element(text="英语所学教材版本", exact=True)
         time.sleep(2)
-
-        # 点击目标版本
         adb.click_element(text=version, exact=True)
         time.sleep(3)
 
-        # 返回首页
-        adb.press_back()  # 个人信息
-        time.sleep(1)
-        adb.press_back()  # 设置
-        time.sleep(1)
-        adb.press_back()  # 我
+        # 5. 返回主页面
+        cur += 1
+        log_msg(f"5/{total} 返回主页面")
+        update_progress(cur, total, "返回主页面")
+        for _ in range(3):
+            adb.press_back()
+            time.sleep(1)
+        adb.tap(*TABS["英语"])
+        time.sleep(6)
+        adb.tap(*AD_CLOSE)
         time.sleep(2)
-        adb.tap(*TABS["英语"])  # 回首页
-        time.sleep(6)  # 等轮播图
+        adb.screenshot("02_back_home.png")
 
-        current += 1
-        log_msg(f"轮播图已稳定 ({current}/{total_steps})")
-        update_progress(current, total_steps, "页面已稳定")
-
-        # 3. 年级选择（如果指定了年级）
+        # 6. 选择年级（在主页面顶部点年级切换器）
         if grade:
-            current += 1
-            log_msg(f"切换年级到: {grade} ({current}/{total_steps})")
-            update_progress(current, total_steps, f"选择年级: {grade}")
-
-            adb.tap(346, 275)  # 打开年级选择器
+            cur += 1
+            log_msg(f"6/{total} 选择年级: {grade}")
+            update_progress(cur, total, f"选择年级: {grade}")
+            adb.tap(346, 275)
             time.sleep(3)
 
-            # 动态查找并点击年级文字
+            # 动态查找年级文字（支持滚动）
             found = False
-            elements = adb.dump_ui()
-            for elem in elements:
-                if grade in elem.text:
-                    adb.tap(elem.center[0], elem.center[1])
-                    log_msg(f"  ✅ 已选择 \"{grade}\" at {elem.center}", "success")
-                    found = True
+            for attempt in range(4):
+                elements = adb.dump_ui()
+                for elem in elements:
+                    if grade in elem.text:
+                        adb.tap(elem.center[0], elem.center[1])
+                        log_msg(f"  ✅ 已选 \"{grade}\" at {elem.center}", "success")
+                        found = True
+                        break
+                if found:
                     break
+                # 没找到，滚屏
+                adb.swipe(540, 1700, 540, 900, 300)
+                time.sleep(2)
 
             if not found:
-                log_msg(f"  ⚠ 未找到 \"{grade}\"", "warning")
+                log_msg(f"  ⚠ 未找到年级 \"{grade}\"", "warning")
             time.sleep(3)
-            adb.screenshot("after_grade_select.png")
+            # 关闭弹窗（点左上角）
+            adb.tap(108, 100)
+            time.sleep(1)
+            adb.screenshot("03_grade_selected.png")
 
-        # 4. 逐模块检测
+        # 7. 等待页面稳定
+        cur += 1
+        log_msg(f"{'7' if grade else '6'}/{total} 页面稳定")
+        update_progress(cur, total, "页面已就绪")
+        time.sleep(3)
+
+        # 8. 逐模块检测
         for i, module in enumerate(modules):
             if module not in MODULE_COORDS:
                 log_msg(f"⚠ 跳过未知模块: {module}", "warning")
                 continue
 
-            coord = MODULE_COORDS[module]
-            cx, cy = coord
+            cx, cy = MODULE_COORDS[module]
 
-            current += 1
-            log_msg(f"[{i+1}/{len(modules)}] 进入模块: {module} ({current}/{total_steps})")
-            update_progress(current, total_steps, f"进入 {module}")
+            cur += 1
+            log_msg(f"[{i+1}/{len(modules)}] 进入: {module} ({cur}/{total})")
+            update_progress(cur, total, f"进入 {module}")
             adb.tap(cx, cy)
             time.sleep(3)
 
-            current += 1
+            cur += 1
             adb.screenshot(f"module_{module}.png")
-            log_msg(f"  ✅ {module} 截图已保存 ({current}/{total_steps})", "success")
-            update_progress(current, total_steps, f"{module} 截图完成")
+            log_msg(f"  ✅ {module} 截图完成 ({cur}/{total})", "success")
+            update_progress(cur, total, f"{module} 截图完成")
 
-            # 返回
-            current += 1
+            cur += 1
             adb.press_back()
             time.sleep(3)
-            adb.tap(*AD_CLOSE)  # 关可能出现的广告
+            adb.tap(*AD_CLOSE)
             time.sleep(2)
-            log_msg(f"  返回首页 ({current}/{total_steps})")
-            update_progress(current, total_steps, "返回首页")
+            log_msg(f"  返回首页 ({cur}/{total})")
+            update_progress(cur, total, "返回首页")
 
-        log_msg(f"✅ 检测完成！共测试 {len(modules)} 个模块", "success")
-        adb.screenshot("test_done.png")
+        log_msg(f"✅ 全流程完成！版本={version}, 年级={grade}, 模块={len(modules)}个", "success")
+        adb.screenshot("99_complete.png")
 
     except Exception as e:
-        log_msg(f"❌ 检测失败: {e}", "error")
+        log_msg(f"❌ 流程失败: {e}", "error")
+        import traceback
+        traceback.print_exc()
     finally:
         set_done()
 
@@ -411,9 +439,9 @@ def api_versions():
     return jsonify({"status": "started", "task": "version_detect"})
 
 
-@app.route("/api/test/run", methods=["POST"])
-def api_test_run():
-    """运行检测任务"""
+@app.route("/api/run-full", methods=["POST"])
+def api_run_full():
+    """一键全流程运行：登录 → 切换版本 → 选年级 → 测模块"""
     if task_status["running"]:
         return jsonify({"error": "已有任务在运行"}), 409
 
@@ -422,7 +450,7 @@ def api_test_run():
         return jsonify({"error": "请提供参数"}), 400
 
     version = data.get("version", "")
-    grade = data.get("grade", "")  # 年级参数，如 "三年级上册"
+    grade = data.get("grade", "")
     modules = data.get("modules", [])
 
     if not version:
@@ -430,11 +458,11 @@ def api_test_run():
     if not modules:
         return jsonify({"error": "请选择至少一个模块"}), 400
 
-    t = threading.Thread(target=run_test_task, args=(version, grade, modules), daemon=True)
+    t = threading.Thread(target=run_full_task, args=(version, grade, modules), daemon=True)
     t.start()
     return jsonify({
         "status": "started",
-        "task": "test",
+        "task": "full",
         "version": version,
         "grade": grade,
         "modules": modules,

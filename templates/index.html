@@ -99,7 +99,7 @@ body { font-family:-apple-system,"Microsoft YaHei",sans-serif; background:#f0f2f
   <!-- 左栏: 控制面板 -->
   <div>
     <div class="card">
-      <div class="card-title">📱 设备控制</div>
+      <div class="card-title">📱 设备状态</div>
       <div class="device-info" id="deviceInfo">
         <div class="row"><span class="key">状态</span><span class="value" id="statusText"><span class="status-dot offline"></span>检测中...</span></div>
         <div class="row"><span class="key">型号</span><span class="value" id="modelText">—</span></div>
@@ -108,27 +108,27 @@ body { font-family:-apple-system,"Microsoft YaHei",sans-serif; background:#f0f2f
     </div>
 
     <div class="card">
-      <div class="card-title">🔑 登录</div>
-      <button class="btn btn-primary" id="loginBtn" onclick="startLogin()">自动登录</button>
-      <div style="font-size:12px;color:#888;text-align:center">自动完成：勾选协议 → 点击登录 → 同意弹窗 → 关闭广告</div>
-    </div>
-
-    <div class="card">
-      <div class="card-title">📚 版本选择</div>
-      <button class="btn btn-outline" id="versionBtn" onclick="fetchVersions()">🔄 刷新版本列表</button>
-      <select class="version-select" id="versionSelect" disabled onchange="onVersionChange()"><option>— 请先刷新版本列表 —</option></select>
-      <div id="versionInfo" class="version-info" style="display:none">
-        <span class="label">当前:</span><span class="value" id="currentVersionText">—</span>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-title">📖 年级选择</div>
-      <button class="btn btn-outline" id="gradeBtn" onclick="fetchGrades()" disabled>🔄 刷新年级列表</button>
-      <div id="gradeGrid" style="display:none">
-        <div style="font-size:12px;color:#888;margin-bottom:8px">点击选择目标年级（含新/老教材）</div>
-        <div id="gradeItems" class="module-grid"></div>
-      </div>
+      <div class="card-title">📚 配置</div>
+      <div style="font-size:12px;color:#888;margin-bottom:8px">英语书版本</div>
+      <select class="version-select" id="versionSelect">
+        <option value="湘少版(2024审定)">湘少版(2024审定)</option>
+        <option value="湘鲁版(2024审定)">湘鲁版(2024审定)</option>
+        <option value="人教版(PEP)(2024审定)" selected>人教版(PEP)(2024审定)</option>
+        <option value="教科版(2024审定)">教科版(2024审定)</option>
+        <option value="教科版">教科版</option>
+      </select>
+      <div style="font-size:12px;color:#888;margin:8px 0">年级</div>
+      <select class="version-select" id="gradeSelect">
+        <option value="一年级上册">一年级上册</option>
+        <option value="一年级下册">一年级下册</option>
+        <option value="二年级上册">二年级上册</option>
+        <option value="二年级下册">二年级下册</option>
+        <option value="三年级上册">三年级上册</option>
+        <option value="三年级下册" selected>三年级下册</option>
+        <option value="四年级上册">四年级上册</option>
+        <option value="四年级下册">四年级下册</option>
+        <option value="五年级上册">五年级上册</option>
+      </select>
     </div>
 
     <div class="card">
@@ -140,7 +140,7 @@ body { font-family:-apple-system,"Microsoft YaHei",sans-serif; background:#f0f2f
       <div id="moduleGroups"></div>
     </div>
 
-    <button class="btn btn-success" id="runBtn" onclick="startTest()" disabled>▶ 开始检测</button>
+    <button class="btn btn-success" id="runBtn" onclick="startFullRun()" style="font-size:16px;padding:14px">▶ 一键全流程运行</button>
   </div>
 
   <!-- 中栏: 进度与日志 -->
@@ -270,7 +270,7 @@ function updateTaskStatus(status) {
   }
 
   // 更新按钮状态
-  const btns = ['loginBtn', 'versionBtn', 'gradeBtn', 'runBtn']
+  const btns = ['runBtn']
   btns.forEach(id => {
     $(id).disabled = running
     if (running) $(id).style.cursor = 'not-allowed'
@@ -303,124 +303,37 @@ async function pollLog() {
 }
 
 // ============================================================
-// 登录
+// 一键全流程运行
 // ============================================================
-async function startLogin() {
-  const res = await fetch('/api/login', { method:'POST' })
-  const data = await res.json()
-  if (data.error) { alert(data.error); return }
-  addLog('info', '登录任务已启动')
-}
-
-// ============================================================
-// 版本列表
-// ============================================================
-async function fetchVersions() {
-  $('versionBtn').disabled = true
-  $('versionBtn').textContent = '⏳ 正在检测...'
-  addLog('info', '开始检测可用版本...')
-
-  const res = await fetch('/api/versions', { method:'POST' })
-  const data = await res.json()
-  if (data.error) { alert(data.error); return }
-
-  // 轮询等待版本检测完成
-  await waitForTaskDone('version_detect')
-
-  // 获取结果
-  const versionRes = await fetch('/api/versions')
-  const versionData = await versionRes.json()
-  const versions = versionData.versions || []
-
-  const sel = $('versionSelect')
-  sel.innerHTML = ''
-  if (versions.length === 0) {
-    sel.innerHTML = '<option>未检测到版本</option>'
-  } else {
-    // 去重（只保留含"版"字的版本条目）
-    const versionNames = [...new Set(versions.filter(v => v.text.includes('版')).map(v => v.text))]
-    versionNames.forEach(name => {
-      const opt = document.createElement('option')
-      opt.value = name
-      opt.textContent = name
-      sel.appendChild(opt)
-    })
-    addLog('success', `检测到 ${versionNames.length} 个版本`)
+async function startFullRun() {
+  const version = $('versionSelect').value
+  const grade = $('gradeSelect').value
+  const modules = []
+  document.querySelectorAll('#moduleGroups input[type="checkbox"]:checked').forEach(cb => {
+    modules.push(cb.value)
+  })
+  if (!version) {
+    alert('请选择版本')
+    return
   }
-  sel.disabled = false
-  $('versionBtn').disabled = false
-  $('versionBtn').textContent = '🔄 刷新版本列表'
-  $('runBtn').disabled = false
-}
-
-// ============================================================
-// 年级列表
-// ============================================================
-let selectedGrade = ''
-
-function onVersionChange() {
-  const val = $('versionSelect').value
-  if (val && !val.startsWith('—')) {
-    $('gradeBtn').disabled = false
-    $('gradeGrid').style.display = 'none'
-  }
-}
-
-async function fetchGrades() {
-  $('gradeBtn').disabled = true
-  $('gradeBtn').textContent = '⏳ 正在检测...'
-  addLog('info', '开始检测可用年级...')
-
-  const res = await fetch('/api/grades', { method:'POST' })
-  const data = await res.json()
-
-  if (data.error) {
-    addLog('error', '年级检测失败: ' + data.error)
-    $('gradeBtn').disabled = false
-    $('gradeBtn').textContent = '🔄 刷新年级列表'
+  if (modules.length === 0) {
+    alert('请至少选择一个模块')
     return
   }
 
-  const grades = data.grades || []
-  const bookGrades = grades.filter(g => g.is_book)
+  $('runBtn').disabled = true
+  $('runBtn').textContent = '⏳ 运行中...'
 
-  const container = $('gradeItems')
-  container.innerHTML = ''
+  addLog('info', `🚀 一键全流程启动: 版本=${version} 年级=${grade} 模块=${modules.length}个`)
 
-  if (bookGrades.length === 0) {
-    container.innerHTML = '<div style="font-size:13px;color:#888">未检测到年级选项</div>'
-  } else {
-    bookGrades.forEach(g => {
-      const div = document.createElement('div')
-      div.className = 'module-item'
-      div.style.cursor = 'pointer'
-      div.style.border = '1.5px solid #e2e8f0'
-      div.style.borderRadius = '8px'
-      div.style.padding = '10px 12px'
-      div.style.textAlign = 'center'
-      div.style.transition = 'all 0.2s'
-      div.textContent = g.text
-      div.onclick = function() {
-        document.querySelectorAll('#gradeItems .module-item').forEach(d => {
-          d.style.borderColor = '#e2e8f0'
-          d.style.background = 'white'
-          d.style.color = '#333'
-        })
-        this.style.borderColor = '#4a6cf7'
-        this.style.background = '#eef1fd'
-        this.style.color = '#4a6cf7'
-        this.style.fontWeight = '500'
-        selectedGrade = g.text
-        addLog('success', '已选择年级: ' + g.text)
-      }
-      container.appendChild(div)
-    })
-  }
-
-  $('gradeGrid').style.display = 'block'
-  $('gradeBtn').disabled = false
-  $('gradeBtn').textContent = '🔄 刷新年级列表'
-  addLog('success', `检测到 ${bookGrades.length} 个年级选项`)
+  const res = await fetch('/api/run-full', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ version, grade, modules }),
+  })
+  const data = await res.json()
+  if (data.error) { alert(data.error); $('runBtn').disabled = false; return }
+  addLog('info', '任务已启动，请等待...')
 }
 
 // ============================================================
@@ -453,42 +366,6 @@ async function loadModules() {
 
 function selectAll(checked) {
   document.querySelectorAll('#moduleGroups input[type="checkbox"]').forEach(cb => cb.checked = checked)
-}
-
-// ============================================================
-// 启动检测
-// ============================================================
-async function startTest() {
-  const version = $('versionSelect').value
-  if (!version || version.startsWith('—')) {
-    alert('请先选择版本')
-    return
-  }
-  const modules = []
-  document.querySelectorAll('#moduleGroups input[type="checkbox"]:checked').forEach(cb => {
-    modules.push(cb.value)
-  })
-  if (modules.length === 0) {
-    alert('请至少选择一个模块')
-    return
-  }
-
-  if (!selectedGrade) {
-    if (!confirm('未选择年级，将跳过年级切换。继续吗？')) return
-  }
-
-  $('runBtn').disabled = true
-  $('runBtn').textContent = '⏳ 运行中...'
-  addLog('info', `版本: ${version}, 年级: ${selectedGrade||'默认'}, 模块: ${modules.join(', ')}`)
-
-  const res = await fetch('/api/test/run', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ version, grade: selectedGrade, modules }),
-  })
-  const data = await res.json()
-  if (data.error) { alert(data.error); return }
-  addLog('info', '检测任务已启动')
 }
 
 // ============================================================
