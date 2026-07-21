@@ -116,9 +116,18 @@ body { font-family:-apple-system,"Microsoft YaHei",sans-serif; background:#f0f2f
     <div class="card">
       <div class="card-title">📚 版本选择</div>
       <button class="btn btn-outline" id="versionBtn" onclick="fetchVersions()">🔄 刷新版本列表</button>
-      <select class="version-select" id="versionSelect" disabled><option>— 请先刷新版本列表 —</option></select>
+      <select class="version-select" id="versionSelect" disabled onchange="onVersionChange()"><option>— 请先刷新版本列表 —</option></select>
       <div id="versionInfo" class="version-info" style="display:none">
         <span class="label">当前:</span><span class="value" id="currentVersionText">—</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">📖 年级选择</div>
+      <button class="btn btn-outline" id="gradeBtn" onclick="fetchGrades()" disabled>🔄 刷新年级列表</button>
+      <div id="gradeGrid" style="display:none">
+        <div style="font-size:12px;color:#888;margin-bottom:8px">点击选择目标年级（含新/老教材）</div>
+        <div id="gradeItems" class="module-grid"></div>
       </div>
     </div>
 
@@ -261,7 +270,7 @@ function updateTaskStatus(status) {
   }
 
   // 更新按钮状态
-  const btns = ['loginBtn', 'versionBtn', 'runBtn']
+  const btns = ['loginBtn', 'versionBtn', 'gradeBtn', 'runBtn']
   btns.forEach(id => {
     $(id).disabled = running
     if (running) $(id).style.cursor = 'not-allowed'
@@ -345,6 +354,76 @@ async function fetchVersions() {
 }
 
 // ============================================================
+// 年级列表
+// ============================================================
+let selectedGrade = ''
+
+function onVersionChange() {
+  const val = $('versionSelect').value
+  if (val && !val.startsWith('—')) {
+    $('gradeBtn').disabled = false
+    $('gradeGrid').style.display = 'none'
+  }
+}
+
+async function fetchGrades() {
+  $('gradeBtn').disabled = true
+  $('gradeBtn').textContent = '⏳ 正在检测...'
+  addLog('info', '开始检测可用年级...')
+
+  const res = await fetch('/api/grades', { method:'POST' })
+  const data = await res.json()
+
+  if (data.error) {
+    addLog('error', '年级检测失败: ' + data.error)
+    $('gradeBtn').disabled = false
+    $('gradeBtn').textContent = '🔄 刷新年级列表'
+    return
+  }
+
+  const grades = data.grades || []
+  const bookGrades = grades.filter(g => g.is_book)
+
+  const container = $('gradeItems')
+  container.innerHTML = ''
+
+  if (bookGrades.length === 0) {
+    container.innerHTML = '<div style="font-size:13px;color:#888">未检测到年级选项</div>'
+  } else {
+    bookGrades.forEach(g => {
+      const div = document.createElement('div')
+      div.className = 'module-item'
+      div.style.cursor = 'pointer'
+      div.style.border = '1.5px solid #e2e8f0'
+      div.style.borderRadius = '8px'
+      div.style.padding = '10px 12px'
+      div.style.textAlign = 'center'
+      div.style.transition = 'all 0.2s'
+      div.textContent = g.text
+      div.onclick = function() {
+        document.querySelectorAll('#gradeItems .module-item').forEach(d => {
+          d.style.borderColor = '#e2e8f0'
+          d.style.background = 'white'
+          d.style.color = '#333'
+        })
+        this.style.borderColor = '#4a6cf7'
+        this.style.background = '#eef1fd'
+        this.style.color = '#4a6cf7'
+        this.style.fontWeight = '500'
+        selectedGrade = g.text
+        addLog('success', '已选择年级: ' + g.text)
+      }
+      container.appendChild(div)
+    })
+  }
+
+  $('gradeGrid').style.display = 'block'
+  $('gradeBtn').disabled = false
+  $('gradeBtn').textContent = '🔄 刷新年级列表'
+  addLog('success', `检测到 ${bookGrades.length} 个年级选项`)
+}
+
+// ============================================================
 // 模块列表
 // ============================================================
 async function loadModules() {
@@ -394,14 +473,18 @@ async function startTest() {
     return
   }
 
+  if (!selectedGrade) {
+    if (!confirm('未选择年级，将跳过年级切换。继续吗？')) return
+  }
+
   $('runBtn').disabled = true
   $('runBtn').textContent = '⏳ 运行中...'
-  addLog('info', `版本: ${version}, 模块: ${modules.join(', ')}`)
+  addLog('info', `版本: ${version}, 年级: ${selectedGrade||'默认'}, 模块: ${modules.join(', ')}`)
 
   const res = await fetch('/api/test/run', {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ version, modules }),
+    body: JSON.stringify({ version, grade: selectedGrade, modules }),
   })
   const data = await res.json()
   if (data.error) { alert(data.error); return }

@@ -232,7 +232,7 @@ def run_version_detect_task():
         set_done()
 
 
-def run_test_task(version: str, modules: list):
+def run_test_task(version: str, grade: str, modules: list):
     """后台执行检测流程"""
     try:
         set_running("test")
@@ -288,7 +288,31 @@ def run_test_task(version: str, modules: list):
         log_msg(f"轮播图已稳定 ({current}/{total_steps})")
         update_progress(current, total_steps, "页面已稳定")
 
-        # 3. 逐模块检测
+        # 3. 年级选择（如果指定了年级）
+        if grade:
+            current += 1
+            log_msg(f"切换年级到: {grade} ({current}/{total_steps})")
+            update_progress(current, total_steps, f"选择年级: {grade}")
+
+            adb.tap(346, 275)  # 打开年级选择器
+            time.sleep(3)
+
+            # 动态查找并点击年级文字
+            found = False
+            elements = adb.dump_ui()
+            for elem in elements:
+                if grade in elem.text:
+                    adb.tap(elem.center[0], elem.center[1])
+                    log_msg(f"  ✅ 已选择 \"{grade}\" at {elem.center}", "success")
+                    found = True
+                    break
+
+            if not found:
+                log_msg(f"  ⚠ 未找到 \"{grade}\"", "warning")
+            time.sleep(3)
+            adb.screenshot("after_grade_select.png")
+
+        # 4. 逐模块检测
         for i, module in enumerate(modules):
             if module not in MODULE_COORDS:
                 log_msg(f"⚠ 跳过未知模块: {module}", "warning")
@@ -398,6 +422,7 @@ def api_test_run():
         return jsonify({"error": "请提供参数"}), 400
 
     version = data.get("version", "")
+    grade = data.get("grade", "")  # 年级参数，如 "三年级上册"
     modules = data.get("modules", [])
 
     if not version:
@@ -405,12 +430,13 @@ def api_test_run():
     if not modules:
         return jsonify({"error": "请选择至少一个模块"}), 400
 
-    t = threading.Thread(target=run_test_task, args=(version, modules), daemon=True)
+    t = threading.Thread(target=run_test_task, args=(version, grade, modules), daemon=True)
     t.start()
     return jsonify({
         "status": "started",
         "task": "test",
         "version": version,
+        "grade": grade,
         "modules": modules,
     })
 
@@ -436,6 +462,68 @@ def api_modules():
             "全脑记词":  (919, 2033),
         },
     })
+
+
+@app.route("/api/grades", methods=["POST"])
+def api_grades():
+    """检测当前版本的可用年级列表（含新/老教材标记）"""
+    if task_status["running"]:
+        return jsonify({"error": "已有任务在运行"}), 409
+
+    config = load_config()
+    adb = get_adb()
+
+    try:
+        # 确保在主页，打开年级选择弹窗
+        adb.tap(346, 275)  # 切换器
+        time.sleep(3)
+
+        elements = adb.dump_ui()
+        if not elements:
+            return jsonify({"error": "UI dump失败", "grades": []})
+
+        # 解析年级数据
+        grades = []
+        seen = set()
+        for elem in elements:
+            text = elem.text
+            if not text:
+                continue
+            # 检测是否含年级/册文字
+            is_book = any(k in text for k in ['年级', '册'])
+            is_new_tag = '新教材' in text
+            if is_book or is_new_tag:
+                if text not in seen:
+                    seen.add(text)
+                    # 找容器坐标（可点击区域）
+                    container = None
+                    for ce in elements:
+                        if ce.clickable and elem.center[0] >= ce.bounds[0] and elem.center[0] <= ce.bounds[2] \
+                                and elem.center[1] >= ce.bounds[1] and elem.center[1] <= ce.bounds[3]:
+                            container = list(ce.center)
+                            break
+
+                    grades.append({
+                        "text": text,
+                        "center": list(elem.center),
+                        "container": container,
+                        "is_new_tag": is_new_tag,
+                        "is_book": is_book,
+                    })
+
+        # 关闭弹窗
+        adb.press_back()
+        time.sleep(1)
+
+        # 结构化输出
+        book_grades = [g for g in grades if g["is_book"]]
+        log_msg(f"✅ 检测到 {len(book_grades)} 个年级选项")
+
+        return jsonify({"grades": grades, "book_grades": book_grades})
+
+    except Exception as e:
+        log_msg(f"❌ 年级检测失败: {e}", "error")
+        return jsonify({"error": str(e), "grades": []})
 
 
 @app.route("/api/screenshot/<filename>")
