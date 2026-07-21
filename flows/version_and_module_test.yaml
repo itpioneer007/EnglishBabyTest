@@ -52,8 +52,8 @@ steps:
   - action: wait
     seconds: 2
 
-  # ===== 年级切换 =====
-  # 点击版本/年级切换器
+  # ===== 年级切换（动态检测，适应所有版本） =====
+  # 先打开"切换课本"弹窗
   - action: tap
     x: 346
     y: 275
@@ -61,10 +61,11 @@ steps:
   - action: wait
     seconds: 2
 
-  # 选择年级: 三年级上册
-  - action: tap
-    x: 540
-    y: 1172
+  # 动态查找目标年级并点击（支持滚动查找）
+  - action: find_text_and_tap
+    text: "三年级上册"
+    max_scrolls: 3
+    scroll_step: 500
 
   - action: wait
     seconds: 3

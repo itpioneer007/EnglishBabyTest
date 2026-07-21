@@ -155,6 +155,34 @@ class FlowRunner:
         if action == "tap":
             return self.adb.tap(step["x"], step["y"])
 
+        elif action == "find_text_and_tap":
+            """动态搜索文字并点击（支持滚动查找）
+            用于年级选择、动态内容等坐标不固定的场景。
+            YAML用法:
+              - action: find_text_and_tap
+                text: "三年级上册"
+                max_scrolls: 3
+                scroll_step: 500
+            """
+            text = step.get("text", "")
+            max_scrolls = step.get("max_scrolls", 3)
+            scroll_step = step.get("scroll_step", 500)
+
+            for attempt in range(max_scrolls):
+                elements = self.adb.dump_ui()
+                # 找包含指定文字的 TextView
+                for elem in elements:
+                    if text in elem.text:
+                        self.adb.tap(elem.center[0], elem.center[1])
+                        self.adb._log("动态点击", f"\"{text}\" at {elem.center}", success=True)
+                        return True
+                if attempt < max_scrolls - 1:
+                    self.adb.swipe(540, 1500, 540, 1500 - scroll_step)
+                    import time
+                    time.sleep(1)
+            self.adb._log("动态点击", f"未找到 \"{text}\" (已滚动{max_scrolls}次)", success=False)
+            return False
+
         elif action == "click_element":
             return self.adb.click_element(
                 text=step.get("text", ""),
