@@ -1,0 +1,508 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+英语宝模块检测 - Web 控制面板
+Flask 后端，提供 REST API 和前端页面
+
+启动:
+    cd 英语宝模块检测
+    python web_server.py
+
+打开浏览器访问: http://localhost:5000
+"""
+
+import os
+import sys
+import json
+import time
+import threading
+import re
+import subprocess as sp
+from pathlib import Path
+from datetime import datetime
+
+# 添加 src 到路径
+PROJECT_ROOT = Path(__file__).parent.absolute()
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from flask import Flask, jsonify, request, send_from_directory, render_template, Response
+from adb_controller import ADBController
+from config_loader import load_config
+
+app = Flask(__name__)
+
+# ============================================================
+# 全局状态
+# ============================================================
+task_status = {
+    "running": False,
+    "current_task": "",
+    "progress": [],
+    "start_time": "",
+    "end_time": "",
+    "log": [],
+}
+
+_last_screenshot = ""
+
+# 模块坐标（从 uiautomator dump 获取的精确坐标）
+MODULE_COORDS = {
+    # 教材精学 (人教版下的坐标)
+    "课本点读(左)": (203, 1191),
+    "课本点读(中)": (540, 1191),
+    "巧记单词":     (876, 1191),
+    "语音评测":     (203, 1358),
+    # 专项突破
+    "听课文":    (161, 1792),
+    "课文动画":  (414, 1792),
+    "基础训练":  (666, 1792),
+    "一课一练":  (919, 1792),
+    "课文配音":  (161, 2033),
+    "口语训练":  (414, 2033),
+    "复习回顾":  (666, 2033),
+    "全脑记词":  (919, 2033),
+}
+
+# 底部导航坐标
+TABS = {
+    "英语": (108, 2233),
+    "我":   (972, 2220),
+}
+
+SETTINGS_ICON = (1000, 170)
+AD_CLOSE = (540, 1821)
+
+
+# ============================================================
+# 工具函数
+# ============================================================
+
+def get_adb():
+    """获取 ADBController 实例"""
+    config = load_config()
+    out_dir = PROJECT_ROOT / "outputs" / "web"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    return ADBController(serial=config.device.serial, screenshot_dir=str(out_dir))
+
+
+def log_msg(msg: str, level: str = "info"):
+    """添加日志"""
+    entry = {
+        "time": datetime.now().strftime("%H:%M:%S"),
+        "msg": msg,
+        "level": level,
+    }
+    task_status["log"].append(entry)
+    print(f"[{entry['time']}] [{level}] {msg}")
+
+
+def clear_status():
+    """清空状态"""
+    task_status["running"] = False
+    task_status["current_task"] = ""
+    task_status["progress"] = []
+    task_status["start_time"] = ""
+    task_status["end_time"] = ""
+    task_status["log"] = []
+
+
+def set_running(task_name: str):
+    """设置为运行中"""
+    clear_status()
+    task_status["running"] = True
+    task_status["current_task"] = task_name
+    task_status["start_time"] = datetime.now().strftime("%H:%M:%S")
+
+
+def set_done():
+    """设置为完成"""
+    task_status["running"] = False
+    task_status["end_time"] = datetime.now().strftime("%H:%M:%S")
+
+
+def update_progress(step: int, total: int, msg: str):
+    """更新进度"""
+    entry = {"step": step, "total": total, "msg": msg}
+    task_status["progress"].append(entry)
+
+
+# ============================================================
+# 后台任务函数
+# ============================================================
+
+def run_login_task():
+    """后台执行登录"""
+    try:
+        set_running("login")
+        adb = get_adb()
+        config = load_config()
+
+        log_msg("启动英语宝APP...")
+        update_progress(1, 6, "启动APP")
+        adb.launch_app(config.app.package)
+        time.sleep(5)
+
+        log_msg("关闭启动广告...")
+        update_progress(2, 6, "关闭广告")
+        adb.tap(*AD_CLOSE)
+        time.sleep(2)
+
+        log_msg("勾选协议...")
+        update_progress(3, 6, "勾选协议")
+        adb.click_element(text="我已阅读并同意", exact=False)
+        time.sleep(1)
+
+        log_msg("点击登录...")
+        update_progress(4, 6, "点击登录")
+        # 先按 exact 尝试
+        if not adb.click_element(text="登录", exact=True):
+            adb.tap(540, 1232)  # fallback: 登录按钮已知坐标
+        time.sleep(3)
+
+        log_msg("处理协议弹窗...")
+        update_progress(5, 6, "协议弹窗")
+        if adb.wait_for_element(text="同意", timeout=3):
+            adb.click_element(resource_id="agree_tv", exact=False)
+            time.sleep(3)
+
+        log_msg("关闭广告弹窗...")
+        adb.tap(*AD_CLOSE)
+        time.sleep(2)
+
+        adb.screenshot("login_done.png")
+        log_msg("✅ 登录完成！", "success")
+        update_progress(6, 6, "登录成功")
+
+    except Exception as e:
+        log_msg(f"❌ 登录失败: {e}", "error")
+    finally:
+        set_done()
+
+
+def run_version_detect_task():
+    """后台检测可用版本"""
+    try:
+        set_running("version_detect")
+        config = load_config()
+        adb = get_adb()
+
+        log_msg("导航到版本选择页...")
+        update_progress(1, 5, "进入'我'页")
+        adb.tap(*TABS["我"])
+        time.sleep(3)
+
+        update_progress(2, 5, "进入设置")
+        adb.tap(*SETTINGS_ICON)
+        time.sleep(2)
+
+        update_progress(3, 5, "进入个人信息")
+        adb.click_element(text="个人信息", exact=True)
+        time.sleep(2)
+
+        update_progress(4, 5, "点击英语所学教材版本")
+        adb.click_element(text="英语所学教材版本", exact=True)
+        time.sleep(2)
+
+        log_msg("截图版本选择页...")
+        adb.screenshot("versions_page.png")
+        update_progress(5, 5, "版本页已打开")
+
+        # dump UI 获取版本列表
+        elements = adb.dump_ui()
+        versions = []
+        for elem in elements:
+            if elem.text and ("版" in elem.text or "年级" in elem.text):
+                versions.append({
+                    "text": elem.text,
+                    "center": list(elem.center),
+                    "bounds": list(elem.bounds),
+                })
+
+        # 保存到临时文件供 API 读取
+        versions_file = PROJECT_ROOT / "outputs" / "web" / "versions.json"
+        with open(versions_file, "w", encoding="utf-8") as f:
+            json.dump(versions, f, ensure_ascii=False, indent=2)
+
+        log_msg(f"✅ 检测到 {len(versions)} 个版本元素", "success")
+        log_msg(f"  可用版本: {[v['text'] for v in versions]}")
+
+    except Exception as e:
+        log_msg(f"❌ 版本检测失败: {e}", "error")
+    finally:
+        set_done()
+
+
+def run_test_task(version: str, modules: list):
+    """后台执行检测流程"""
+    try:
+        set_running("test")
+        config = load_config()
+        adb = get_adb()
+
+        total_steps = 5 + len(modules) * 3
+        current = 0
+
+        # 1. 启动APP + 登录
+        current += 1
+        log_msg(f"启动APP... ({current}/{total_steps})")
+        update_progress(current, total_steps, "启动APP")
+        adb.launch_app(config.app.package)
+        time.sleep(5)
+
+        current += 1
+        log_msg(f"关闭广告... ({current}/{total_steps})")
+        update_progress(current, total_steps, "关闭广告")
+        adb.tap(*AD_CLOSE)
+        time.sleep(2)
+
+        # 2. 版本切换
+        current += 1
+        log_msg(f"切换版本到: {version} ({current}/{total_steps})")
+        update_progress(current, total_steps, f"切换版本: {version}")
+
+        # 切换到版本选择页
+        adb.tap(*TABS["我"])
+        time.sleep(3)
+        adb.tap(*SETTINGS_ICON)
+        time.sleep(2)
+        adb.click_element(text="个人信息", exact=True)
+        time.sleep(2)
+        adb.click_element(text="英语所学教材版本", exact=True)
+        time.sleep(2)
+
+        # 点击目标版本
+        adb.click_element(text=version, exact=True)
+        time.sleep(3)
+
+        # 返回首页
+        adb.press_back()  # 个人信息
+        time.sleep(1)
+        adb.press_back()  # 设置
+        time.sleep(1)
+        adb.press_back()  # 我
+        time.sleep(2)
+        adb.tap(*TABS["英语"])  # 回首页
+        time.sleep(6)  # 等轮播图
+
+        current += 1
+        log_msg(f"轮播图已稳定 ({current}/{total_steps})")
+        update_progress(current, total_steps, "页面已稳定")
+
+        # 3. 逐模块检测
+        for i, module in enumerate(modules):
+            if module not in MODULE_COORDS:
+                log_msg(f"⚠ 跳过未知模块: {module}", "warning")
+                continue
+
+            coord = MODULE_COORDS[module]
+            cx, cy = coord
+
+            current += 1
+            log_msg(f"[{i+1}/{len(modules)}] 进入模块: {module} ({current}/{total_steps})")
+            update_progress(current, total_steps, f"进入 {module}")
+            adb.tap(cx, cy)
+            time.sleep(3)
+
+            current += 1
+            adb.screenshot(f"module_{module}.png")
+            log_msg(f"  ✅ {module} 截图已保存 ({current}/{total_steps})", "success")
+            update_progress(current, total_steps, f"{module} 截图完成")
+
+            # 返回
+            current += 1
+            adb.press_back()
+            time.sleep(3)
+            adb.tap(*AD_CLOSE)  # 关可能出现的广告
+            time.sleep(2)
+            log_msg(f"  返回首页 ({current}/{total_steps})")
+            update_progress(current, total_steps, "返回首页")
+
+        log_msg(f"✅ 检测完成！共测试 {len(modules)} 个模块", "success")
+        adb.screenshot("test_done.png")
+
+    except Exception as e:
+        log_msg(f"❌ 检测失败: {e}", "error")
+    finally:
+        set_done()
+
+
+# ============================================================
+# Flask 路由
+# ============================================================
+
+@app.route("/")
+def index():
+    """前端页面"""
+    return render_template("index.html")
+
+
+@app.route("/api/status")
+def api_status():
+    """设备状态 + 任务状态"""
+    config = load_config()
+    device_ok = False
+    try:
+        r = sp.run(["adb", "-s", config.device.serial, "get-state"],
+                   capture_output=True, text=True, timeout=5,
+                   encoding="utf-8", errors="replace")
+        device_ok = r.returncode == 0 and "device" in r.stdout.lower()
+    except Exception:
+        pass
+
+    return jsonify({
+        "device_connected": device_ok,
+        "device_serial": config.device.serial,
+        "current_version": _get_current_version_from_config(),
+        "task_status": task_status,
+    })
+
+
+@app.route("/api/login", methods=["POST"])
+def api_login():
+    """触发自动登录"""
+    if task_status["running"]:
+        return jsonify({"error": "已有任务在运行"}), 409
+    t = threading.Thread(target=run_login_task, daemon=True)
+    t.start()
+    return jsonify({"status": "started", "task": "login"})
+
+
+@app.route("/api/versions", methods=["GET", "POST"])
+def api_versions():
+    """检测可用版本"""
+    if request.method == "GET":
+        # 返回已缓存的版本列表
+        versions_file = PROJECT_ROOT / "outputs" / "web" / "versions.json"
+        if versions_file.exists():
+            with open(versions_file, "r", encoding="utf-8") as f:
+                versions = json.load(f)
+            return jsonify({"versions": versions})
+        return jsonify({"versions": [], "msg": "尚未检测，请先 POST /api/versions 触发检测"})
+
+    # POST: 触发版本检测
+    if task_status["running"]:
+        return jsonify({"error": "已有任务在运行"}), 409
+    t = threading.Thread(target=run_version_detect_task, daemon=True)
+    t.start()
+    return jsonify({"status": "started", "task": "version_detect"})
+
+
+@app.route("/api/test/run", methods=["POST"])
+def api_test_run():
+    """运行检测任务"""
+    if task_status["running"]:
+        return jsonify({"error": "已有任务在运行"}), 409
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "请提供参数"}), 400
+
+    version = data.get("version", "")
+    modules = data.get("modules", [])
+
+    if not version:
+        return jsonify({"error": "请选择版本"}), 400
+    if not modules:
+        return jsonify({"error": "请选择至少一个模块"}), 400
+
+    t = threading.Thread(target=run_test_task, args=(version, modules), daemon=True)
+    t.start()
+    return jsonify({
+        "status": "started",
+        "task": "test",
+        "version": version,
+        "modules": modules,
+    })
+
+
+@app.route("/api/modules")
+def api_modules():
+    """获取可用模块列表"""
+    return jsonify({
+        "教材精学": {
+            "课本点读(左)": (203, 1191),
+            "课本点读(中)": (540, 1191),
+            "巧记单词":     (876, 1191),
+            "语音评测":     (203, 1358),
+        },
+        "专项突破": {
+            "听课文":    (161, 1792),
+            "课文动画":  (414, 1792),
+            "基础训练":  (666, 1792),
+            "一课一练":  (919, 1792),
+            "课文配音":  (161, 2033),
+            "口语训练":  (414, 2033),
+            "复习回顾":  (666, 2033),
+            "全脑记词":  (919, 2033),
+        },
+    })
+
+
+@app.route("/api/screenshot/<filename>")
+def api_screenshot(filename):
+    """获取截图"""
+    screenshot_dir = PROJECT_ROOT / "outputs" / "web"
+    if (screenshot_dir / filename).exists():
+        return send_from_directory(str(screenshot_dir), filename)
+    # 也查 outputs/screenshots
+    alt_dir = PROJECT_ROOT / "outputs" / "screenshots"
+    if (alt_dir / filename).exists():
+        return send_from_directory(str(alt_dir), filename)
+    return jsonify({"error": "未找到截图"}), 404
+
+
+@app.route("/api/screenshot/latest")
+def api_screenshot_latest():
+    """获取最新截图"""
+    screenshot_dir = PROJECT_ROOT / "outputs" / "web"
+    png_files = sorted(screenshot_dir.glob("*.png"), key=os.path.getmtime, reverse=True)
+    if png_files:
+        return send_from_directory(str(screenshot_dir), png_files[0].name)
+    return jsonify({"error": "无截图"}), 404
+
+
+@app.route("/api/log")
+def api_log():
+    """获取日志"""
+    return jsonify(task_status["log"])
+
+
+@app.route("/api/hardware-info")
+def api_hardware_info():
+    """获取手机信息"""
+    config = load_config()
+    info = {"serial": config.device.serial, "screen": "1080x2400"}
+    try:
+        r = sp.run(["adb", "-s", config.device.serial, "shell", "getprop", "ro.product.model"],
+                   capture_output=True, text=True, timeout=5,
+                   encoding="utf-8", errors="replace")
+        if r.returncode == 0:
+            info["model"] = r.stdout.strip()
+        r2 = sp.run(["adb", "-s", config.device.serial, "shell", "getprop", "ro.product.brand"],
+                    capture_output=True, text=True, timeout=5,
+                    encoding="utf-8", errors="replace")
+        if r2.returncode == 0:
+            info["brand"] = r2.stdout.strip()
+    except Exception:
+        pass
+    return jsonify(info)
+
+
+def _get_current_version_from_config() -> str:
+    """从配置文件获取当前版本"""
+    # 上次检测到的人教版(PEP)版本
+    return "人教版（PEP）（2024审定）"
+
+
+# ============================================================
+# 启动
+# ============================================================
+
+if __name__ == "__main__":
+    print("=" * 50)
+    print("  英语宝模块检测 - Web 控制面板")
+    print("=" * 50)
+    print(f"  项目路径: {PROJECT_ROOT}")
+    print(f"  启动: http://localhost:5000")
+    print("=" * 50)
+    app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)

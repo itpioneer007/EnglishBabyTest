@@ -1,0 +1,31 @@
+# 英语宝模块检测 - 全局配置
+# 修改此文件即可配置设备、账号、输出路径等
+
+# 设备配置
+device:
+  serial: "SKSCIF4T7PFMQS5X"        # ADB设备序列号 (adb devices 查看)
+  screen_resolution: [1080, 2400]   # 手机屏幕分辨率
+
+# 英语宝APP
+app:
+  package: "com.dinoenglish.yyb"    # APP包名
+  # activity: ""                    # 启动Activity (留空则用monkey启动)
+
+# 灰度账号
+account:
+  username: "10010005"
+  password: "123456"
+
+# 输出配置
+output:
+  dir: "outputs"                    # 输出根目录
+  screenshot_dir: "outputs/screenshots"
+  save_pass_screenshots: false      # 是否保存通过题目的截图
+  question_timeout: 120             # 单题超时(秒)
+  max_retries: 2                    # 最大重试次数
+
+# 流程引擎配置
+flow:
+  default_timeout: 10               # 默认等待超时(秒)
+  poll_interval: 1.0                # 轮询间隔(秒)
+  step_delay: 0.5                   # 步骤间延迟(秒)

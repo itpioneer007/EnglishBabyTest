@@ -1,0 +1,38 @@
+# 关闭弹窗流程（通用）
+# 用于关闭各种广告/提示弹窗
+
+name: "关闭弹窗"
+description: "关闭英语宝APP中的各种广告弹窗和提示框"
+
+steps:
+  # 尝试关闭广告弹窗（通过 close_iv ID）
+  - action: click_element
+    resource_id: "close_iv"
+    required: false
+
+  - action: wait
+    seconds: 1
+
+  # 尝试关闭"温馨提示"类弹窗（点击同意）
+  - action: click_element
+    text: "同意"
+    required: false
+
+  - action: wait
+    seconds: 1
+
+  # 尝试关闭其他常见弹窗
+  - action: click_element
+    text: "确定"
+    required: false
+
+  - action: click_element
+    text: "知道了"
+    required: false
+
+  - action: click_element
+    text: "跳过"
+    required: false
+
+  - action: screenshot
+    name: "after_close_popup"

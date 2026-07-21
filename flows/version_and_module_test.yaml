@@ -1,0 +1,207 @@
+# 英语宝 - 切换教材版本 + 模块测试流程（精确坐标版）
+# 已完整验证的导航路径
+
+name: "英语宝版本切换+模块测试(精确坐标)"
+description: "切换不同教材版本，进入模块，截图，然后返回首页"
+package: "com.dinoenglish.yyb"
+
+# ============================================================
+# 精确坐标 (从 uiautomator dump 获取)
+# ============================================================
+# 底部导航:
+#   英语 tab:  (108, 2233)
+#   我 tab:    (972, 2220)
+#
+# 设置图标 (我页右上角⚙️): (1000, 170)
+#
+# 教材精学模块 (人教版下, dump确认):
+#   课本点读(左):  (203, 1191)
+#   课本点读(中):  (540, 1191)
+#   巧记单词:     (876, 1191)
+#   语音评测:     (203, 1358)
+#
+# 专项突破模块 (人教版下):
+#   听课文:    (161, 1792)
+#   课文动画:  (414, 1792)
+#   基础训练:  (666, 1792)
+#   一课一练:  (919, 1792)
+#   课文配音:  (161, 2033)
+#   口语训练:  (414, 2033)
+#   复习回顾:  (666, 2033)
+#   全脑记词:  (919, 2033)
+# ============================================================
+
+steps:
+  # ===== 第1阶段: 启动APP =====
+  - action: launch_app
+    package: "com.dinoenglish.yyb"
+
+  - action: wait
+    seconds: 5
+
+  - action: tap
+    x: 540
+    y: 1821  # 关闭启动广告
+
+  - action: wait
+    seconds: 2
+
+  # ===== 第2阶段: 进入"我"页面 =====
+  - action: tap
+    x: 972
+    y: 2220  # "我" tab
+
+  - action: wait
+    seconds: 3
+
+  # ===== 第3阶段: 进入设置 → 个人信息 =====
+  - action: tap
+    x: 1000
+    y: 170  # 设置图标
+
+  - action: wait
+    seconds: 2
+
+  - action: click_element
+    text: "个人信息"
+    exact: true
+
+  - action: wait
+    seconds: 2
+
+  # ===== 第4阶段: 进入版本选择 =====
+  - action: click_element
+    text: "英语所学教材版本"
+    exact: true
+
+  - action: wait
+    seconds: 2
+
+  - action: screenshot
+    name: "01_version_select_page"
+
+  # ===== 第5阶段: 选择目标版本 =====
+  - action: click_element
+    text: "人教版(PEP)(2024审定)"
+    exact: true
+
+  - action: wait
+    seconds: 3
+
+  - action: screenshot
+    name: "02_after_switch_renjiao"
+
+  # ===== 第6阶段: 返回首页 =====
+  - action: press_back
+  - action: wait
+    seconds: 1
+
+  - action: press_back
+  - action: wait
+    seconds: 1
+
+  - action: press_back
+  - action: wait
+    seconds: 2
+
+  # 直接 tap "英语" tab (绕过 dump_ui 限制)
+  - action: tap
+    x: 108
+    y: 2233
+
+  # 等轮播图稳定
+  - action: wait
+    seconds: 6
+
+  - action: screenshot
+    name: "03_back_to_home"
+
+  # ===== 第7阶段: 进入模块测试 (用精确坐标) =====
+  # 模块1: 课本点读 (左)
+  - action: tap
+    x: 203
+    y: 1191
+
+  - action: wait
+    seconds: 3
+
+  - action: screenshot
+    name: "04_module_kebendianfu"
+
+  - action: press_back
+  - action: wait
+    seconds: 3
+
+  # 关闭可能弹出的广告
+  - action: tap
+    x: 540
+    y: 1821
+  - action: wait
+    seconds: 2
+
+  # 模块2: 巧记单词
+  - action: tap
+    x: 876
+    y: 1191
+
+  - action: wait
+    seconds: 3
+
+  - action: screenshot
+    name: "05_module_qiaojidanci"
+
+  - action: press_back
+  - action: wait
+    seconds: 3
+
+  - action: tap
+    x: 540
+    y: 1821
+  - action: wait
+    seconds: 2
+
+  # 模块3: 听课文
+  - action: tap
+    x: 161
+    y: 1792
+
+  - action: wait
+    seconds: 3
+
+  - action: screenshot
+    name: "06_module_tingkewen"
+
+  - action: press_back
+  - action: wait
+    seconds: 3
+
+  - action: tap
+    x: 540
+    y: 1821
+  - action: wait
+    seconds: 2
+
+  # 模块4: 基础训练
+  - action: tap
+    x: 666
+    y: 1792
+
+  - action: wait
+    seconds: 3
+
+  - action: screenshot
+    name: "07_module_jichuxunlian"
+
+  - action: press_back
+  - action: wait
+    seconds: 3
+
+  - action: tap
+    x: 540
+    y: 1821
+  - action: wait
+    seconds: 2
+
+  # 最终截图
+  - action: screenshot
+    name: "08_final_home"

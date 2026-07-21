@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>英语宝模块检测控制面板</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box }
+body { font-family:-apple-system,"Microsoft YaHei",sans-serif; background:#f0f2f5; color:#333; font-size:14px; line-height:1.5 }
+.header { background:#4a6cf7; color:white; padding:16px 24px; display:flex; align-items:center; gap:16px }
+.header h1 { font-size:18px; font-weight:500 }
+.header .sub { font-size:12px; opacity:0.8 }
+.container { max-width:1200px; margin:0 auto; padding:16px; display:grid; grid-template-columns:320px 1fr 320px; gap:16px }
+
+.card { background:white; border-radius:10px; padding:16px; box-shadow:0 1px 3px rgba(0,0,0,0.06) }
+.card-title { font-size:13px; font-weight:500; color:#4a6cf7; margin-bottom:12px; padding-bottom:8px; border-bottom:1px solid #eee }
+
+/* 状态指示 */
+.status-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px }
+.status-dot.online { background:#22c55e }
+.status-dot.offline { background:#ef4444 }
+.status-dot.running { background:#f59e0b; animation:pulse 1s infinite }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+/* 按钮 */
+.btn { display:flex; align-items:center; justify-content:center; gap:8px; width:100%; padding:10px 16px; border:none; border-radius:8px; font-size:14px; font-weight:500; cursor:pointer; transition:all 0.2s; margin-bottom:8px }
+.btn:disabled { opacity:0.5; cursor:not-allowed }
+.btn-primary { background:#4a6cf7; color:white }
+.btn-primary:hover:not(:disabled) { background:#3b5de7 }
+.btn-success { background:#22c55e; color:white }
+.btn-success:hover:not(:disabled) { background:#16a34a }
+.btn-warning { background:#f59e0b; color:white }
+.btn-warning:hover:not(:disabled) { background:#d97706 }
+.btn-danger { background:#ef4444; color:white }
+.btn-danger:hover:not(:disabled) { background:#dc2626 }
+.btn-outline { background:transparent; border:1.5px solid #4a6cf7; color:#4a6cf7; padding:8px 14px }
+.btn-outline:hover:not(:disabled) { background:#4a6cf7; color:white }
+
+/* 版本选择器 */
+.version-info { display:flex; align-items:center; gap:8px; padding:10px 12px; background:#f8fafc; border-radius:8px; margin-bottom:12px; font-size:13px }
+.version-info .label { color:#888 }
+.version-info .value { font-weight:500 }
+.version-select { width:100%; padding:10px 12px; border:1.5px solid #e2e8f0; border-radius:8px; font-size:14px; margin-bottom:12px; background:white; cursor:pointer }
+
+/* 模块区域 */
+.module-group { margin-bottom:12px }
+.module-group-title { font-size:12px; font-weight:500; color:#888; margin-bottom:8px; padding:4px 8px; background:#f8fafc; border-radius:4px }
+.module-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px }
+.module-item { display:flex; align-items:center; gap:6px; padding:6px 8px; border-radius:6px; cursor:pointer; transition:background 0.15s }
+.module-item:hover { background:#f8fafc }
+.module-item input[type="checkbox"] { width:16px; height:16px; accent-color:#4a6cf7; cursor:pointer }
+.module-item label { cursor:pointer; font-size:13px; user-select:none }
+
+/* 进度 */
+.progress-bar { height:6px; background:#e2e8f0; border-radius:3px; overflow:hidden; margin:12px 0 }
+.progress-bar .fill { height:100%; background:#4a6cf7; border-radius:3px; transition:width 0.5s; width:0% }
+.progress-text { font-size:12px; color:#888; text-align:center }
+
+/* 日志 */
+.log-container { height:280px; overflow-y:auto; font-size:12px; font-family:monospace; background:#1e293b; color:#e2e8f0; border-radius:8px; padding:12px }
+.log-entry { padding:2px 0; display:flex; gap:8px }
+.log-entry .time { color:#64748b; flex-shrink:0 }
+.log-entry .level { flex-shrink:0; font-weight:500 }
+.log-entry .level.info { color:#60a5fa }
+.log-entry .level.success { color:#4ade80 }
+.log-entry .level.error { color:#f87171 }
+.log-entry .level.warning { color:#fbbf24 }
+
+/* 截图预览 */
+.screenshot-area { position:relative; border-radius:8px; overflow:hidden; background:#f8fafc; min-height:100px; display:flex; align-items:center; justify-content:center }
+.screenshot-area img { max-width:100%; max-height:320px; display:block }
+.screenshot-area .placeholder { color:#94a3b8; font-size:13px; text-align:center; padding:20px }
+
+/* 设备信息 */
+.device-info { padding:10px 0 }
+.device-info .row { display:flex; justify-content:space-between; padding:6px 0; font-size:13px; border-bottom:1px solid #f0f0f0 }
+.device-info .row:last-child { border:none }
+.device-info .key { color:#888 }
+.device-info .value { font-weight:500 }
+
+/* 按钮行 */
+.btn-row { display:flex; gap:8px }
+.btn-row .btn { flex:1 }
+.icon { width:16px; height:16px }
+
+@media (max-width:900px) {
+  .container { grid-template-columns:1fr }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>📘 英语宝模块检测</h1>
+  <span class="sub" id="deviceBadge">设备: —</span>
+</div>
+
+<div class="container">
+  <!-- 左栏: 控制面板 -->
+  <div>
+    <div class="card">
+      <div class="card-title">📱 设备控制</div>
+      <div class="device-info" id="deviceInfo">
+        <div class="row"><span class="key">状态</span><span class="value" id="statusText"><span class="status-dot offline"></span>检测中...</span></div>
+        <div class="row"><span class="key">型号</span><span class="value" id="modelText">—</span></div>
+        <div class="row"><span class="key">序列号</span><span class="value" id="serialText">—</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">🔑 登录</div>
+      <button class="btn btn-primary" id="loginBtn" onclick="startLogin()">自动登录</button>
+      <div style="font-size:12px;color:#888;text-align:center">自动完成：勾选协议 → 点击登录 → 同意弹窗 → 关闭广告</div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">📚 版本选择</div>
+      <button class="btn btn-outline" id="versionBtn" onclick="fetchVersions()">🔄 刷新版本列表</button>
+      <select class="version-select" id="versionSelect" disabled><option>— 请先刷新版本列表 —</option></select>
+      <div id="versionInfo" class="version-info" style="display:none">
+        <span class="label">当前:</span><span class="value" id="currentVersionText">—</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">🧩 选择检测模块</div>
+      <div class="btn-row" style="margin-bottom:12px">
+        <button class="btn btn-outline" style="padding:6px;font-size:12px" onclick="selectAll(true)">全选</button>
+        <button class="btn btn-outline" style="padding:6px;font-size:12px" onclick="selectAll(false)">取消</button>
+      </div>
+      <div id="moduleGroups"></div>
+    </div>
+
+    <button class="btn btn-success" id="runBtn" onclick="startTest()" disabled>▶ 开始检测</button>
+  </div>
+
+  <!-- 中栏: 进度与日志 -->
+  <div>
+    <div class="card">
+      <div class="card-title">⏳ 执行进度</div>
+      <div class="progress-bar"><div class="fill" id="progressFill"></div></div>
+      <div class="progress-text" id="progressText">等待操作...</div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">📋 运行日志</div>
+      <div class="log-container" id="logContainer">
+        <div class="log-entry"><span class="time">--:--:--</span><span class="level info">等待开始</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 右栏: 截图预览 -->
+  <div>
+    <div class="card">
+      <div class="card-title">📸 截图预览</div>
+      <div class="screenshot-area" id="screenshotArea">
+        <div class="placeholder">执行操作后将显示截图</div>
+      </div>
+      <div style="margin-top:8px;font-size:12px;color:#888;text-align:center" id="screenshotName"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">ℹ️ 操作提示</div>
+      <div style="font-size:13px;color:#555;line-height:1.8">
+        1. 点击<strong>自动登录</strong><br>
+        2. 点击<strong>刷新版本列表</strong><br>
+        3. 选择目标版本<br>
+        4. 勾选要检测的模块<br>
+        5. 点击<strong>开始检测</strong>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// 全局状态
+// ============================================================
+let POLLING = false;
+
+function $(id) { return document.getElementById(id) }
+
+// ============================================================
+// 轮询状态
+// ============================================================
+async function pollStatus() {
+  if (POLLING) return
+  POLLING = true
+  while (true) {
+    try {
+      const res = await fetch('/api/status')
+      const data = await res.json()
+      updateDeviceInfo(data)
+      updateTaskStatus(data.task_status)
+      await pollLog()
+    } catch(e) {
+      console.warn('poll error:', e)
+    }
+    await sleep(2000)
+  }
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
+
+// ============================================================
+// 设备信息
+// ============================================================
+async function updateDeviceInfo(data) {
+  const statusText = $('statusText')
+  const dot = statusText.querySelector('.status-dot') || document.createElement('span')
+  dot.className = 'status-dot ' + (data.device_connected ? 'online' : 'offline')
+  statusText.innerHTML = ''
+  statusText.appendChild(dot)
+  statusText.appendChild(document.createTextNode(data.device_connected ? '在线' : '离线'))
+
+  $('serialText').textContent = data.device_serial
+  $('deviceBadge').textContent = '设备: ' + (data.device_connected ? '✅ 已连接' : '❌ 未连接')
+
+  // 加载硬件信息
+  try {
+    const hw = await (await fetch('/api/hardware-info')).json()
+    $('modelText').textContent = hw.model || '—'
+  } catch(e) {}
+
+  // 版本信息
+  const vi = $('versionInfo')
+  if (data.current_version) {
+    vi.style.display = 'flex'
+    $('currentVersionText').textContent = data.current_version
+  }
+}
+
+// ============================================================
+// 任务状态
+// ============================================================
+function updateTaskStatus(status) {
+  const fill = $('progressFill')
+  const text = $('progressText')
+  const progress = status.progress || []
+  const running = status.running
+
+  if (running) {
+    const last = progress[progress.length - 1]
+    if (last && last.total > 0) {
+      const pct = Math.round(last.step / last.total * 100)
+      fill.style.width = pct + '%'
+      text.textContent = `[${last.step}/${last.total}] ${last.msg}`
+    } else {
+      fill.style.width = '0%'
+      text.textContent = '运行中...'
+    }
+  } else if (status.end_time) {
+    fill.style.width = '100%'
+    fill.style.background = '#22c55e'
+    text.textContent = `✅ 完成 (${status.end_time})`
+    setTimeout(() => { fill.style.background = '#4a6cf7' }, 3000)
+  } else {
+    fill.style.width = '0%'
+    text.textContent = '等待操作...'
+  }
+
+  // 更新按钮状态
+  const btns = ['loginBtn', 'versionBtn', 'runBtn']
+  btns.forEach(id => {
+    $(id).disabled = running
+    if (running) $(id).style.cursor = 'not-allowed'
+    else $(id).style.cursor = 'pointer'
+  })
+}
+
+// ============================================================
+// 日志
+// ============================================================
+let lastLogCount = 0
+
+async function pollLog() {
+  try {
+    const res = await fetch('/api/log')
+    const log = await res.json()
+    if (log.length > lastLogCount) {
+      const container = $('logContainer')
+      for (let i = lastLogCount; i < log.length; i++) {
+        const entry = log[i]
+        const div = document.createElement('div')
+        div.className = 'log-entry'
+        div.innerHTML = `<span class="time">${entry.time}</span><span class="level ${entry.level}">${entry.level.toUpperCase()}</span><span>${entry.msg}</span>`
+        container.appendChild(div)
+      }
+      container.scrollTop = container.scrollHeight
+      lastLogCount = log.length
+    }
+  } catch(e) {}
+}
+
+// ============================================================
+// 登录
+// ============================================================
+async function startLogin() {
+  const res = await fetch('/api/login', { method:'POST' })
+  const data = await res.json()
+  if (data.error) { alert(data.error); return }
+  addLog('info', '登录任务已启动')
+}
+
+// ============================================================
+// 版本列表
+// ============================================================
+async function fetchVersions() {
+  $('versionBtn').disabled = true
+  $('versionBtn').textContent = '⏳ 正在检测...'
+  addLog('info', '开始检测可用版本...')
+
+  const res = await fetch('/api/versions', { method:'POST' })
+  const data = await res.json()
+  if (data.error) { alert(data.error); return }
+
+  // 轮询等待版本检测完成
+  await waitForTaskDone('version_detect')
+
+  // 获取结果
+  const versionRes = await fetch('/api/versions')
+  const versionData = await versionRes.json()
+  const versions = versionData.versions || []
+
+  const sel = $('versionSelect')
+  sel.innerHTML = ''
+  if (versions.length === 0) {
+    sel.innerHTML = '<option>未检测到版本</option>'
+  } else {
+    // 去重（只保留含"版"字的版本条目）
+    const versionNames = [...new Set(versions.filter(v => v.text.includes('版')).map(v => v.text))]
+    versionNames.forEach(name => {
+      const opt = document.createElement('option')
+      opt.value = name
+      opt.textContent = name
+      sel.appendChild(opt)
+    })
+    addLog('success', `检测到 ${versionNames.length} 个版本`)
+  }
+  sel.disabled = false
+  $('versionBtn').disabled = false
+  $('versionBtn').textContent = '🔄 刷新版本列表'
+  $('runBtn').disabled = false
+}
+
+// ============================================================
+// 模块列表
+// ============================================================
+async function loadModules() {
+  try {
+    const res = await fetch('/api/modules')
+    const data = await res.json()
+    const container = $('moduleGroups')
+    container.innerHTML = ''
+    for (const [groupName, modules] of Object.entries(data)) {
+      const group = document.createElement('div')
+      group.className = 'module-group'
+      group.innerHTML = `<div class="module-group-title">${groupName}</div><div class="module-grid">`
+      for (const [name, coord] of Object.entries(modules)) {
+        group.querySelector('.module-grid').innerHTML += `
+          <div class="module-item">
+            <input type="checkbox" id="m_${name}" value="${name}">
+            <label for="m_${name}">${name}</label>
+          </div>`
+      }
+      container.appendChild(group)
+    }
+    $('runBtn').disabled = false
+  } catch(e) {
+    console.error('load modules error:', e)
+  }
+}
+
+function selectAll(checked) {
+  document.querySelectorAll('#moduleGroups input[type="checkbox"]').forEach(cb => cb.checked = checked)
+}
+
+// ============================================================
+// 启动检测
+// ============================================================
+async function startTest() {
+  const version = $('versionSelect').value
+  if (!version || version.startsWith('—')) {
+    alert('请先选择版本')
+    return
+  }
+  const modules = []
+  document.querySelectorAll('#moduleGroups input[type="checkbox"]:checked').forEach(cb => {
+    modules.push(cb.value)
+  })
+  if (modules.length === 0) {
+    alert('请至少选择一个模块')
+    return
+  }
+
+  $('runBtn').disabled = true
+  $('runBtn').textContent = '⏳ 运行中...'
+  addLog('info', `版本: ${version}, 模块: ${modules.join(', ')}`)
+
+  const res = await fetch('/api/test/run', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ version, modules }),
+  })
+  const data = await res.json()
+  if (data.error) { alert(data.error); return }
+  addLog('info', '检测任务已启动')
+}
+
+// ============================================================
+// 工具函数
+// ============================================================
+async function waitForTaskDone(taskName) {
+  while (true) {
+    await sleep(1000)
+    const res = await fetch('/api/status')
+    const data = await res.json()
+    const ts = data.task_status
+    if (!ts.running && ts.current_task === taskName) return
+    if (!ts.running) return
+  }
+}
+
+function addLog(level, msg) {
+  const container = $('logContainer')
+  const now = new Date().toTimeString().slice(0,8)
+  const div = document.createElement('div')
+  div.className = 'log-entry'
+  div.innerHTML = `<span class="time">${now}</span><span class="level ${level}">${level.toUpperCase()}</span><span>${msg}</span>`
+  container.appendChild(div)
+  container.scrollTop = container.scrollHeight
+}
+
+// ============================================================
+// 初始化
+// ============================================================
+loadModules()
+pollStatus()
+</script>
+</body>
+</html>

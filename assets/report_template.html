@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>英语宝模块检测报告</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, "Microsoft YaHei", sans-serif; background: #f5f5f5; color: #333; line-height: 1.6; }
+.container { max-width: 960px; margin: 0 auto; padding: 20px; }
+.header { background: #fff; border-radius: 12px; padding: 24px 32px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
+.header h1 { font-size: 22px; margin-bottom: 8px; }
+.header .meta { display: flex; gap: 24px; font-size: 13px; color: #666; }
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+.stat-card { background: #fff; border-radius: 12px; padding: 20px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
+.stat-card .num { font-size: 28px; font-weight: 600; }
+.stat-card .label { font-size: 12px; color: #888; margin-top: 4px; }
+.stat-card.pass .num { color: #3B6D11; }
+.stat-card.fail .num { color: #E24B4A; }
+.stat-card.error .num { color: #EF9F27; }
+.stat-card.total .num { color: #185FA5; }
+.section { background: #fff; border-radius: 12px; padding: 24px 32px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
+.section h2 { font-size: 16px; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid #eee; }
+.question-item { padding: 16px 0; border-bottom: 1px solid #f0f0f0; }
+.question-item:last-child { border-bottom: none; }
+.question-header { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.question-id { font-weight: 600; font-size: 14px; }
+.badge { padding: 2px 10px; border-radius: 4px; font-size: 12px; font-weight: 500; }
+.badge.pass { background: #EAF3DE; color: #3B6D11; }
+.badge.fail { background: #FCEBEB; color: #A32D2D; }
+.check-list { margin-left: 24px; font-size: 13px; color: #555; }
+.check-list .check-item { padding: 4px 0; }
+.check-list .check-item .icon { display: inline-block; width: 16px; }
+.check-list .check-pass .icon { color: #3B6D11; }
+.check-list .check-fail .icon { color: #A32D2D; }
+.check-list .check-fail .issue { color: #A32D2D; }
+.screenshot-link { font-size: 12px; color: #185FA5; text-decoration: none; }
+.screenshot-link:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="container" id="app">报告加载中...</div>
+<script>
+var DATA = {{DATA}};
+var app = document.getElementById('app');
+
+var html = '<div class="header">';
+html += '<h1>英语宝模块检测报告</h1>';
+html += '<div class="meta">';
+html += '<span>模块: ' + DATA.module + '</span>';
+html += '<span>年级册: ' + DATA.grade + '</span>';
+html += '<span>设备: ' + DATA.device + '</span>';
+html += '<span>时间: ' + (DATA.start_time||'') + ' ~ ' + (DATA.end_time||'') + '</span>';
+html += '</div></div>';
+
+html += '<div class="stats">';
+html += '<div class="stat-card total"><div class="num">' + DATA.total_questions + '</div><div class="label">总题数</div></div>';
+html += '<div class="stat-card pass"><div class="num">' + DATA.passed + '</div><div class="label">通过</div></div>';
+html += '<div class="stat-card fail"><div class="num">' + DATA.failed + '</div><div class="label">失败</div></div>';
+html += '<div class="stat-card error"><div class="num">' + DATA.errors + '</div><div class="label">异常</div></div>';
+html += '</div>';
+
+if (DATA.unit_catalog_check) {
+    html += '<div class="section"><h2>单元目录检查</h2>';
+    html += '<span class="badge ' + (DATA.unit_catalog_check.pass?'pass':'fail') + '">' + (DATA.unit_catalog_check.pass?'通过':'未通过') + '</span>';
+    html += ' <span style="font-size:13px;color:#666">' + (DATA.unit_catalog_check.note||'') + '</span>';
+    html += '</div>';
+}
+
+html += '<div class="section"><h2>逐题检测结果</h2>';
+(DATA.details||[]).forEach(function(q) {
+    html += '<div class="question-item">';
+    html += '<div class="question-header">';
+    html += '<span class="question-id">' + q.question_id + '</span>';
+    html += '<span style="font-size:12px;color:#888">' + (q.question_type||'') + '</span>';
+    html += '<span class="badge ' + (q.overall_pass?'pass':'fail') + '">' + (q.overall_pass?'通过':'未通过') + '</span>';
+    html += '</div>';
+    if (q.summary) html += '<div style="font-size:13px;color:#555;margin-bottom:8px">' + q.summary + '</div>';
+    if (q.checks) {
+        html += '<div class="check-list">';
+        for (var key in q.checks) {
+            var c = q.checks[key];
+            if (c && typeof c === 'object') {
+                var pass = c.pass;
+                html += '<div class="check-item ' + (pass?'check-pass':'check-fail') + '">';
+                html += '<span class="icon">' + (pass?'✓':'✗') + '</span> ';
+                html += key;
+                if (!pass && c.issue) html += ' <span class="issue">— ' + c.issue + '</span>';
+                html += '</div>';
+            }
+        }
+        html += '</div>';
+    }
+    if (q.screenshot) {
+        html += '<div style="margin-top:6px"><a class="screenshot-link" href="' + q.screenshot + '" target="_blank">查看截图</a></div>';
+    }
+    html += '</div>';
+});
+html += '</div>';
+
+if (DATA.report_page_check) {
+    html += '<div class="section"><h2>报告页检查</h2>';
+    html += '<span class="badge ' + (DATA.report_page_check.pass?'pass':'fail') + '">' + (DATA.report_page_check.pass?'通过':'未通过') + '</span>';
+    html += ' <span style="font-size:13px;color:#666">' + (DATA.report_page_check.note||'') + '</span>';
+    html += '</div>';
+}
+
+app.innerHTML = html;
+</script>
+</body>
+</html>
