@@ -114,21 +114,11 @@ body { font-family:-apple-system,"Microsoft YaHei",sans-serif; background:#f0f2f
         <option value="湘少版(2024审定)">湘少版(2024审定)</option>
         <option value="湘鲁版(2024审定)">湘鲁版(2024审定)</option>
         <option value="人教版(PEP)(2024审定)" selected>人教版(PEP)(2024审定)</option>
-        <option value="教科版(2024审定)">教科版(2024审定)</option>
-        <option value="教科版">教科版</option>
+        <option value="教科版(2024审定)">教科版(2024审定) — 📘新教材 一年级上~四年级上</option>
+        <option value="教科版">教科版 — 📗老教材</option>
       </select>
-      <div style="font-size:12px;color:#888;margin:8px 0">年级</div>
-      <select class="version-select" id="gradeSelect">
-        <option value="一年级上册">一年级上册</option>
-        <option value="一年级下册">一年级下册</option>
-        <option value="二年级上册">二年级上册</option>
-        <option value="二年级下册">二年级下册</option>
-        <option value="三年级上册">三年级上册</option>
-        <option value="三年级下册" selected>三年级下册</option>
-        <option value="四年级上册">四年级上册</option>
-        <option value="四年级下册">四年级下册</option>
-        <option value="五年级上册">五年级上册</option>
-      </select>
+      <div style="font-size:12px;color:#888;margin:8px 0">年级（上册/下册）<span id="gradeHint" style="color:#4a6cf7;font-weight:500"></span></div>
+      <select class="version-select" id="gradeSelect"></select>
     </div>
 
     <div class="card">
@@ -303,6 +293,50 @@ async function pollLog() {
 }
 
 // ============================================================
+// 版本→年级联动
+// ============================================================
+const GRADE_DATA = {
+  "湘少版(2024审定)": {
+    "grades": ["一年级上册","一年级下册","二年级上册","二年级下册","三年级上册","三年级下册","四年级上册","四年级下册","五年级上册"],
+    "is_new": true, "hint": "新教材"
+  },
+  "湘鲁版(2024审定)": {
+    "grades": ["三年级上册","三年级下册","四年级上册","四年级下册","五年级上册","六年级上册"],
+    "is_new": true, "hint": "新教材"
+  },
+  "人教版(PEP)(2024审定)": {
+    "grades": ["三年级上册","三年级下册","四年级上册","四年级下册","五年级上册","五年级下册","六年级上册","六年级下册"],
+    "is_new": true, "hint": "新教材"
+  },
+  "教科版(2024审定)": {
+    "grades": ["一年级上册","一年级下册","二年级上册","二年级下册","三年级上册","三年级下册","四年级上册"],
+    "is_new": true, "hint": "新教材"
+  },
+  "教科版": {
+    "grades": ["一年级上册","一年级下册","二年级上册","二年级下册","三年级上册","三年级下册","四年级上册","四年级下册","五年级上册","五年级下册","六年级上册","六年级下册"],
+    "is_new": false, "hint": "老教材"
+  }
+}
+
+function onVersionChange() {
+  const version = $('versionSelect').value
+  const data = GRADE_DATA[version]
+  if (!data) return
+
+  const sel = $('gradeSelect')
+  sel.innerHTML = ''
+  data.grades.forEach(g => {
+    const opt = document.createElement('option')
+    opt.value = g
+    opt.textContent = g
+    sel.appendChild(opt)
+  })
+
+  // 提示新/老教材
+  $('gradeHint').textContent = ' — ' + data.hint
+}
+
+// ============================================================
 // 一键全流程运行
 // ============================================================
 async function startFullRun() {
@@ -396,6 +430,7 @@ function addLog(level, msg) {
 // 初始化
 // ============================================================
 loadModules()
+onVersionChange()
 pollStatus()
 </script>
 </body>

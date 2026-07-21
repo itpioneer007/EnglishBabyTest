@@ -234,6 +234,27 @@ def run_version_detect_task():
 
 def run_full_task(version: str, grade: str, modules: list):
     """一键全流程：登录 → 切换版本 → 选年级 → 测模块"""
+
+
+def run_grade_scan_task():
+    """全版本年级扫描（调用 grade_scanner.py）"""
+    try:
+        set_running("grade_scan")
+        log_msg("开始全版本年级扫描...")
+        scanner = PROJECT_ROOT / "grade_scanner.py"
+        r = sp.run(
+            [sys.executable, str(scanner)],
+            capture_output=True, text=True, timeout=600,
+            cwd=str(PROJECT_ROOT),
+        )
+        if r.returncode == 0:
+            log_msg("✅ 全版本年级扫描完成", "success")
+        else:
+            log_msg(f"⚠ 扫描部分失败: {r.stderr[-200:]}", "warning")
+    except Exception as e:
+        log_msg(f"❌ 扫描失败: {e}", "error")
+    finally:
+        set_done()
     try:
         set_running("full")
         config = load_config()
@@ -437,6 +458,27 @@ def api_versions():
     t = threading.Thread(target=run_version_detect_task, daemon=True)
     t.start()
     return jsonify({"status": "started", "task": "version_detect"})
+
+
+@app.route("/api/version-grades")
+def api_version_grades():
+    """返回版本→年级映射表（已扫描的缓存数据）"""
+    grades_file = PROJECT_ROOT / "outputs" / "web" / "all_grades.json"
+    if grades_file.exists():
+        with open(grades_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return jsonify(data)
+    return jsonify({"error": "尚未扫描年级数据，请先运行 grade_scanner.py"}), 404
+
+
+@app.route("/api/version-grades/scan", methods=["POST"])
+def api_scan_grades():
+    """触发全版本年级扫描（慢，约3分钟）"""
+    if task_status["running"]:
+        return jsonify({"error": "已有任务在运行"}), 409
+    t = threading.Thread(target=run_grade_scan_task, daemon=True)
+    t.start()
+    return jsonify({"status": "started"})
 
 
 @app.route("/api/run-full", methods=["POST"])
