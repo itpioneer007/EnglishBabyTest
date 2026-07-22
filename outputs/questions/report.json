@@ -1,0 +1,70 @@
+{
+  "total": 1,
+  "passed": 0,
+  "failed": 1,
+  "problems": [
+    {
+      "idx": 1,
+      "type": "通用题",
+      "check": "题干文字",
+      "screenshot": "outputs/screenshots/q_current.png"
+    }
+  ],
+  "by_type": {
+    "题干错误": 1,
+    "内容错误": 0,
+    "图片问题": 0,
+    "作答问题": 0
+  },
+  "reports": [
+    {
+      "idx": 1,
+      "progress": "",
+      "type": "通用题",
+      "timestamp": "10:51:08",
+      "checks": {
+        "1_stem": {
+          "name": "题干文字",
+          "passed": false,
+          "actual": "",
+          "similarity": 0.0,
+          "details": [],
+          "error": "题干为空"
+        },
+        "2_content": {
+          "name": "内容文字",
+          "passed": true,
+          "actual": "",
+          "similarity": 0.0,
+          "details": [
+            "无脚本数据"
+          ],
+          "error": ""
+        },
+        "3_image": {
+          "name": "图片",
+          "passed": true,
+          "actual": "",
+          "similarity": 0.0,
+          "details": [
+            "1 个图片/选项元素"
+          ],
+          "error": ""
+        },
+        "4_answer": {
+          "name": "作答",
+          "passed": true,
+          "actual": "",
+          "similarity": 0.0,
+          "details": [
+            "题型: 通用题",
+            "尝试点击 ((542, 1050))"
+          ],
+          "error": ""
+        }
+      },
+      "all_passed": false,
+      "screenshot": "outputs/screenshots/q_current.png"
+    }
+  ]
+}

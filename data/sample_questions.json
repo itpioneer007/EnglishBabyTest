@@ -1,0 +1,58 @@
+{
+  "questions": [
+    {
+      "question_id": "Q3A-U1-001",
+      "module": "单词学习",
+      "grade": "三年级上册",
+      "unit": "Unit 1 Hello",
+      "version": "v2.1",
+      "question_type": "选择题",
+      "stem_text": "选择正确的单词补全句子: Hello, ___ name is Tom.",
+      "content_text": "A. my  B. I  C. me  D. mine",
+      "image_url": "",
+      "image_description": "",
+      "audio_url": "",
+      "listening_text": "",
+      "audio_roles": "",
+      "correct_answer": "A",
+      "knowledge_points": ["物主代词", "my的用法"],
+      "order": 1
+    },
+    {
+      "question_id": "Q3A-U1-002",
+      "module": "单词学习",
+      "grade": "三年级上册",
+      "unit": "Unit 1 Hello",
+      "version": "v2.1",
+      "question_type": "填空题",
+      "stem_text": "根据图片补全单词: __ p p l e",
+      "content_text": "正确答案应为: a",
+      "image_url": "apple.png",
+      "image_description": "一个红色的苹果",
+      "audio_url": "",
+      "listening_text": "",
+      "audio_roles": "",
+      "correct_answer": "a",
+      "knowledge_points": ["字母拼写", "apple"],
+      "order": 2
+    },
+    {
+      "question_id": "Q3A-U1-003",
+      "module": "单词学习",
+      "grade": "三年级上册",
+      "unit": "Unit 1 Hello",
+      "version": "v2.1",
+      "question_type": "选择题",
+      "stem_text": "选出与所给单词同类的选项: apple",
+      "content_text": "A. banana  B. red  C. big  D. run",
+      "image_url": "",
+      "image_description": "",
+      "audio_url": "",
+      "listening_text": "",
+      "audio_roles": "",
+      "correct_answer": "A",
+      "knowledge_points": ["名词分类", "水果类词汇"],
+      "order": 3
+    }
+  ]
+}
