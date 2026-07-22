@@ -247,6 +247,120 @@ def run_version_detect_task():
 
 def run_full_task(version: str, grade: str, modules: list):
     """一键全流程：登录 → 切换版本 → 选年级 → 测模块"""
+    try:
+        set_running("full")
+        config = load_config()
+        adb = get_adb()
+
+        total = 8 + len(modules) * 3
+        cur = 0
+
+        # 1. 启动APP
+        cur += 1
+        log_msg(f"{cur}/{total} 启动APP")
+        adb.launch_app(config.app.package)
+        time.sleep(5)
+
+        # 2. 关广告
+        cur += 1
+        log_msg(f"{cur}/{total} 关广告")
+        adb.tap(540, 1821)
+        time.sleep(2)
+
+        # 3. 登录
+        cur += 1
+        log_msg(f"{cur}/{total} 自动登录")
+        adb.click_element(text="我已阅读并同意", exact=False)
+        time.sleep(1)
+        adb.click_element(text="登录", exact=True)
+        time.sleep(5)
+        if adb.wait_for_element(text="同意", timeout=4):
+            adb.tap(540, 1550)
+            time.sleep(3)
+        adb.tap(540, 1821)
+        time.sleep(2)
+
+        # 4. 切版本
+        cur += 1
+        log_msg(f"{cur}/{total} 切换版本: {version}")
+        adb.tap(972, 2220)
+        time.sleep(4)
+        adb.tap(1000, 170)
+        time.sleep(3)
+        adb.click_element(text="个人信息", exact=True)
+        time.sleep(3)
+        adb.click_element(text="英语所学教材版本", exact=True)
+        time.sleep(3)
+        adb.click_element(text=version, exact=True)
+        time.sleep(3)
+
+        # 5. 回首页
+        cur += 1
+        log_msg(f"{cur}/{total} 返回首页")
+        for _ in range(3):
+            adb.press_back()
+            time.sleep(1.5)
+        adb.tap(108, 2233)
+        time.sleep(6)
+        adb.tap(540, 1821)
+
+        # 6. 选年级
+        if grade:
+            cur += 1
+            log_msg(f"{cur}/{total} 选择年级: {grade}")
+            adb.tap(346, 275)
+            time.sleep(3)
+            found = False
+            for attempt in range(4):
+                elements = adb.dump_ui()
+                for e in elements:
+                    if grade in (e.text or ""):
+                        adb.tap(e.center[0], e.center[1])
+                        log_msg(f"  ✅ 已选 {grade}", "success")
+                        found = True
+                        break
+                if found: break
+                adb.swipe(540, 1700, 540, 900, 300)
+                time.sleep(2)
+            time.sleep(3)
+            adb.tap(108, 100)
+
+        # 7. 稳定
+        cur += 1
+        log_msg(f"{cur}/{total} 页面就绪")
+        time.sleep(3)
+
+        # 8. 测试模块
+        for i, module in enumerate(modules):
+            if module not in MODULE_COORDS:
+                log_msg(f"⚠ 跳过: {module}", "warning")
+                continue
+
+            cx, cy = MODULE_COORDS[module]
+            cur += 1
+            log_msg(f"[{i+1}/{len(modules)}] 进入: {module} ({cur}/{total})")
+            adb.tap(cx, cy)
+            time.sleep(3)
+
+            cur += 1
+            adb.screenshot(f"module_{module}.png")
+            log_msg(f"  ✅ {module} 截图 ({cur}/{total})", "success")
+
+            cur += 1
+            adb.press_back()
+            time.sleep(3)
+            adb.tap(540, 1821)
+            time.sleep(2)
+
+        log_msg(f"✅ 完成! {version} {grade} {len(modules)}模块", "success")
+        adb.screenshot("99_complete.png")
+
+    except Exception as e:
+        log_msg(f"❌ 失败: {e}", "error")
+        import traceback
+        traceback.print_exc()
+    finally:
+        set_done()
 
 
 def run_grade_scan_task():
