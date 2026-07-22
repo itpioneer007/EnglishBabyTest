@@ -246,7 +246,7 @@ def run_version_detect_task():
 
 
 def run_full_task(version: str, grade: str, modules: list):
-    """一键全流程：登录 → 切换版本 → 选年级 → 测模块"""
+    """一键全流程：登录 → 切换版本 → 选年级 → 测模块 (加速版)"""
     try:
         set_running("full")
         config = load_config()
@@ -259,57 +259,66 @@ def run_full_task(version: str, grade: str, modules: list):
         cur += 1
         log_msg(f"{cur}/{total} 启动APP")
         adb.launch_app(config.app.package)
-        time.sleep(5)
+        time.sleep(4)
 
         # 2. 关广告
         cur += 1
         log_msg(f"{cur}/{total} 关广告")
         adb.tap(540, 1821)
-        time.sleep(2)
-
-        # 3. 登录
-        cur += 1
-        log_msg(f"{cur}/{total} 自动登录")
-        adb.click_element(text="我已阅读并同意", exact=False)
         time.sleep(1)
-        adb.click_element(text="登录", exact=True)
-        time.sleep(5)
-        if adb.wait_for_element(text="同意", timeout=4):
-            adb.tap(540, 1550)
-            time.sleep(3)
-        adb.tap(540, 1821)
-        time.sleep(2)
 
-        # 4. 切版本
+        # 3. 登录 (仅当需要时)
+        cur += 1
+        log_msg(f"{cur}/{total} 检查登录状态")
+        elements = adb.dump_ui()
+        needs_login = any('登录' in (e.text or '') for e in elements)
+        if needs_login:
+            log_msg(f"  需要登录")
+            adb.click_element(text="我已阅读并同意", exact=False)
+            time.sleep(0.5)
+            adb.click_element(text="登录", exact=True)
+            time.sleep(2)
+            if adb.wait_for_element(text="同意", timeout=3):
+                adb.tap(540, 1550)
+                time.sleep(1.5)
+        else:
+            log_msg(f"  已登录, 跳过", "success")
+        adb.tap(540, 1821)
+        time.sleep(1)
+
+        # 4. 切版本 (仅当需要时)
         cur += 1
         log_msg(f"{cur}/{total} 切换版本: {version}")
-        adb.tap(972, 2220)
-        time.sleep(4)
-        adb.tap(1000, 170)
-        time.sleep(3)
-        adb.click_element(text="个人信息", exact=True)
-        time.sleep(3)
-        adb.click_element(text="英语所学教材版本", exact=True)
-        time.sleep(3)
-        adb.click_element(text=version, exact=True)
-        time.sleep(3)
+        elements = adb.dump_ui()
+        current_version = ""
+        for e in elements:
+            t = e.text or ""
+            if '版' in t and ('审定' in t or len(t) > 4):
+                current_version = t.strip()[:20]
+                break
+        if version in current_version:
+            log_msg(f"  已是 {version}, 跳过切换", "success")
+        else:
+            adb.tap(972, 2220); time.sleep(2)
+            adb.tap(1000, 170); time.sleep(1.5)
+            adb.click_element(text="个人信息", exact=True); time.sleep(1.5)
+            adb.click_element(text="英语所学教材版本", exact=True); time.sleep(1.5)
+            adb.click_element(text=version, exact=True); time.sleep(1.5)
 
         # 5. 回首页
         cur += 1
         log_msg(f"{cur}/{total} 返回首页")
         for _ in range(3):
-            adb.press_back()
-            time.sleep(1.5)
-        adb.tap(108, 2233)
-        time.sleep(6)
-        adb.tap(540, 1821)
+            adb.press_back(); time.sleep(1)
+        adb.tap(108, 2233); time.sleep(3)
+        adb.tap(540, 1821); time.sleep(1)
 
         # 6. 选年级
         if grade:
             cur += 1
             log_msg(f"{cur}/{total} 选择年级: {grade}")
-            adb.tap(346, 275)
-            time.sleep(3)
+            adb.tap(346, 275); time.sleep(1.5)
+
             found = False
             for attempt in range(4):
                 elements = adb.dump_ui()
@@ -320,15 +329,18 @@ def run_full_task(version: str, grade: str, modules: list):
                         found = True
                         break
                 if found: break
-                adb.swipe(540, 1700, 540, 900, 300)
-                time.sleep(2)
-            time.sleep(3)
-            adb.tap(108, 100)
+                adb.swipe(540, 1700, 540, 900, 300); time.sleep(1)
+
+            # 关闭弹窗
+            adb.press_back(); time.sleep(1)
+            adb.press_back(); time.sleep(1)
+            adb.tap(108, 2233); time.sleep(3)
+            adb.tap(540, 1821); time.sleep(1)
 
         # 7. 稳定
         cur += 1
         log_msg(f"{cur}/{total} 页面就绪")
-        time.sleep(3)
+        time.sleep(1)
 
         # 8. 测试模块
         for i, module in enumerate(modules):
@@ -337,20 +349,38 @@ def run_full_task(version: str, grade: str, modules: list):
                 continue
 
             cx, cy = MODULE_COORDS[module]
+            
+            if module in DEEP_MODULES:
+                log_msg(f"  ⏬ 滚动到 {module}")
+                found_deep = False
+                for scroll_step in range(5):
+                    adb.swipe(200, 1600, 200, 1200, 400)
+                    time.sleep(1)
+                    elements = adb.dump_ui()
+                    for e in elements:
+                        if e.text and e.text.strip() == module:
+                            cx, cy = e.center
+                            log_msg(f"    滚{scroll_step+1}次找到 {module}", "success")
+                            found_deep = True; break
+                    if found_deep: break
+                    if not any('专项突破' in (e.text or '') for e in elements):
+                        break
+                if not found_deep:
+                    log_msg(f"    ⚠ 未找到 {module}", "warning")
+                    continue
+
             cur += 1
             log_msg(f"[{i+1}/{len(modules)}] 进入: {module} ({cur}/{total})")
-            adb.tap(cx, cy)
-            time.sleep(3)
+            adb.tap(cx, cy); time.sleep(1.5)
 
             cur += 1
-            adb.screenshot(f"module_{module}.png")
-            log_msg(f"  ✅ {module} 截图 ({cur}/{total})", "success")
+            safe_name = f"mod_{i+1:02d}.png"
+            adb.screenshot(safe_name)
+            log_msg(f"  ✅ {module} 截图 ({cur}/{total}) → {safe_name}", "success")
 
             cur += 1
-            adb.press_back()
-            time.sleep(3)
-            adb.tap(540, 1821)
-            time.sleep(2)
+            adb.press_back(); time.sleep(1.5)
+            adb.tap(540, 1821); time.sleep(1)
 
         log_msg(f"✅ 完成! {version} {grade} {len(modules)}模块", "success")
         adb.screenshot("99_complete.png")
