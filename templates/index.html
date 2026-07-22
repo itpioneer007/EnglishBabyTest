@@ -147,6 +147,20 @@ body { font-family:-apple-system,"Microsoft YaHei",sans-serif; background:#f0f2f
         <div class="log-entry"><span class="time">--:--:--</span><span class="level info">等待开始</span></div>
       </div>
     </div>
+
+    <div class="card">
+      <div class="card-title">🔍 四步检查 (<span id="checkModeText">一键检测</span>)</div>
+      <div class="btn-row" style="margin-bottom:8px">
+        <button class="btn btn-outline" style="font-size:11px;padding:6px" onclick="runCheck(1)">1️⃣ 题干</button>
+        <button class="btn btn-outline" style="font-size:11px;padding:6px" onclick="runCheck(2)">2️⃣ 内容</button>
+        <button class="btn btn-outline" style="font-size:11px;padding:6px" onclick="runCheck(3)">3️⃣ 图片</button>
+        <button class="btn btn-outline" style="font-size:11px;padding:6px" onclick="runCheck(4)">4️⃣ 作答</button>
+        <button class="btn btn-outline" style="font-size:11px;padding:6px" onclick="runCheck(0)">⚡ 全检</button>
+      </div>
+      <div id="checkResults" style="font-size:12px;line-height:1.6">
+        <div style="color:#888">等待检查...</div>
+      </div>
+    </div>
   </div>
 
   <!-- 右栏: 截图预览 -->
@@ -334,6 +348,59 @@ function onVersionChange() {
 
   // 提示新/老教材
   $('gradeHint').textContent = ' — ' + data.hint
+}
+
+// ============================================================
+// 四步检查
+// ============================================================
+async function runCheck(num) {
+  const names = {0:'全检', 1:'题干', 2:'内容', 3:'图片', 4:'作答'}
+  const name = names[num] || '?'
+  addLog('info', `🔍 开始执行: 第${num === 0 ? '全检' : num}项 ${name}`)
+
+  const url = num === 0 ? '/api/check/full' : '/api/check/step'
+  const method = 'POST'
+  const body = num === 0 ? undefined : JSON.stringify({check: num})
+
+  try {
+    const res = await fetch(url, {method, headers:{'Content-Type':'application/json'}, body})
+    const data = await res.json()
+    showCheckResults(data, num)
+  } catch(e) {
+    addLog('error', `检查失败: ${e}`)
+  }
+}
+
+function showCheckResults(data, num) {
+  const div = $('checkResults')
+  if (num === 0) {
+    // 全检模式
+    const checks = data.checks || {}
+    let html = '<div style=\"margin-top:8px\">'
+    for (const [key, c] of Object.entries(checks)) {
+      const icon = c.passed ? '✅' : '❌'
+      html += `<div style=\"margin:4px 0;padding:4px 8px;background:#f8fafc;border-radius:4px\">
+        ${icon} <b>${c.name}</b>: ${c.passed ? '通过' : c.error || '失败'}
+        ${c.similarity ? '(相似度:'+(c.similarity*100).toFixed(0)+'%)' : ''}
+        ${c.actual ? '<br><span style=\"color:#666\">实际: '+c.actual+'</span>' : ''}
+        ${c.details?.length ? '<br><span style=\"color:#888\">'+c.details.join('<br>')+'</span>' : ''}
+      </div>`
+    }
+    html += `<div style=\"margin-top:6px;font-weight:500\">总结果: ${data.all_passed ? '✅ 全部通过' : '❌ 存在问题'}</div>`
+    html += '</div>'
+    div.innerHTML = html
+    addLog(data.all_passed ? 'success' : 'warning', `全检完成: ${data.all_passed ? '全部通过' : '存在问题'}`)
+  } else {
+    // 单项检查
+    const icon = data.passed ? '✅' : '❌'
+    const prev = div.innerHTML
+    div.innerHTML = prev + `<div style=\"margin:4px 0\">
+      ${icon} <b>第${num}项 ${data.name}</b>: ${data.passed ? '通过' : data.error || '失败'}
+      ${data.actual ? '<br><span style=\"color:#666\">文字: '+data.actual+'</span>' : ''}
+      ${data.details?.length ? '<br><span style=\"color:#888\">'+data.details.join('<br>')+'</span>' : ''}
+    </div>`
+    addLog(data.passed ? 'success' : 'warning', `第${num}项 ${data.name}: ${data.passed ? '通过' : data.error}`)
+  }
 }
 
 // ============================================================

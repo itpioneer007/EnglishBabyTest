@@ -28,6 +28,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from flask import Flask, jsonify, request, send_from_directory, render_template, Response
 from adb_controller import ADBController
 from config_loader import load_config
+from inspection_engine import InspectionEngine, QuestionReport, CheckItem
 
 app = Flask(__name__)
 
@@ -52,7 +53,7 @@ MODULE_COORDS = {
     "课本点读(中)": (540, 1191),
     "巧记单词":     (876, 1191),
     "语音评测":     (203, 1358),
-    # 专项突破
+    # 专项突破 (可见)
     "听课文":    (161, 1792),
     "课文动画":  (414, 1792),
     "基础训练":  (666, 1792),
@@ -61,6 +62,18 @@ MODULE_COORDS = {
     "口语训练":  (414, 2033),
     "复习回顾":  (666, 2033),
     "全脑记词":  (919, 2033),
+    # 专项突破 (深度-需先滚动)
+    "单元自检":      (414, 746),  # 滚动后位置
+    "单元练习计划":  (666, 746),
+}
+
+# 需要先滚动才能看到的模块
+DEEP_MODULES = {
+    "单元自检",
+    "单元练习计划",
+    "教材同步题库",
+    "听力训练",
+    "你听一刻",
 }
 
 # 底部导航坐标
@@ -369,6 +382,20 @@ def run_grade_scan_task():
 
             cx, cy = MODULE_COORDS[module]
 
+            # 深度模块需先滚到专项突破底部
+            if module in DEEP_MODULES:
+                log_msg(f"  ⏬ 滚动到深度模块 {module}")
+                for _ in range(2):
+                    adb.swipe(540, 1900, 540, 600, 500)
+                    time.sleep(2)
+                # 重新读取位置 (滚动后坐标可能变)
+                elements = adb.dump_ui()
+                for elem in elements:
+                    if elem.text and elem.text.strip() == module:
+                        cx, cy = elem.center
+                        log_msg(f"  📍 找到 {module} at ({cx},{cy})", "success")
+                        break
+
             cur += 1
             log_msg(f"[{i+1}/{len(modules)}] 进入: {module} ({cur}/{total})")
             update_progress(cur, total, f"进入 {module}")
@@ -393,6 +420,150 @@ def run_grade_scan_task():
 
     except Exception as e:
         log_msg(f"❌ 流程失败: {e}", "error")
+        import traceback
+        traceback.print_exc()
+    finally:
+        set_done()
+
+
+def run_inspect_questions_task():
+    """自动化巡检 AI检测 题目：
+    1. 启动APP, 关广告, 进英语tab
+    2. 滚到专项突破底部 → 单元自检
+    3. 点 AI检测的 去答题 (870, 756)
+    4. 关规则弹窗 (540, 1578) → 点开始答题 (554, 2116)
+    5. 逐题截图+解析, 推进直到没有"下一题"按钮
+    """
+    report = {"questions": []}
+    try:
+        set_running("inspect_questions")
+        config = load_config()
+        adb = get_adb()
+
+        # 1. 启动APP
+        log_msg("启动APP...")
+        sp.run(['adb', '-s', config.device.serial, 'shell', 'am', 'force-stop', 'com.dinoenglish.yyb'])
+        time.sleep(2)
+        sp.run(['adb', '-s', config.device.serial, 'shell', 'am', 'start', '-n', 'com.dinoenglish.yyb/.base.SplashActivity'])
+        time.sleep(5)
+        adb.tap(540, 1821)  # 关启动广告
+        time.sleep(3)
+        adb.tap(948, 1821)  # 关可能的第二个
+        time.sleep(2)
+
+        # 2. 滚到专项突破底部 → 单元自检
+        log_msg("滚动到单元自检...")
+        adb.tap(108, 2233)  # 英语tab
+        time.sleep(5)
+        for _ in range(2):
+            adb.swipe(540, 1500, 540, 800, 400)
+            time.sleep(2)
+        # 小幅调整
+        adb.swipe(540, 1500, 540, 1100, 400)
+        time.sleep(2)
+
+        # 动态找 单元自检
+        elements = adb.dump_ui()
+        for elem in elements:
+            if elem.text and '单元自检' in elem.text:
+                adb.tap(elem.center[0], elem.center[1])
+                log_msg(f"  ✅ 进入单元自检 at {elem.center}", "success")
+                break
+        time.sleep(4)
+
+        # 3. 点 AI检测的 去答题
+        log_msg("点 AI检测 去答题...")
+        adb.tap(870, 756)
+        time.sleep(6)
+
+        # 4. 关规则弹窗
+        log_msg("关闭训练规则弹窗...")
+        adb.tap(540, 1578)
+        time.sleep(2)
+
+        # 5. 点开始答题
+        log_msg("点开始答题...")
+        adb.tap(554, 2116)
+        time.sleep(8)  # AI生成题目
+
+        # 6. 逐题巡检
+        log_msg("开始逐题巡检...")
+        out_dir = PROJECT_ROOT / "outputs" / "questions"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        for q_idx in range(50):  # 最多 50 题
+            elements = adb.dump_ui()
+            # 找当前进度
+            progress = ""
+            question_text = ""
+            for e in elements:
+                t = e.text or ""
+                if re.match(r'^\d+/\d+$', t.strip()):
+                    progress = t
+                if ('听' in t or '看' in t or '选' in t or '读' in t or '写' in t or '听音' in t) and len(t) > 5 and len(t) < 80:
+                    if not question_text:
+                        question_text = t
+
+            # 截图
+            shot_path = out_dir / f"q_{q_idx+1:02d}.png"
+            sp.run(['adb', '-s', config.device.serial, 'shell', 'screencap', '-p', '/sdcard/_q.png'])
+            sp.run(['adb', '-s', config.device.serial, 'pull', '/sdcard/_q.png', str(shot_path)])
+            sp.run(['adb', '-s', config.device.serial, 'shell', 'rm', '/sdcard/_q.png'])
+
+            # 检测题目类型
+            question_type = "未知"
+            if any('听录音' in e.text or '🔊' in e.text for e in elements):
+                question_type = "听力题"
+            elif any('A.' in e.text or 'B.' in e.text or 'C.' in e.text for e in elements):
+                question_type = "选择题"
+            elif any('读' in e.text and '单词' in e.text for e in elements):
+                question_type = "朗读题"
+            elif any('写' in e.text and ('单词' in e.text or '字母' in e.text) for e in elements):
+                question_type = "拼写题"
+
+            has_image = any(e.text in ['A', 'B', 'C', 'D'] and e.clickable for e in elements)
+
+            report["questions"].append({
+                "idx": q_idx + 1,
+                "progress": progress,
+                "text": question_text,
+                "type": question_type,
+                "screenshot": str(shot_path.name),
+            })
+
+            log_msg(f"题 {q_idx+1}: {progress} | {question_type} | {question_text[:40]}", "info")
+
+            # 检查是否有"下一题"按钮
+            has_next = any('下一' in e.text or '提交' in e.text for e in elements)
+            if not has_next:
+                # 直接看截图/UI找下一题按钮
+                # 通常右下角有"下一题"按钮
+                for e in elements:
+                    if e.clickable and e.text:
+                        # 猜的"下一题"按钮位置
+                        pass
+
+            # 假设"下一题"按钮在右下角 (约 950, 1700~1900)
+            adb.tap(960, 1850)
+            time.sleep(2)
+
+            # 检查是否还在题目页 (有 X/40)
+            elements_after = adb.dump_ui()
+            on_question = any(re.match(r'^\d+/\d+$', (e.text or '').strip()) for e in elements_after)
+            if not on_question:
+                log_msg(f"  题目已结束 (q_idx={q_idx+1})", "info")
+                break
+
+        # 保存报告
+        report_path = PROJECT_ROOT / "outputs" / "questions" / "report.json"
+        with open(report_path, "w", encoding="utf-8") as f:
+            json.dump(report, f, ensure_ascii=False, indent=2)
+
+        log_msg(f"✅ 巡检完成: 共 {len(report['questions'])} 题", "success")
+        log_msg(f"报告: {report_path}", "info")
+
+    except Exception as e:
+        log_msg(f"❌ 巡检失败: {e}", "error")
         import traceback
         traceback.print_exc()
     finally:
@@ -511,6 +682,90 @@ def api_run_full():
     })
 
 
+@app.route("/api/inspect-questions", methods=["POST"])
+def api_inspect_questions():
+    """AI检测单元自检题目巡检：一题一截图+识别"""
+    if task_status["running"]:
+        return jsonify({"error": "已有任务在运行"}), 409
+    t = threading.Thread(target=run_inspect_questions_task, daemon=True)
+    t.start()
+    return jsonify({"status": "started", "task": "inspect_questions"})
+
+
+@app.route("/api/questions/report")
+def api_questions_report():
+    """获取最近一次巡检报告"""
+    report_path = PROJECT_ROOT / "outputs" / "questions" / "report.json"
+    if report_path.exists():
+        with open(report_path, "r", encoding="utf-8") as f:
+            return jsonify(json.load(f))
+    return jsonify({"questions": [], "msg": "尚未巡检"})
+
+
+# ============================================================
+# 四步检查 API
+# ============================================================
+
+_inspect_engine = None
+_current_screenshot = ""
+
+def get_inspect_engine():
+    global _inspect_engine
+    if _inspect_engine is None:
+        _inspect_engine = InspectionEngine(adb_controller=get_adb())
+    return _inspect_engine
+
+
+@app.route("/api/check/step", methods=["POST"])
+def api_check_step():
+    """执行一步检查 (check=1/2/3/4)"""
+    data = request.get_json() or {}
+    check_num = data.get("check", 1)
+
+    engine = get_inspect_engine()
+    screenshot = _current_screenshot or "outputs/screenshots/q_current.png"
+
+    # 截图当前题目
+    adb = get_adb()
+    adb.screenshot("q_current.png")
+    screenshot = str(PROJECT_ROOT / "outputs" / "screenshots" / "q_current.png")
+
+    result = None
+    if check_num == 1:
+        result = engine.check_1_stem(screenshot)
+    elif check_num == 2:
+        result = engine.check_2_content(screenshot)
+    elif check_num == 3:
+        result = engine.check_3_image(screenshot)
+    elif check_num == 4:
+        result = engine.check_4_answer(screenshot)
+
+    if result is None:
+        return jsonify({"error": f"无效的检查编号: {check_num}"}), 400
+
+    return jsonify({
+        "check": check_num,
+        "name": result.name,
+        "passed": result.passed,
+        "actual": result.actual_text[:80],
+        "similarity": round(result.similarity, 3),
+        "details": result.details,
+        "error": result.error,
+    })
+
+
+@app.route("/api/check/full", methods=["POST"])
+def api_check_full():
+    """执行全部四项检查"""
+    engine = get_inspect_engine()
+    adb = get_adb()
+    adb.screenshot("q_current.png")
+    screenshot = str(PROJECT_ROOT / "outputs" / "screenshots" / "q_current.png")
+
+    report = engine.run_full_check(screenshot)
+    return jsonify(engine.to_dict(report))
+
+
 @app.route("/api/modules")
 def api_modules():
     """获取可用模块列表"""
@@ -521,7 +776,7 @@ def api_modules():
             "巧记单词":     (876, 1191),
             "语音评测":     (203, 1358),
         },
-        "专项突破": {
+        "专项突破 (可见)": {
             "听课文":    (161, 1792),
             "课文动画":  (414, 1792),
             "基础训练":  (666, 1792),
@@ -530,6 +785,10 @@ def api_modules():
             "口语训练":  (414, 2033),
             "复习回顾":  (666, 2033),
             "全脑记词":  (919, 2033),
+        },
+        "专项突破 (需滚动)": {
+            "单元自检":     (414, 746),
+            "单元练习计划": (666, 746),
         },
     })
 
