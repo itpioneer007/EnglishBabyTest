@@ -149,6 +149,23 @@ body { font-family:-apple-system,"Microsoft YaHei",sans-serif; background:#f0f2f
     </div>
 
     <div class="card">
+      <div class="card-title">🔍 题目巡检 <span id="inspectStatus" style="font-weight:400;color:#888">就绪</span></div>
+      <div class="btn-row">
+        <button class="btn" style="background:#4a6cf7;color:#fff;padding:8px 16px" onclick="startInspect()">▶ 开始巡检</button>
+        <button class="btn btn-outline" style="padding:6px" onclick="stopInspect()">⏹ 停止</button>
+      </div>
+      <div id="inspectProgress" style="display:none;margin:8px 0">
+        <div style="height:4px;background:#e5e7eb;border-radius:2px">
+          <div id="inspectBar" style="height:100%;width:0%;background:#4a6cf7"></div>
+        </div>
+        <div id="inspectCount" style="text-align:center;font-size:12px;color:#888;margin-top:4px"></div>
+      </div>
+      <div id="inspectResults" style="font-size:12px;line-height:1.6;max-height:300px;overflow-y:auto">
+        <div style="color:#888">等待巡检...</div>
+      </div>
+    </div>
+
+    <div class="card">
       <div class="card-title">🔍 四步检查 (<span id="checkModeText">一键检测</span>)</div>
       <div class="btn-row" style="margin-bottom:8px">
         <button class="btn btn-outline" style="font-size:11px;padding:6px" onclick="runCheck(1)">1️⃣ 题干</button>
@@ -369,6 +386,59 @@ async function runCheck(num) {
   } catch(e) {
     addLog('error', `检查失败: ${e}`)
   }
+}
+
+// ============================================================
+// 题目巡检 (逐题模式)
+// ============================================================
+let inspectTimer = null
+
+async function startInspect() {
+  const res = await fetch('/api/inspect/run', {method:'POST'})
+  const data = await res.json()
+  if (data.error) { alert(data.error); return }
+  addLog('info', '🔍 巡检启动')
+  $('inspectStatus').textContent = '运行中...'
+  $('inspectStatus').style.color = '#4a6cf7'
+  $('inspectProgress').style.display = 'block'
+  inspectTimer = setInterval(pollInspectProgress, 2000)
+}
+
+async function stopInspect() {
+  if (inspectTimer) clearInterval(inspectTimer)
+  $('inspectStatus').textContent = '已停止'
+  $('inspectStatus').style.color = '#888'
+  addLog('warning', '⏹ 巡检已停止')
+}
+
+async function pollInspectProgress() {
+  try {
+    const res = await fetch('/api/status')
+    const d = await res.json()
+    const t = d.task_status
+    // 更新进度
+    if (t.progress && t.progress.length > 0) {
+      const last = t.progress[t.progress.length - 1]
+      $('inspectBar').style.width = (last.step / last.total * 100).toFixed(0) + '%'
+      $('inspectCount').textContent = `Q${last.step}/${last.total}: ${last.msg}`
+    }
+    // 更新结果列表
+    const div = $('inspectResults')
+    const logs = t.log.filter(l => l.msg.startsWith('Q'))
+    if (logs.length > 0) {
+      div.innerHTML = ''
+      logs.forEach(l => {
+        const isSuccess = l.level === 'success'
+        const icon = isSuccess ? '✅' : '⏳'
+        div.innerHTML += `<div>${icon} ${l.msg}</div>`
+      })
+    }
+    if (!t.running) {
+      clearInterval(inspectTimer)
+      $('inspectStatus').textContent = '✅ 完成'
+      $('inspectStatus').style.color = '#22c55e'
+    }
+  } catch(e) {}
 }
 
 function showCheckResults(data, num) {

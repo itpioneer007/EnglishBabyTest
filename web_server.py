@@ -289,14 +289,16 @@ def run_full_task(version: str, grade: str, modules: list):
         # 4. 切版本 (仅当需要时)
         cur += 1
         log_msg(f"{cur}/{total} 切换版本: {version}")
+        # 先检查主页面上的版本文字
         elements = adb.dump_ui()
-        current_version = ""
+        on_correct_version = False
         for e in elements:
-            t = e.text or ""
-            if '版' in t and ('审定' in t or len(t) > 4):
-                current_version = t.strip()[:20]
+            t = (e.text or "").replace('（', '(').replace('）', ')')
+            v = version.replace('（', '(').replace('）', ')')
+            if v in t:
+                on_correct_version = True
                 break
-        if version in current_version:
+        if on_correct_version:
             log_msg(f"  已是 {version}, 跳过切换", "success")
         else:
             adb.tap(972, 2220); time.sleep(2)
@@ -564,6 +566,129 @@ def run_grade_scan_task():
 
     except Exception as e:
         log_msg(f"❌ 流程失败: {e}", "error")
+        import traceback
+        traceback.print_exc()
+    finally:
+        set_done()
+
+
+def run_inspect_loop():
+    """
+    逐题巡检循环 (稳定版)
+    
+    核心逻辑:
+      1. 导航到 AI检测 考试页
+      2. 对每题: 截图→点右侧选项(970, y)→点底部按钮×2(检查+下一题)
+      3. 遇到问题就停，不卡住
+    
+    按钮约定:
+      - 底部按钮 (540, 2174): 选完选项后点一次→显示答案, 再点一次→跳下一题
+      - 选项位置: 右侧选项标签区 (x≈900-1000) 不是图片中央
+    """
+    try:
+        set_running("inspect_loop")
+        config = load_config()
+        adb = get_adb()
+
+        # 1. 启动 + 导航
+        log_msg("启动APP")
+        adb.launch_app(config.app.package)
+        time.sleep(4)
+        adb.tap(540, 1821)  # 关广告
+        time.sleep(0.5)
+        adb.tap(108, 2233)  # 英语tab
+        time.sleep(3)
+        adb.tap(540, 1821)
+
+        # 2. 滚到单元自检
+        log_msg("滚动到单元自检")
+        for i in range(4):
+            adb.swipe(200, 1600, 200, 1200, 400)
+            time.sleep(0.5)
+            elements = adb.dump_ui()
+            for e in elements:
+                if e.text and '单元自检' in e.text:
+                    adb.tap(e.center[0], e.center[1])
+                    break
+            if any('单元自检' in (e.text or '') for e in elements):
+                break
+        time.sleep(3)
+        adb.tap(540, 1821)
+
+        # 3. 等加载 + 点AI检测去答题
+        log_msg("进入AI检测")
+        time.sleep(6)
+        elements = adb.dump_ui()
+        for e in elements:
+            if e.text == '去答题' and e.clickable and e.center[1] < 800:
+                adb.tap(e.center[0], e.center[1])
+                break
+        time.sleep(5)
+
+        # 4. 关规则弹窗 + 开始答题
+        adb.tap(540, 1578)
+        time.sleep(0.5)
+        adb.tap(554, 2116)
+        time.sleep(10)
+
+        # 5. 逐题巡检
+        log_msg("逐题巡检")
+        questions = []
+        last = 0
+        
+        for step in range(80):
+            if not task_status["running"]:
+                break
+
+            elements = adb.dump_ui(retries=2)
+            cur = None
+            for e in elements:
+                m = re.match(r'^(\d+)/(\d+)$', (e.text or "").strip())
+                if m:
+                    cur = int(m.group(1))
+                    break
+            
+            if not cur:
+                log_msg("不在考题页，结束", "warning")
+                break
+            if cur == last:
+                time.sleep(0.3)
+                continue
+            last = cur
+
+            adb.screenshot(f"q{cur:02d}.png")
+            questions.append({"idx": cur, "screenshot": f"q{cur:02d}.png"})
+            log_msg(f"Q{cur}", "success")
+            update_progress(cur, 40, f"Q{cur}")
+
+            # 点右侧选项或中央（取决于布局）
+            for e in elements:
+                if e.clickable and 700 < e.bounds[1] < 1700:
+                    if e.center[0] > 450:
+                        adb.tap(e.center[0], e.bounds[1] + 30)
+                    else:
+                        adb.tap((e.bounds[0] + e.bounds[2]) // 2, (e.bounds[1] + e.bounds[3]) // 2)
+                    break
+            time.sleep(1)
+
+            # 连点两次底部按钮 (检查→下一题)
+            adb.tap(540, 2174)
+            time.sleep(1.5)
+            adb.tap(540, 2174)
+            time.sleep(1.5)
+
+            if cur >= 40:
+                log_msg("✅ 40题完成!", "success")
+                break
+
+        # 6. 保存报告
+        out = PROJECT_ROOT / "outputs" / "questions" / "inspect_report.json"
+        with open(out, "w", encoding="utf-8") as f:
+            json.dump(questions, f, ensure_ascii=False, indent=2)
+        log_msg(f"✅ 报告: {out.name} ({len(questions)}题)", "success")
+
+    except Exception as e:
+        log_msg(f"❌ 异常: {e}", "error")
         import traceback
         traceback.print_exc()
     finally:
@@ -908,6 +1033,16 @@ def api_check_full():
 
     report = engine.run_full_check(screenshot)
     return jsonify(engine.to_dict(report))
+
+
+@app.route("/api/inspect/run", methods=["POST"])
+def api_inspect_run():
+    """启动逐题巡检 (任务版)"""
+    if task_status["running"]:
+        return jsonify({"error": "已有任务在运行"}), 409
+    t = threading.Thread(target=run_inspect_loop, daemon=True)
+    t.start()
+    return jsonify({"status": "started", "task": "inspect_loop"})
 
 
 @app.route("/api/modules")

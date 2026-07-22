@@ -1,70 +1,58 @@
 {
-  "total": 1,
-  "passed": 0,
-  "failed": 1,
-  "problems": [
+  "version": "湘少版(2024审定) 六年级上册",
+  "test": "AI检测 测试题",
+  "total": 40,
+  "completed_unique": 7,
+  "screenshot_dir": "outputs/screenshots",
+  "questions": [
     {
       "idx": 1,
-      "type": "通用题",
-      "check": "题干文字",
-      "screenshot": "outputs/screenshots/q_current.png"
-    }
-  ],
-  "by_type": {
-    "题干错误": 1,
-    "内容错误": 0,
-    "图片问题": 0,
-    "作答问题": 0
-  },
-  "reports": [
+      "type": "听力题",
+      "text": "听录音，选择与录音内容相符的图片",
+      "answer": "B (干旱地)",
+      "screenshot": "q01.png"
+    },
     {
-      "idx": 1,
-      "progress": "",
-      "type": "通用题",
-      "timestamp": "10:51:08",
-      "checks": {
-        "1_stem": {
-          "name": "题干文字",
-          "passed": false,
-          "actual": "",
-          "similarity": 0.0,
-          "details": [],
-          "error": "题干为空"
-        },
-        "2_content": {
-          "name": "内容文字",
-          "passed": true,
-          "actual": "",
-          "similarity": 0.0,
-          "details": [
-            "无脚本数据"
-          ],
-          "error": ""
-        },
-        "3_image": {
-          "name": "图片",
-          "passed": true,
-          "actual": "",
-          "similarity": 0.0,
-          "details": [
-            "1 个图片/选项元素"
-          ],
-          "error": ""
-        },
-        "4_answer": {
-          "name": "作答",
-          "passed": true,
-          "actual": "",
-          "similarity": 0.0,
-          "details": [
-            "题型: 通用题",
-            "尝试点击 ((542, 1050))"
-          ],
-          "error": ""
-        }
-      },
-      "all_passed": false,
-      "screenshot": "outputs/screenshots/q_current.png"
+      "idx": 2,
+      "type": "听力题",
+      "text": "听录音，选择你所听到的单词",
+      "answer": "B (kind-hearted)",
+      "screenshot": "q02.png"
+    },
+    {
+      "idx": 3,
+      "type": "听力题",
+      "text": "听录音，选择恰当的答语",
+      "answer": "B (恰当答语)",
+      "screenshot": "q04.png"
+    },
+    {
+      "idx": 4,
+      "type": "选择题",
+      "text": "选择与句子相符的图片",
+      "answer": "A (匹配图片)",
+      "screenshot": "q06.png"
+    },
+    {
+      "idx": 5,
+      "type": "分类题",
+      "text": "选出下列单词中不同类的一项",
+      "answer": "(单词)",
+      "screenshot": "q07.png"
+    },
+    {
+      "idx": 6,
+      "type": "听力题",
+      "text": "听录音，有哪些人做了自我介绍呢，请选择对应图片",
+      "answer": "(匹配自我介绍)",
+      "screenshot": "q09.png"
+    },
+    {
+      "idx": 7,
+      "type": "听力题(单/双选)",
+      "text": "听对话，选择所听到的地名",
+      "answer": "(多选 Yuelu Mountain等)",
+      "screenshot": "q11.png"
     }
   ]
 }
