@@ -25,4 +25,3 @@ outputs/*.png
 # 系统文件
 .DS_Store
 Thumbs.db
-llm_config.json
