@@ -1,0 +1,227 @@
+{
+  "total": 7,
+  "results": [
+    {
+      "idx": 1,
+      "stem": "听录音，选择与录音内容相符的图片",
+      "image": {
+        "name": "(3)配图检查",
+        "passed": false,
+        "actual_text": "",
+        "expected_text": "",
+        "similarity": 0.0,
+        "details": [
+          "✅ 检测到图片元素",
+          "❌ 图片可能被截断",
+          "❌ 图文不匹配: 不匹配：无法判断，因为题目未提供录音内容且图片不可见。",
+          "⚠ 图片逻辑问题: 不合理：题目明确要求“听录音，选择与录音内容相符的图片”，但当前仅提供了文字描述，未附任何图片，因此无法检查图片内容是否符合常识、颜色/比例/文字是否有误、是否模糊变形等逻辑问题。缺乏必要视觉信息，无",
+          "✅ 听力题: 播放按钮存在"
+        ],
+        "error": "",
+        "screenshot": "screenshots\\q01.png"
+      },
+      "answer": {
+        "name": "(4)作答检查",
+        "passed": true,
+        "actual_text": "",
+        "expected_text": "",
+        "similarity": 0.0,
+        "details": [
+          "⏭ 无手机连接，跳过点击测试（不影响审查结论）"
+        ],
+        "error": "",
+        "screenshot": "screenshots\\q01.png"
+      }
+    },
+    {
+      "idx": 2,
+      "stem": "听录音，选择你所听到的单词",
+      "image": {
+        "name": "(3)配图检查",
+        "passed": false,
+        "actual_text": "",
+        "expected_text": "",
+        "similarity": 0.0,
+        "details": [
+          "✅ 检测到图片元素",
+          "❌ 图片可能被截断",
+          "❌ 图文不匹配: 不匹配：题目为“听录音，选择你所听到的单词”，属于纯听力辨音选词题，核心是辨别单词发音，通常不需要配图辅助。题目文字未提及任何场景或具体单词，无法推断图片内容，且题型本身不依赖视觉信息，配图的存在可能",
+          "✅ 图片无逻辑问题",
+          "✅ 听力题: 播放按钮存在"
+        ],
+        "error": "",
+        "screenshot": "screenshots\\q02.png"
+      },
+      "answer": {
+        "name": "(4)作答检查",
+        "passed": true,
+        "actual_text": "",
+        "expected_text": "",
+        "similarity": 0.0,
+        "details": [
+          "⏭ 无手机连接，跳过点击测试（不影响审查结论）"
+        ],
+        "error": "",
+        "screenshot": "screenshots\\q02.png"
+      }
+    },
+    {
+      "idx": 3,
+      "stem": "听录音，选择恰当的答语",
+      "image": {
+        "name": "(3)配图检查",
+        "passed": false,
+        "actual_text": "",
+        "expected_text": "",
+        "similarity": 0.0,
+        "details": [
+          "✅ 检测到图片元素",
+          "❌ 图片可能被截断",
+          "❌ 图文不匹配: 不匹配：无法获取图片内容，因此无法判断图片是否与题干“听录音，选择恰当的答语”相关。且该题型为听力选答语，通常不依赖配图表达场景；若存在配图，若与录音内容无关则可能造成干扰，但当前缺乏视觉信息无法确认",
+          "✅ 图片无逻辑问题",
+          "✅ 听力题: 播放按钮存在"
+        ],
+        "error": "",
+        "screenshot": "screenshots\\q03.png"
+      },
+      "answer": {
+        "name": "(4)作答检查",
+        "passed": true,
+        "actual_text": "",
+        "expected_text": "",
+        "similarity": 0.0,
+        "details": [
+          "⏭ 无手机连接，跳过点击测试（不影响审查结论）"
+        ],
+        "error": "",
+        "screenshot": "screenshots\\q03.png"
+      }
+    },
+    {
+      "idx": 4,
+      "stem": "选择与句子相符的图片",
+      "image": {
+        "name": "(3)配图检查",
+        "passed": false,
+        "actual_text": "",
+        "expected_text": "",
+        "similarity": 0.0,
+        "details": [
+          "✅ 检测到图片元素",
+          "❌ 图片可能被截断",
+          "❌ 图文不匹配: 不匹配：题目仅提供了题干“选择与句子相符的图片”，但未给出具体句子和图片内容，无法判断相关性。",
+          "⚠ 图片逻辑问题: 不合理：题目仅提供了“选择与句子相符的图片”这一要求，但未给出具体句子内容，也未描述图片信息，无法判断图片是否存在逻辑不合理之处。"
+        ],
+        "error": "",
+        "screenshot": "screenshots\\q04.png"
+      },
+      "answer": {
+        "name": "(4)作答检查",
+        "passed": true,
+        "actual_text": "",
+        "expected_text": "",
+        "similarity": 0.0,
+        "details": [
+          "⏭ 无手机连接，跳过点击测试（不影响审查结论）"
+        ],
+        "error": "",
+        "screenshot": "screenshots\\q04.png"
+      }
+    },
+    {
+      "idx": 5,
+      "stem": "选出下列单词中不同类的一项",
+      "image": {
+        "name": "(3)配图检查",
+        "passed": false,
+        "actual_text": "",
+        "expected_text": "",
+        "similarity": 0.0,
+        "details": [
+          "✅ 检测到图片元素",
+          "❌ 图片可能被截断",
+          "❌ 图文不匹配: 不匹配：题目是“选出下列单词中不同类的一项”，属于词汇分类选择题，考查学生对单词词义和类别的辨析能力，不需要任何图片辅助理解或作答。配图与题干场景无关，属于多余信息。",
+          "✅ 图片无逻辑问题"
+        ],
+        "error": "",
+        "screenshot": "screenshots\\q05.png"
+      },
+      "answer": {
+        "name": "(4)作答检查",
+        "passed": true,
+        "actual_text": "",
+        "expected_text": "",
+        "similarity": 0.0,
+        "details": [
+          "⏭ 无手机连接，跳过点击测试（不影响审查结论）"
+        ],
+        "error": "",
+        "screenshot": "screenshots\\q05.png"
+      }
+    },
+    {
+      "idx": 6,
+      "stem": "听录音，有哪些人做了自我介绍呢，请选择对应图片",
+      "image": {
+        "name": "(3)配图检查",
+        "passed": false,
+        "actual_text": "",
+        "expected_text": "",
+        "similarity": 0.0,
+        "details": [
+          "✅ 检测到图片元素",
+          "❌ 图片可能被截断",
+          "❌ 图文不匹配: 不匹配：缺少图片内容，无法基于题目文字判断图片是否相关。",
+          "✅ 图片无逻辑问题",
+          "✅ 听力题: 播放按钮存在"
+        ],
+        "error": "",
+        "screenshot": "screenshots\\q06.png"
+      },
+      "answer": {
+        "name": "(4)作答检查",
+        "passed": true,
+        "actual_text": "",
+        "expected_text": "",
+        "similarity": 0.0,
+        "details": [
+          "⏭ 无手机连接，跳过点击测试（不影响审查结论）"
+        ],
+        "error": "",
+        "screenshot": "screenshots\\q06.png"
+      }
+    },
+    {
+      "idx": 7,
+      "stem": "听对话，选择所听到的地名（单选或双选）",
+      "image": {
+        "name": "(3)配图检查",
+        "passed": false,
+        "actual_text": "",
+        "expected_text": "",
+        "similarity": 0.0,
+        "details": [
+          "✅ 检测到图片元素",
+          "❌ 图片可能被截断",
+          "❌ 图文不匹配: 不匹配：缺少图片信息，无法基于题目文字判断图片内容是否与题干相关或是否能表达听力场景。",
+          "✅ 图片无逻辑问题",
+          "✅ 听力题: 播放按钮存在"
+        ],
+        "error": "",
+        "screenshot": "screenshots\\q07.png"
+      },
+      "answer": {
+        "name": "(4)作答检查",
+        "passed": true,
+        "actual_text": "",
+        "expected_text": "",
+        "similarity": 0.0,
+        "details": [
+          "⏭ 无手机连接，跳过点击测试（不影响审查结论）"
+        ],
+        "error": "",
+        "screenshot": "screenshots\\q07.png"
+      }
+    }
+  ]
+}
