@@ -28,7 +28,6 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from flask import Flask, jsonify, request, send_from_directory, render_template, Response
 from adb_controller import ADBController
 from config_loader import load_config
-from inspection_engine import InspectionEngine, QuestionReport, CheckItem
 
 app = Flask(__name__)
 
@@ -991,64 +990,9 @@ def api_questions_report():
 # 四步检查 API
 # ============================================================
 
-_inspect_engine = None
+
 _current_screenshot = ""
 
-def get_inspect_engine():
-    global _inspect_engine
-    if _inspect_engine is None:
-        _inspect_engine = InspectionEngine(adb_controller=get_adb())
-    return _inspect_engine
-
-
-@app.route("/api/check/step", methods=["POST"])
-def api_check_step():
-    """执行一步检查 (check=1/2/3/4)"""
-    data = request.get_json() or {}
-    check_num = data.get("check", 1)
-
-    engine = get_inspect_engine()
-    screenshot = _current_screenshot or "outputs/screenshots/q_current.png"
-
-    # 截图当前题目
-    adb = get_adb()
-    adb.screenshot("q_current.png")
-    screenshot = str(PROJECT_ROOT / "outputs" / "screenshots" / "q_current.png")
-
-    result = None
-    if check_num == 1:
-        result = engine.check_1_stem(screenshot)
-    elif check_num == 2:
-        result = engine.check_2_content(screenshot)
-    elif check_num == 3:
-        result = engine.check_3_image(screenshot)
-    elif check_num == 4:
-        result = engine.check_4_answer(screenshot)
-
-    if result is None:
-        return jsonify({"error": f"无效的检查编号: {check_num}"}), 400
-
-    return jsonify({
-        "check": check_num,
-        "name": result.name,
-        "passed": result.passed,
-        "actual": result.actual_text[:80],
-        "similarity": round(result.similarity, 3),
-        "details": result.details,
-        "error": result.error,
-    })
-
-
-@app.route("/api/check/full", methods=["POST"])
-def api_check_full():
-    """执行全部四项检查"""
-    engine = get_inspect_engine()
-    adb = get_adb()
-    adb.screenshot("q_current.png")
-    screenshot = str(PROJECT_ROOT / "outputs" / "screenshots" / "q_current.png")
-
-    report = engine.run_full_check(screenshot)
-    return jsonify(engine.to_dict(report))
 
 
 # ============================================================
