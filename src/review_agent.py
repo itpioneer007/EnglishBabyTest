@@ -250,36 +250,65 @@ class ReviewAgent:
         return r
 
     # ============================================================
-    # 增强: 统一的教材知识专家角色
+    # 角色定义: 从 data/review_skill.md 加载 + 动态知识上下文
     # ============================================================
+
+    def _load_skill_identity(self) -> str:
+        """
+        从 data/review_skill.md 加载审查智能体的身份定义
+        让 AI 每次审查前都知道自己是谁、要做什么
+        """
+        skill_path = Path(__file__).parent.parent / "data" / "review_skill.md"
+        if not skill_path.exists():
+            # skill 文件不存在时返回简短默认定义
+            return (
+                "【你的身份】你是一位小学英语教材题目审查专家。\n"
+                "你负责审查教育APP'E英语宝'中的听力专项题目。\n"
+                "你的核心任务是对每道题做四维检查:\n"
+                "  (1)题干文字是否正确\n"
+                "  (2)题目内容是否与脚本相符、显示是否完整、有无知识/逻辑错误\n"
+                "  (3)配图是否与题目匹配、有无逻辑问题\n"
+                "  (4)题目能否正常作答、答案能否完整输入\n"
+                "遇到不确定的判断，标记'需人工复核'。\n"
+            )
+        try:
+            content = skill_path.read_text(encoding="utf-8")
+            # 提取"一、你的身份"到"七、协作分工"之间的内容
+            import re
+            m = re.search(r'## 一、你的身份(.*?)(?=## 七、|$)', content, re.DOTALL)
+            if m:
+                return "【你的身份】" + m.group(1).strip()
+            return content[:1000]  # 取前1000字
+        except Exception:
+            return "【你的身份】你是一位小学英语教材题目审查专家。"
 
     def _build_role_prompt(self, q: YingYuBaoQuestion) -> str:
         """
-        构建统一的"小学英语教材知识专家"角色定义
+        构建统一的"审查智能体"角色定义
         
-        每次审查前加载, 让AI知道:
-        - 它在审查什么版本/年级/单元的题目
-        - 该单元教了什么词汇、句型、知识点
-        - 它需要以"带备课的老师"视角来判断
+        每次审查前加载:
+        - 从 data/review_skill.md 加载基础身份
+        - 从知识库加载当前单元的知识上下文
+        - 让AI知道自己在审查什么版本/年级/单元的题目
         """
-        # 1. 提取当前单元的知识
+        # 1. 加载 skill 中的身份定义
+        identity = self._load_skill_identity()
+
+        # 2. 提取当前单元的知识
         grade_label = self._name_to_grade(q.keywords) or "五上"
         unit_vocab = self.kb.get_unit_vocab("湘鲁版", grade_label, q.unit)
         unit_patterns = self.kb.get_unit_patterns("湘鲁版", grade_label, q.unit)
 
-        # 2. 格式化知识摘要 (取前20个词和5个句型)
+        # 3. 格式化知识摘要
         vocab_str = ", ".join(sorted(set(unit_vocab))[:25]) if unit_vocab else "(未收录)"
         patterns_str = "; ".join(unit_patterns[:5]) if unit_patterns else "(未收录)"
-
-        # 3. 从关键词提取版本和年级完整信息
         kw_str = "; ".join(q.keywords[:3]) if q.keywords else ""
 
+        # 4. 组合完整角色提示
         role = (
-            f"【你的身份】你是一位小学英语教材知识专家和题目质检专家。\n"
-            f"你负责审查本套教材中的题目质量, 确保题目与教材内容一致、"
-            f"知识点在合理范围内、图片正确匹配、作答方式可行。\n"
+            f"{identity}\n"
             f"\n"
-            f"【教材上下文】\n"
+            f"【当前任务】\n"
             f"- 教材版本: 湘鲁版 | 年级: {grade_label} | 单元: Unit {q.unit}\n"
             f"- 关键词: {kw_str}\n"
             f"- 本单元核心词汇({len(unit_vocab)}个): {vocab_str}\n"
@@ -290,7 +319,7 @@ class ReviewAgent:
             f"2. 以知识库为背景参考(该年级学生应该学过这些词汇和句型)\n"
             f"3. 如果APP中的内容与脚本不一致, 标注为不通过\n"
             f"4. 如果APP内容与脚本一致但与教材知识不符(超纲/错位), 也需标注\n"
-            f"5. 保持严格但合理: 同义词、合理变形可接受\n"
+            f"5. 不确定的判断标注'需人工复核'\n"
         )
         return role
 
