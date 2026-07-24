@@ -4,6 +4,8 @@
 用 YAML 定义检测流程，引擎自动执行。
 无需 WorkBuddy 介入，脚本独立运行完成全流程。
 
+import os
+
 用法:
     python flow_runner.py flows/login.yaml
     python flow_runner.py flows/module_test.yaml --module "单词学习"
@@ -209,6 +211,45 @@ class FlowRunner:
             name = step.get("name", "")
             self.adb.screenshot(f"{name}.png" if name else "")
             return True
+
+        elif action == "verify_question":
+            """题目内容校验 —— 合并自 EnglishBaby.bat
+            YAML用法:
+              - action: verify_question
+                question_data:
+                  question_id: "Q3A-U1-001"
+                  question_type: "选择题"
+                  stem_text: "选择正确的单词补全句子..."
+                  content_text: "A. my  B. I  C. me  D. mine"
+                  correct_answer: "A"
+                  knowledge_points: ["物主代词", "my的用法"]
+            """
+            qdata = step.get("question_data", {})
+            from question_checker import QuestionChecker, create_checker_for_question
+            checker = create_checker_for_question(
+                adb_controller=self.adb,
+                question_data=qdata,
+                ocr_backend="uiautomator",
+            )
+            # 先截图
+            from datetime import datetime
+            qid = qdata.get("question_id", "unknown")
+            shot_name = f"verify_{qid}_{datetime.now().strftime('%H%M%S')}.png"
+            shot_path = self.adb.screenshot(shot_name)
+            if not shot_path:
+                shot_path = f"outputs/screenshots/{shot_name}"
+            # 校验
+            result = checker.check_all(shot_path)
+            # 保存结果
+            import json
+            out_path = f"outputs/verify_results/{qid}.json"
+            os.makedirs("outputs/verify_results", exist_ok=True)
+            with open(out_path, "w", encoding="utf-8") as f:
+                json.dump(result, f, ensure_ascii=False, indent=2)
+            self.adb._log("题目校验", f"{qid}: 题干={'✅' if result['stem']['passed'] else '❌'} "
+                                   f"内容={'✅' if result['content']['script_match'] else '❌'}",
+                          success=result['stem']['passed'] and result['content']['script_match'])
+            return result['stem']['passed']
 
         elif action == "wait":
             self.adb.wait(step.get("seconds", 1))

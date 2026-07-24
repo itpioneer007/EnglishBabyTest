@@ -1,0 +1,15 @@
+{
+  "_架构": "双模型：DeepSeek 做推理，qwen3.7-plus 做视觉",
+  "_策略": "纯文本用 DeepSeek，需要看图时自动切 qwen3.7-plus",
+
+  "api_key": "sk-f95fe17ff76944e5be1f5793a198a7b0",
+  "model": "deepseek-v4-pro",
+  "base_url": "https://api.deepseek.com/v1",
+
+  "vision_api_key": "sk-28315dab09dd434d9602195cedde29f1",
+  "vision_model": "qwen3.7-plus",
+  "vision_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+
+  "max_tokens": 1000,
+  "temperature": 0.1
+}
