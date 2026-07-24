@@ -347,13 +347,13 @@ body { font-family:-apple-system,"Microsoft YaHei","PingFang SC",sans-serif; bac
     <div class="card">
       <div class="card-title">📤 脚本上传</div>
       <div class="card-desc">
-        上传公司提供的<strong>DOCX脚本文件</strong>（如"260717新湘鲁六上听力专项.docx"），系统自动解析并导入知识库，审查时会用这些内容核验题目是否正确。
+        上传公司提供的<strong>DOCX/DOC脚本文件</strong>（如"260717新湘鲁六上听力专项.docx"），系统自动解析并导入知识库，审查时会用这些内容核验题目是否正确。
       </div>
       <div class="upload-area" id="dropZone">
         <div class="icon">+</div>
-        <div class="txt">拖拽 DOCX 文件到此处，或点下方按钮选择</div>
-        <input type="file" id="fileInput" accept=".docx" style="display:none">
-        <button class="btn btn-outline" onclick="document.getElementById('fileInput').click()">📂 选择文件</button>
+        <div class="txt">拖拽 DOCX 或 DOC 文件到此处，或点下方按钮选择</div>
+        <input type="file" id="fileInput" accept=".docx,.doc" style="display:none">
+        <button class="btn btn-outline" onclick="document.getElementById('fileInput').click()">📂 选择文件 (.docx / .doc)</button>
       </div>
       <div id="uploadStatus" style="font-size:14px;color:#64748b;margin-bottom:8px;margin-top:6px"></div>
       <div class="file-list" id="uploadList"></div>
@@ -601,7 +601,11 @@ function addLog(level,msg){
 // ============================================================
 async function startInsp() {
   const v=$('inspectVersion').value,u=$('inspectUnit').value,s=$('inspectStage').value;
-  $('runBtn').disabled=true;addLog('info',`启动: ${v} U${u} ${s}`);
+  $('runBtn').disabled=true;
+  // 清空旧日志和题目结果
+  $('logBox').innerHTML=''; LOG_LAST=0;
+  $('questionList').innerHTML='<div style="text-align:center;padding:60px 20px;color:#94a3b8"><div style="font-size:48px;margin-bottom:14px">📋</div><div style="font-size:17px;font-weight:500;color:#64748b">正在启动检查...</div></div>';
+  addLog('info',`启动: ${v} U${u} ${s}`);
   try{
     const r=await(await fetch('/api/inspect/listening-run',{method:'POST',
       headers:{'Content-Type':'application/json'},
