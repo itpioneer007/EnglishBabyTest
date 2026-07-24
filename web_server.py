@@ -1191,6 +1191,131 @@ def _get_current_version_from_config() -> str:
 
 
 # ============================================================
+# 🔵 审查智能体 路由区 — 脚本上传 + 知识库 + 审查结果
+# ============================================================
+
+UPLOAD_DIR = PROJECT_ROOT / "uploads"
+UPLOAD_DIR.mkdir(exist_ok=True)
+
+@app.route("/api/upload-docx", methods=["POST"])
+def api_upload_docx():
+    """上传 DOCX 脚本文件, 自动导入知识库"""
+    if "file" not in request.files:
+        return jsonify({"error": "未选择文件"}), 400
+    file = request.files["file"]
+    if not file.filename.lower().endswith(".docx"):
+        return jsonify({"error": "仅支持 .docx 文件"}), 400
+    save_path = UPLOAD_DIR / file.filename
+    file.save(str(save_path))
+    try:
+        from src.knowledge_base import KnowledgeBase
+        kb = KnowledgeBase()
+        stats = kb.add_bulk_from_docx(str(save_path))
+        return jsonify({
+            "success": True, "filename": file.filename,
+            "knowledge_stats": {
+                "questions_parsed": stats.get("questions", 0),
+                "vocab_added": stats.get("vocab", 0),
+                "patterns_added": stats.get("patterns", 0),
+            },
+            "message": f"已导入 {stats.get('questions',0)} 题到知识库",
+        })
+    except Exception as e:
+        return jsonify({"error": f"解析失败: {str(e)}"}), 500
+
+
+@app.route("/api/upload/list")
+def api_upload_list():
+    """列出已上传的 DOCX 文件"""
+    files = []
+    for f in sorted(UPLOAD_DIR.glob("*.docx")):
+        files.append({
+            "name": f.name,
+            "size": f.stat().st_size,
+            "mtime": datetime.fromtimestamp(f.stat().st_mtime).isoformat(),
+        })
+    return jsonify({"files": files})
+
+
+@app.route("/api/knowledge/status")
+def api_knowledge_status():
+    """知识库状态"""
+    try:
+        from src.knowledge_base import KnowledgeBase
+        kb = KnowledgeBase()
+        summary = kb.summary()
+        total_entries = sum(s["vocab"] + s["patterns"] for s in summary)
+        return jsonify({
+            "total_entries": total_entries,
+            "grades": [s["key"] for s in summary],
+            "detail": summary,
+        })
+    except Exception as e:
+        return jsonify({"total_entries": 0, "error": str(e)})
+
+
+_review_results = {}
+
+@app.route("/api/review/run", methods=["POST"])
+def api_review_run():
+    """运行审查智能体"""
+    data = request.get_json() or {}
+    docx_file = data.get("docx", "")
+    unit = data.get("unit", 0)
+    stage = data.get("stage", "")
+    docx_path = ""
+    if docx_file:
+        docx_path = str(UPLOAD_DIR / docx_file)
+        if not Path(docx_path).exists():
+            return jsonify({"error": f"文件 {docx_file} 不存在"}), 404
+    else:
+        files = sorted(UPLOAD_DIR.glob("*.docx"), key=os.path.getmtime, reverse=True)
+        if files: docx_path = str(files[0])
+        else: return jsonify({"error": "未找到脚本文件"}), 404
+    try:
+        from src.review_agent import ReviewAgent, ReviewConfig
+        cfg = ReviewConfig(docx_path=docx_path, unit=unit, stage=stage,
+                           screenshot_dir=str(PROJECT_ROOT / "screenshots"), verbose=False)
+        agent = ReviewAgent(cfg)
+        results = agent.review()
+        global _review_results
+        _review_results = {
+            "timestamp": datetime.now().isoformat(),
+            "docx": Path(docx_path).name,
+            "total": len(results),
+            "passed": sum(1 for r in results if r.overall_passed),
+            "avg_score": round(sum(r.overall_score for r in results) / len(results), 2) if results else 0,
+            "results": [r.to_dict() for r in results],
+        }
+        return jsonify(_review_results)
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+@app.route("/api/review/results")
+def api_review_results():
+    return jsonify(_review_results or {"results": [], "total": 0})
+
+
+@app.route("/api/review/export", methods=["POST"])
+def api_review_export():
+    try:
+        py_content = ""
+        if _review_results:
+            r = _review_results
+            py_content = f"# 英语宝审查报告\n\n生成时间: {r['timestamp']}\n脚本: {r['docx']}\n"
+            py_content += f"总题数: {r['total']} | 通过: {r['passed']}/{r['total']} | 综合得分: {r['avg_score']}\n\n"
+            py_content += "| # | 题型 | 题干 | 内容 | 配图 | 作答 | 总评 |\n|---|---|---|---|---|---|---|\n"
+            for rr in r.get("results", []):
+                def ic(p): return "Y" if p else "N"
+                py_content += f"| Q{rr['idx']:02d} | {rr['type'][:10]} | {ic(rr['stem']['passed'])} | {ic(rr['content']['passed'])} | {ic(rr['image']['passed'])} | {ic(rr['answer']['passed'])} | {'PASS' if rr['overall_passed'] else 'FAIL'} ({rr['overall_score']}) |\n"
+        return jsonify({"content": py_content})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================================
 # 启动
 # ============================================================
 

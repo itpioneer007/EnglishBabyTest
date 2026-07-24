@@ -86,6 +86,12 @@ body { font-family:-apple-system,"Microsoft YaHei",sans-serif; background:#f0f2f
 @media (max-width:900px) {
   .container { grid-template-columns:1fr }
 }
+/* 审查智能体表格 */
+#reviewResults table { width:100%; font-size:12px; border-collapse:collapse }
+#reviewResults th { background:#f8fafc; padding:4px 6px; text-align:center; font-weight:500; position:sticky; top:0 }
+#reviewResults td { padding:4px 6px; text-align:center }
+#reviewResults tr:hover { background:#f0f2f5 }
+#reviewResults tr:nth-child(even) { background:#fafbfc }
 </style>
 </head>
 <body>
@@ -199,6 +205,41 @@ body { font-family:-apple-system,"Microsoft YaHei",sans-serif; background:#f0f2f
         4. 勾选要检测的模块<br>
         5. 点击<strong>开始检测</strong>
       </div>
+    </div>
+  </div>
+
+  <!-- 上传面板 + 知识库 -->
+  <div style="margin-top:16px">
+    <div class="card">
+      <div class="card-title">📤 脚本上传</div>
+      <div style="border:2px dashed #d1d5db;border-radius:8px;padding:16px;text-align:center;margin-bottom:8px" id="dropZone">
+        <div style="font-size:32px;color:#4a6cf7;margin-bottom:8px">+</div>
+        <div style="font-size:13px;color:#666;margin-bottom:8px">上传 DOCX 脚本 → 自动导入知识库</div>
+        <input type="file" id="fileInput" accept=".docx" style="display:none" onchange="uploadFile(this)">
+        <button class="btn btn-outline" style="padding:6px 12px;font-size:12px;width:auto" onclick="document.getElementById('fileInput').click()">选择文件</button>
+      </div>
+      <div id="uploadStatus" style="font-size:12px;color:#888"></div>
+      <div id="uploadedFiles" style="font-size:12px;max-height:120px;overflow-y:auto;margin-top:6px"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">📚 知识库 <span id="kbCount" style="font-weight:400;color:#888"></span></div>
+      <div id="kbStatus" style="font-size:12px;color:#888">加载中...</div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">🤖 审查智能体</div>
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <select id="reviewDocx" style="flex:1;padding:8px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px"></select>
+        <button class="btn" style="background:#4a6cf7;color:#fff;padding:8px 12px;font-size:12px;flex-shrink:0" onclick="runReview()">▶ 审查</button>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <label style="font-size:12px;color:#888">单元: <input type="number" id="reviewUnit" value="0" style="width:50px;padding:4px;border:1px solid #e2e8f0;border-radius:4px;font-size:12px" placeholder="0=全部"></label>
+        <label style="font-size:12px;color:#888">阶段: <input type="text" id="reviewStage" value="基础巩固" style="width:90px;padding:4px;border:1px solid #e2e8f0;border-radius:4px;font-size:12px" placeholder="全部"></label>
+      </div>
+      <div id="reviewSummary" style="display:none;padding:8px;background:#f0fdf4;border-radius:8px;margin-bottom:8px"></div>
+      <div id="reviewResults" style="font-size:12px;line-height:1.6;max-height:400px;overflow-y:auto"></div>
+      <button class="btn btn-outline" style="font-size:12px;padding:6px;margin-top:8px" onclick="exportReview()">📄 导出报告</button>
     </div>
   </div>
 </div>
@@ -564,11 +605,169 @@ function addLog(level, msg) {
 }
 
 // ============================================================
+// 脚本上传 + 审查智能体
+// ============================================================
+
+// 文件拖拽上传
+const dropZone = document.getElementById('dropZone')
+if (dropZone) {
+  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.style.borderColor = '#4a6cf7' })
+  dropZone.addEventListener('dragleave', e => { dropZone.style.borderColor = '#d1d5db' })
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault(); dropZone.style.borderColor = '#d1d5db'
+    if (e.dataTransfer.files.length) uploadFile(null, e.dataTransfer.files[0])
+  })
+}
+
+async function uploadFile(input, file) {
+  file = file || (input && input.files[0])
+  if (!file) return
+  if (!file.name.endsWith('.docx')) { setUploadStatus('仅支持 .docx 文件', 'red'); return }
+  setUploadStatus(`正在上传 ${file.name}...`, '#888')
+  const form = new FormData()
+  form.append('file', file)
+  try {
+    const res = await fetch('/api/upload-docx', { method: 'POST', body: form })
+    const data = await res.json()
+    if (data.error) { setUploadStatus(`❌ ${data.error}`, 'red'); return }
+    setUploadStatus(`✅ ${data.message}`, 'green')
+    loadUploadedFiles()
+    loadKBStatus()
+  } catch(e) { setUploadStatus(`❌ 上传失败: ${e}`, 'red') }
+}
+
+function setUploadStatus(msg, color) {
+  const el = document.getElementById('uploadStatus')
+  if (el) { el.textContent = msg; el.style.color = color || '#888' }
+}
+
+async function loadUploadedFiles() {
+  const el = document.getElementById('uploadedFiles')
+  if (!el) return
+  try {
+    const res = await fetch('/api/upload/list')
+    const data = await res.json()
+    if (data.files && data.files.length) {
+      el.innerHTML = data.files.map(f => `<div style="padding:2px 0">📄 ${f.name} (${(f.size/1024).toFixed(0)}KB)</div>`).join('')
+      // 更新审查文件选择器
+      const sel = document.getElementById('reviewDocx')
+      if (sel) {
+        sel.innerHTML = data.files.map((f, i) => `<option value="${f.name}" ${i===0?'selected':''}>${f.name}</option>`).join('')
+      }
+    } else {
+      el.innerHTML = '<div style="color:#888">暂无上传文件</div>'
+    }
+  } catch(e) {}
+}
+
+async function loadKBStatus() {
+  const el = document.getElementById('kbStatus')
+  const cnt = document.getElementById('kbCount')
+  if (!el) return
+  try {
+    const res = await fetch('/api/knowledge/status')
+    const data = await res.json()
+    if (data.total_entries > 0) {
+      const grades = data.grades.join(', ')
+      el.innerHTML = `✅ ${data.total_entries} 条知识点<br><span style="color:#888">覆盖: ${grades}</span>`
+      if (cnt) cnt.textContent = `(${data.total_entries}条)`
+    } else {
+      el.innerHTML = '⚠ 知识库为空，请上传 DOCX 文件'
+    }
+  } catch(e) { el.textContent = '❌ 加载失败' }
+}
+
+async function runReview() {
+  const sel = document.getElementById('reviewDocx')
+  const docx = sel ? sel.value : ''
+  const unit = parseInt(document.getElementById('reviewUnit')?.value || '0')
+  const stage = document.getElementById('reviewStage')?.value || ''
+  const btn = event?.target || document.querySelector('button[onclick="runReview()"]')
+
+  document.getElementById('reviewSummary').style.display = 'none'
+  document.getElementById('reviewResults').innerHTML = '<div style="color:#4a6cf7">⏳ 审查中, 每张截图约需 5-30s, 请耐心等待...</div>'
+  if (btn) btn.disabled = true
+
+  try {
+    const res = await fetch('/api/review/run', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({docx, unit, stage})
+    })
+    const data = await res.json()
+    if (data.error) { showReviewError(data.error); return }
+    showReviewResults(data)
+  } catch(e) { showReviewError(String(e)) }
+  finally { if (btn) btn.disabled = false }
+}
+
+function showReviewError(msg) {
+  document.getElementById('reviewResults').innerHTML = `<div style="color:red">❌ ${msg}</div>`
+}
+
+function showReviewResults(data) {
+  const summary = document.getElementById('reviewSummary')
+  const results = document.getElementById('reviewResults')
+
+  summary.style.display = 'block'
+  const passRate = data.total > 0 ? (data.passed/data.total*100).toFixed(0) : 0
+  summary.innerHTML = `
+    <div style="font-weight:500">审查完成: ${data.total} 题, 通过 ${data.passed} (${passRate}%)</div>
+    <div style="color:#888;font-size:12px">综合得分 ${data.avg_score} | 脚本: ${data.docx}</div>
+  `
+
+  if (!data.results || !data.results.length) {
+    results.innerHTML = '<div style="color:#888">无结果</div>'
+    return
+  }
+
+  let html = '<table style="width:100%;font-size:12px;border-collapse:collapse">'
+  html += '<tr style="background:#f8fafc"><th>#</th><th>题型</th><th>题干</th><th>内容</th><th>配图</th><th>作答</th><th>得分</th></tr>'
+  data.results.forEach(r => {
+    const ic = p => p ? '✅' : '❌'
+    const color = r.overall_passed ? '#166534' : '#991b1b'
+    html += `<tr style="border-bottom:1px solid #eee">
+      <td style="padding:4px">Q${String(r.idx).padStart(2,'0')}</td>
+      <td style="padding:4px">${(r.type||'').slice(0,8)}</td>
+      <td style="padding:4px;text-align:center">${ic(r.stem.passed)}</td>
+      <td style="padding:4px;text-align:center">${ic(r.content.passed)}</td>
+      <td style="padding:4px;text-align:center">${ic(r.image.passed)}</td>
+      <td style="padding:4px;text-align:center">${ic(r.answer.passed)}</td>
+      <td style="padding:4px;text-align:center;color:${color};font-weight:500">${r.overall_score}</td>
+    </tr>`
+  })
+  html += '</table>'
+  results.innerHTML = html
+}
+
+async function exportReview() {
+  const btn = event?.target
+  if (btn) btn.disabled = true
+  try {
+    const res = await fetch('/api/review/export', { method: 'POST' })
+    const data = await res.json()
+    if (data.content) {
+      const blob = new Blob([data.content], {type: 'text/markdown'})
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = 'review_report.md'
+      a.click()
+      addLog('success', '📄 审查报告已导出')
+    } else if (data.error) {
+      alert('导出失败: ' + data.error)
+    }
+  } catch(e) { alert('导出失败: ' + e) }
+  finally { if (btn) btn.disabled = false }
+}
+
+// ============================================================
 // 初始化
 // ============================================================
 loadModules()
 onVersionChange()
 pollStatus()
+loadUploadedFiles()
+loadKBStatus()
 </script>
 </body>
 </html>
