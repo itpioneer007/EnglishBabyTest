@@ -3,62 +3,101 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>英语宝模块检测控制面板</title>
+<title>E英语宝模块检测</title>
 <style>
 * { margin:0; padding:0; box-sizing:border-box }
 body { font-family:-apple-system,"Microsoft YaHei",sans-serif; background:#f0f2f5; color:#333; font-size:14px; line-height:1.5 }
-.header { background:#4a6cf7; color:white; padding:16px 24px; display:flex; align-items:center; gap:16px }
+.header { background:#4a6cf7; color:white; padding:14px 20px; display:flex; align-items:center; gap:16px }
 .header h1 { font-size:18px; font-weight:500 }
-.header .sub { font-size:12px; opacity:0.8 }
-.container { max-width:1200px; margin:0 auto; padding:16px; display:grid; grid-template-columns:320px 1fr 320px; gap:16px }
+.header .sub { font-size:12px; opacity:0.85 }
+.container { max-width:1280px; margin:0 auto; padding:14px; display:grid; grid-template-columns:300px 1fr 320px; gap:14px }
+.card { background:white; border-radius:10px; padding:14px; box-shadow:0 1px 3px rgba(0,0,0,.06) }
+.card-title { font-size:13px; font-weight:500; color:#4a6cf7; margin-bottom:10px; padding-bottom:6px; border-bottom:1px solid #eee; display:flex; justify-content:space-between; align-items:center }
+.card-title .badge { background:#f0f2f5; color:#666; padding:1px 8px; border-radius:10px; font-size:11px; font-weight:400 }
 
-.card { background:white; border-radius:10px; padding:16px; box-shadow:0 1px 3px rgba(0,0,0,0.06) }
-.card-title { font-size:13px; font-weight:500; color:#4a6cf7; margin-bottom:12px; padding-bottom:8px; border-bottom:1px solid #eee }
-
-/* 状态指示 */
+/* 状态点 */
 .status-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px }
-.status-dot.online { background:#22c55e }
-.status-dot.offline { background:#ef4444 }
-.status-dot.running { background:#f59e0b; animation:pulse 1s infinite }
+.s-pending { background:#d1d5db }
+.s-running { background:#f59e0b; animation:pulse 1s infinite }
+.s-done { background:#22c55e }
+.s-error { background:#ef4444 }
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
 
 /* 按钮 */
-.btn { display:flex; align-items:center; justify-content:center; gap:8px; width:100%; padding:10px 16px; border:none; border-radius:8px; font-size:14px; font-weight:500; cursor:pointer; transition:all 0.2s; margin-bottom:8px }
-.btn:disabled { opacity:0.5; cursor:not-allowed }
+.btn { display:inline-flex; align-items:center; justify-content:center; gap:6px; padding:8px 14px; border:none; border-radius:8px; font-size:13px; font-weight:500; cursor:pointer; transition:all .2s }
+.btn:disabled { opacity:.5; cursor:not-allowed }
 .btn-primary { background:#4a6cf7; color:white }
 .btn-primary:hover:not(:disabled) { background:#3b5de7 }
 .btn-success { background:#22c55e; color:white }
-.btn-success:hover:not(:disabled) { background:#16a34a }
 .btn-warning { background:#f59e0b; color:white }
-.btn-warning:hover:not(:disabled) { background:#d97706 }
 .btn-danger { background:#ef4444; color:white }
-.btn-danger:hover:not(:disabled) { background:#dc2626 }
-.btn-outline { background:transparent; border:1.5px solid #4a6cf7; color:#4a6cf7; padding:8px 14px }
+.btn-outline { background:transparent; border:1.5px solid #4a6cf7; color:#4a6cf7; padding:6px 12px }
 .btn-outline:hover:not(:disabled) { background:#4a6cf7; color:white }
+.btn-row { display:flex; gap:8px }
+.btn-row .btn { flex:1 }
 
-/* 版本选择器 */
-.version-info { display:flex; align-items:center; gap:8px; padding:10px 12px; background:#f8fafc; border-radius:8px; margin-bottom:12px; font-size:13px }
-.version-info .label { color:#888 }
-.version-info .value { font-weight:500 }
-.version-select { width:100%; padding:10px 12px; border:1.5px solid #e2e8f0; border-radius:8px; font-size:14px; margin-bottom:12px; background:white; cursor:pointer }
+/* === 流程面板 === */
+.flow-step { display:flex; align-items:flex-start; gap:10px; padding:8px 10px; margin-bottom:6px; border-radius:6px; transition:all .2s }
+.flow-step .dot { flex-shrink:0; width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:500; color:white; margin-top:2px }
+.flow-step .body { flex:1; min-width:0 }
+.flow-step .name { font-size:13px; font-weight:500; color:#333; margin-bottom:2px }
+.flow-step .detail { font-size:11px; color:#888; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+.flow-step.pending { background:#f8fafc }
+.flow-step.pending .dot { background:#d1d5db }
+.flow-step.running { background:#fff7ed; border:1px solid #fed7aa }
+.flow-step.running .dot { background:#f59e0b; box-shadow:0 0 0 4px rgba(245,158,11,.2); animation:pulse 1.5s infinite }
+.flow-step.done { background:#f0fdf4 }
+.flow-step.done .dot { background:#22c55e }
+.flow-step.error { background:#fef2f2; border:1px solid #fecaca }
+.flow-step.error .dot { background:#ef4444 }
 
-/* 模块区域 */
-.module-group { margin-bottom:12px }
-.module-group-title { font-size:12px; font-weight:500; color:#888; margin-bottom:8px; padding:4px 8px; background:#f8fafc; border-radius:4px }
-.module-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px }
-.module-item { display:flex; align-items:center; gap:6px; padding:6px 8px; border-radius:6px; cursor:pointer; transition:background 0.15s }
-.module-item:hover { background:#f8fafc }
-.module-item input[type="checkbox"] { width:16px; height:16px; accent-color:#4a6cf7; cursor:pointer }
-.module-item label { cursor:pointer; font-size:13px; user-select:none }
+/* === 题目结果卡 === */
+.q-card { background:#fafbfc; border:1px solid #e5e7eb; border-radius:8px; padding:10px; margin-bottom:8px; transition:all .2s }
+.q-card.pending { opacity:.6 }
+.q-card.q-passed { border-left:3px solid #22c55e }
+.q-card.q-failed { border-left:3px solid #ef4444 }
+.q-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px }
+.q-header .left { display:flex; align-items:center; gap:10px }
+.q-num { font-size:15px; font-weight:500; color:#4a6cf7 }
+.q-type { font-size:11px; padding:1px 8px; border-radius:10px; background:#eef2ff; color:#4a6cf7 }
+.q-score { font-size:13px; color:#22c55e; font-weight:500 }
+.q-score.low { color:#f59e0b }
+.q-score.bad { color:#ef4444 }
+.q-ai-label { font-size:11px; padding:2px 8px; border-radius:10px; background:#f0f2f5; color:#888 }
+.q-ai-label.pass { background:#dcfce7; color:#166534 }
+.q-ai-label.fail { background:#fee2e2; color:#991b1b }
+.q-pending-tag { font-size:11px; padding:2px 8px; border-radius:10px; background:#fef3c7; color:#92400e }
+.dims { display:grid; grid-template-columns:repeat(4,1fr); gap:6px; margin-bottom:8px }
+.dim { text-align:center; padding:6px 4px; background:white; border-radius:6px; border:1px solid #e5e7eb; font-size:11px }
+.dim.pass { background:#dcfce7; color:#166534; border-color:#86efac }
+.dim.fail { background:#fee2e2; color:#991b1b; border-color:#fca5a5 }
+.dim.skip { background:#f3f4f6; color:#6b7280 }
+.dim-icon { font-size:14px; margin-bottom:2px }
+.dim-label { color:#666; font-size:10px }
+.q-reasons { font-size:11px; color:#555; padding:6px 8px; background:#f8fafc; border-radius:4px; margin-bottom:8px; line-height:1.5; max-height:60px; overflow-y:auto }
+.human-actions { display:flex; gap:6px; align-items:center }
+.human-actions .note-input { flex:1; padding:4px 8px; border:1px solid #e5e7eb; border-radius:4px; font-size:11px }
+.h-label-tag { font-size:10px; padding:1px 6px; border-radius:8px; background:#fef3c7; color:#92400e; margin-left:6px }
 
-/* 进度 */
-.progress-bar { height:6px; background:#e2e8f0; border-radius:3px; overflow:hidden; margin:12px 0 }
-.progress-bar .fill { height:100%; background:#4a6cf7; border-radius:3px; transition:width 0.5s; width:0% }
-.progress-text { font-size:12px; color:#888; text-align:center }
+/* 选择器 */
+.version-select, .text-input { width:100%; padding:8px 12px; border:1.5px solid #e2e8f0; border-radius:8px; font-size:13px; background:white }
+
+/* 文件上传 */
+.upload-area { border:2px dashed #d1d5db; border-radius:8px; padding:14px; text-align:center; transition:all .2s; margin-bottom:8px }
+.upload-area.dragover { border-color:#4a6cf7; background:#f0f5ff }
+.upload-area .icon { font-size:28px; color:#4a6cf7; margin-bottom:4px }
+.upload-area .txt { font-size:12px; color:#666; margin-bottom:6px }
+.upload-area input[type=file] { display:none }
+
+/* 设备 */
+.device-info .row { display:flex; justify-content:space-between; padding:5px 0; font-size:12px; border-bottom:1px solid #f0f0f0 }
+.device-info .row:last-child { border:none }
+.device-info .key { color:#888 }
+.device-info .value { font-weight:500 }
 
 /* 日志 */
-.log-container { height:280px; overflow-y:auto; font-size:12px; font-family:monospace; background:#1e293b; color:#e2e8f0; border-radius:8px; padding:12px }
-.log-entry { padding:2px 0; display:flex; gap:8px }
+.log-container { height:160px; overflow-y:auto; font-size:11px; font-family:monospace; background:#1e293b; color:#e2e8f0; border-radius:6px; padding:8px }
+.log-entry { padding:1px 0; display:flex; gap:6px }
 .log-entry .time { color:#64748b; flex-shrink:0 }
 .log-entry .level { flex-shrink:0; font-weight:500 }
 .log-entry .level.info { color:#60a5fa }
@@ -66,749 +105,504 @@ body { font-family:-apple-system,"Microsoft YaHei",sans-serif; background:#f0f2f
 .log-entry .level.error { color:#f87171 }
 .log-entry .level.warning { color:#fbbf24 }
 
-/* 截图预览 */
-.screenshot-area { position:relative; border-radius:8px; overflow:hidden; background:#f8fafc; min-height:100px; display:flex; align-items:center; justify-content:center }
-.screenshot-area img { max-width:100%; max-height:320px; display:block }
-.screenshot-area .placeholder { color:#94a3b8; font-size:13px; text-align:center; padding:20px }
+/* 截图 */
+.screenshot-area { background:#f8fafc; border-radius:6px; overflow:hidden; text-align:center; min-height:80px; display:flex; align-items:center; justify-content:center }
+.screenshot-area img { max-width:100%; max-height:240px }
+.screenshot-area .placeholder { color:#94a3b8; font-size:12px; padding:14px }
 
-/* 设备信息 */
-.device-info { padding:10px 0 }
-.device-info .row { display:flex; justify-content:space-between; padding:6px 0; font-size:13px; border-bottom:1px solid #f0f0f0 }
-.device-info .row:last-child { border:none }
-.device-info .key { color:#888 }
-.device-info .value { font-weight:500 }
-
-/* 按钮行 */
-.btn-row { display:flex; gap:8px }
-.btn-row .btn { flex:1 }
-.icon { width:16px; height:16px }
-
-@media (max-width:900px) {
-  .container { grid-template-columns:1fr }
-}
-/* 审查智能体表格 */
-#reviewResults table { width:100%; font-size:12px; border-collapse:collapse }
-#reviewResults th { background:#f8fafc; padding:4px 6px; text-align:center; font-weight:500; position:sticky; top:0 }
-#reviewResults td { padding:4px 6px; text-align:center }
-#reviewResults tr:hover { background:#f0f2f5 }
-#reviewResults tr:nth-child(even) { background:#fafbfc }
+@media (max-width:900px) { .container { grid-template-columns:1fr } }
 </style>
 </head>
 <body>
 
 <div class="header">
-  <h1>📘 英语宝模块检测</h1>
+  <h1>E英语宝模块检测</h1>
   <span class="sub" id="deviceBadge">设备: —</span>
+  <span class="sub" id="runBadge" style="margin-left:auto">空闲</span>
 </div>
 
 <div class="container">
-  <!-- 左栏: 控制面板 -->
+
+  <!-- 左栏: 流程可视化 -->
   <div>
     <div class="card">
-      <div class="card-title">📱 设备状态</div>
+      <div class="card-title">
+        <span>设备状态</span>
+      </div>
       <div class="device-info" id="deviceInfo">
-        <div class="row"><span class="key">状态</span><span class="value" id="statusText"><span class="status-dot offline"></span>检测中...</span></div>
+        <div class="row"><span class="key">状态</span><span class="value" id="statusText"><span class="status-dot s-pending"></span>检测中</span></div>
         <div class="row"><span class="key">型号</span><span class="value" id="modelText">—</span></div>
         <div class="row"><span class="key">序列号</span><span class="value" id="serialText">—</span></div>
+        <div class="row"><span class="key">APP版本</span><span class="value" id="currentVersionText">—</span></div>
+      </div>
+    </div>
+
+    <!-- ===== 流程可视化面板 ===== -->
+    <div class="card">
+      <div class="card-title">
+        <span>检查流程</span>
+        <span class="badge" id="flowProgress">0/8</span>
+      </div>
+      <div id="workflowList">
+        <!-- JS动态填充8个步骤 -->
+      </div>
+      <div style="margin-top:8px;padding-top:8px;border-top:1px solid #f0f0f0">
+        <div style="font-size:12px;color:#888;margin-bottom:6px">运行参数</div>
+        <select class="version-select" id="inspectVersion">
+          <option value="新湘鲁五上">新湘鲁五上</option>
+          <option value="新湘鲁五下">新湘鲁五下</option>
+          <option value="新湘鲁六上" selected>新湘鲁六上</option>
+          <option value="新湘鲁六下">新湘鲁六下</option>
+        </select>
+        <div style="display:flex;gap:6px;margin-top:6px">
+          <select class="version-select" id="inspectUnit" style="flex:1">
+            <option>6</option><option>7</option><option>8</option><option>9</option>
+          </select>
+          <select class="version-select" id="inspectStage" style="flex:2">
+            <option selected>基础巩固</option><option>综合进阶</option><option>难点突破</option>
+          </select>
+        </div>
+        <div class="btn-row" style="margin-top:8px">
+          <button class="btn btn-primary" id="runBtn" onclick="startListeningInspect()">▶ 开始检查</button>
+          <button class="btn btn-danger" onclick="stopInspect()">⏹ 停止</button>
+        </div>
       </div>
     </div>
 
     <div class="card">
-      <div class="card-title">📚 配置</div>
-      <div style="font-size:12px;color:#888;margin-bottom:8px">英语书版本</div>
-      <select class="version-select" id="versionSelect">
-        <option value="湘少版(2024审定)">湘少版(2024审定)</option>
-        <option value="湘鲁版(2024审定)">湘鲁版(2024审定)</option>
-        <option value="人教版(PEP)(2024审定)" selected>人教版(PEP)(2024审定)</option>
-        <option value="教科版(2024审定)">教科版(2024审定) — 📘新教材 一年级上~四年级上</option>
-        <option value="教科版">教科版 — 📗老教材</option>
-      </select>
-      <div style="font-size:12px;color:#888;margin:8px 0">年级（上册/下册）<span id="gradeHint" style="color:#4a6cf7;font-weight:500"></span></div>
-      <select class="version-select" id="gradeSelect"></select>
-    </div>
-
-    <div class="card">
-      <div class="card-title">🧩 选择检测模块</div>
-      <div class="btn-row" style="margin-bottom:12px">
-        <button class="btn btn-outline" style="padding:6px;font-size:12px" onclick="selectAll(true)">全选</button>
-        <button class="btn btn-outline" style="padding:6px;font-size:12px" onclick="selectAll(false)">取消</button>
-      </div>
-      <div id="moduleGroups"></div>
-    </div>
-
-    <button class="btn btn-success" id="runBtn" onclick="startFullRun()" style="font-size:16px;padding:14px">▶ 一键全流程运行</button>
-  </div>
-
-  <!-- 中栏: 进度与日志 -->
-  <div>
-    <div class="card">
-      <div class="card-title">⏳ 执行进度</div>
-      <div class="progress-bar"><div class="fill" id="progressFill"></div></div>
-      <div class="progress-text" id="progressText">等待操作...</div>
-    </div>
-
-    <div class="card">
-      <div class="card-title">📋 运行日志</div>
+      <div class="card-title">实时日志 <span class="badge" id="logCount">0</span></div>
       <div class="log-container" id="logContainer">
         <div class="log-entry"><span class="time">--:--:--</span><span class="level info">等待开始</span></div>
       </div>
     </div>
-
-    <div class="card">
-      <div class="card-title">🔍 题目巡检 <span id="inspectStatus" style="font-weight:400;color:#888">就绪</span></div>
-      <div style="margin-bottom:8px">
-        <label style="font-size:12px;color:#555;margin-right:6px">版本:</label>
-        <select id="inspectVersion" style="padding:4px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12px">
-          <option>新湘鲁五上</option>
-          <option selected>新湘鲁六上</option>
-        </select>
-        <label style="font-size:12px;color:#555;margin:0 6px">Unit:</label>
-        <select id="inspectUnit" style="padding:4px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12px">
-          <option>6</option><option>7</option><option>8</option><option>9</option>
-        </select>
-        <label style="font-size:12px;color:#555;margin:0 6px">阶段:</label>
-        <select id="inspectStage" style="padding:4px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12px">
-          <option selected>基础巩固</option><option>综合进阶</option><option>难点突破</option>
-        </select>
-      </div>
-      <div class="btn-row">
-        <button class="btn" style="background:#4a6cf7;color:#fff;padding:8px 16px" onclick="startListeningInspect()">▶ 听力专项巡检</button>
-        <button class="btn btn-outline" style="padding:6px" onclick="stopInspect()">⏹ 停止</button>
-      </div>
-      <div id="inspectProgress" style="display:none;margin:8px 0">
-        <div style="height:4px;background:#e5e7eb;border-radius:2px">
-          <div id="inspectBar" style="height:100%;width:0%;background:#4a6cf7"></div>
-        </div>
-        <div id="inspectCount" style="text-align:center;font-size:12px;color:#888;margin-top:4px"></div>
-      </div>
-      <div id="inspectResults" style="font-size:12px;line-height:1.6;max-height:300px;overflow-y:auto">
-        <div style="color:#888">等待巡检...</div>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-title">🔍 四步检查 (<span id="checkModeText">一键检测</span>)</div>
-      <div class="btn-row" style="margin-bottom:8px">
-        <button class="btn btn-outline" style="font-size:11px;padding:6px" onclick="runCheck(1)">1️⃣ 题干</button>
-        <button class="btn btn-outline" style="font-size:11px;padding:6px" onclick="runCheck(2)">2️⃣ 内容</button>
-        <button class="btn btn-outline" style="font-size:11px;padding:6px" onclick="runCheck(3)">3️⃣ 图片</button>
-        <button class="btn btn-outline" style="font-size:11px;padding:6px" onclick="runCheck(4)">4️⃣ 作答</button>
-        <button class="btn btn-outline" style="font-size:11px;padding:6px" onclick="runCheck(0)">⚡ 全检</button>
-      </div>
-      <div id="checkResults" style="font-size:12px;line-height:1.6">
-        <div style="color:#888">等待检查...</div>
-      </div>
-    </div>
   </div>
 
-  <!-- 右栏: 截图预览 -->
+  <!-- 中栏: 题目检查结果 -->
   <div>
     <div class="card">
-      <div class="card-title">📸 截图预览</div>
-      <div class="screenshot-area" id="screenshotArea">
-        <div class="placeholder">执行操作后将显示截图</div>
+      <div class="card-title">
+        <span>题目检查结果</span>
+        <span class="badge" id="qStats">待运行</span>
       </div>
-      <div style="margin-top:8px;font-size:12px;color:#888;text-align:center" id="screenshotName"></div>
-    </div>
-
-    <div class="card">
-      <div class="card-title">ℹ️ 操作提示</div>
-      <div style="font-size:13px;color:#555;line-height:1.8">
-        1. 点击<strong>自动登录</strong><br>
-        2. 点击<strong>刷新版本列表</strong><br>
-        3. 选择目标版本<br>
-        4. 勾选要检测的模块<br>
-        5. 点击<strong>开始检测</strong>
+      <div id="questionList" style="max-height:680px;overflow-y:auto">
+        <div style="text-align:center;color:#94a3b8;padding:30px 0;font-size:13px">
+          尚未开始检查<br><span style="font-size:11px">点击左上角"▶ 开始检查"</span>
+        </div>
       </div>
     </div>
   </div>
 
-  <!-- 上传面板 + 知识库 -->
-  <div style="margin-top:16px">
+  <!-- 右栏: 审查智能体 + 截图 -->
+  <div>
     <div class="card">
-      <div class="card-title">📤 脚本上传</div>
-      <div style="border:2px dashed #d1d5db;border-radius:8px;padding:16px;text-align:center;margin-bottom:8px" id="dropZone">
-        <div style="font-size:32px;color:#4a6cf7;margin-bottom:8px">+</div>
-        <div style="font-size:13px;color:#666;margin-bottom:8px">上传 DOCX 脚本 → 自动导入知识库</div>
-        <input type="file" id="fileInput" accept=".docx" style="display:none" onchange="uploadFile(this)">
-        <button class="btn btn-outline" style="padding:6px 12px;font-size:12px;width:auto" onclick="document.getElementById('fileInput').click()">选择文件</button>
+      <div class="card-title">脚本上传</div>
+      <div class="upload-area" id="dropZone">
+        <div class="icon">+</div>
+        <div class="txt">上传 DOCX → 自动入知识库</div>
+        <input type="file" id="fileInput" accept=".docx">
+        <button class="btn btn-outline" style="padding:4px 10px;font-size:12px;width:auto" onclick="document.getElementById('fileInput').click()">选择文件</button>
       </div>
-      <div id="uploadStatus" style="font-size:12px;color:#888"></div>
-      <div id="uploadedFiles" style="font-size:12px;max-height:120px;overflow-y:auto;margin-top:6px"></div>
+      <div id="uploadStatus" style="font-size:11px;color:#888"></div>
+      <div id="uploadedFiles" style="font-size:11px;max-height:80px;overflow-y:auto;margin-top:4px"></div>
     </div>
 
     <div class="card">
-      <div class="card-title">📚 知识库 <span id="kbCount" style="font-weight:400;color:#888"></span></div>
-      <div id="kbStatus" style="font-size:12px;color:#888">加载中...</div>
+      <div class="card-title">知识库 <span class="badge" id="kbCount">0条</span></div>
+      <div id="kbStatus" style="font-size:11px;color:#888">加载中</div>
     </div>
 
     <div class="card">
-      <div class="card-title">🤖 审查智能体</div>
-      <div style="display:flex;gap:8px;margin-bottom:8px">
-        <select id="reviewDocx" style="flex:1;padding:8px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px"></select>
-        <button class="btn" style="background:#4a6cf7;color:#fff;padding:8px 12px;font-size:12px;flex-shrink:0" onclick="runReview()">▶ 审查</button>
+      <div class="card-title">审查智能体</div>
+      <select class="version-select" id="reviewDocx" style="margin-bottom:6px"></select>
+      <div style="display:flex;gap:6px">
+        <input type="number" id="reviewUnit" class="text-input" value="0" placeholder="Unit (0=全部)" style="flex:1">
+        <button class="btn btn-primary" onclick="runReview()">审查</button>
       </div>
-      <div style="display:flex;gap:8px;margin-bottom:8px">
-        <label style="font-size:12px;color:#888">单元: <input type="number" id="reviewUnit" value="0" style="width:50px;padding:4px;border:1px solid #e2e8f0;border-radius:4px;font-size:12px" placeholder="0=全部"></label>
-        <label style="font-size:12px;color:#888">阶段: <input type="text" id="reviewStage" value="基础巩固" style="width:90px;padding:4px;border:1px solid #e2e8f0;border-radius:4px;font-size:12px" placeholder="全部"></label>
+      <div id="reviewResult" style="margin-top:8px;font-size:11px;color:#888"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">智能体学习状态</div>
+      <div id="agentStatus" style="font-size:11px;color:#555;line-height:1.7">
+        <div>反馈样本: <b id="fbTotal">0</b></div>
+        <div>AI准确率: <b id="fbAccuracy">-</b></div>
+        <div>已标注: <b id="fbLabeled">0</b></div>
       </div>
-      <div id="reviewSummary" style="display:none;padding:8px;background:#f0fdf4;border-radius:8px;margin-bottom:8px"></div>
-      <div id="reviewResults" style="font-size:12px;line-height:1.6;max-height:400px;overflow-y:auto"></div>
-      <button class="btn btn-outline" style="font-size:12px;padding:6px;margin-top:8px" onclick="exportReview()">📄 导出报告</button>
+    </div>
+
+    <div class="card">
+      <div class="card-title">截图预览</div>
+      <div class="screenshot-area" id="screenshotArea">
+        <div class="placeholder">执行操作后显示</div>
+      </div>
     </div>
   </div>
 </div>
 
 <script>
 // ============================================================
-// 全局状态
+// 全局
 // ============================================================
 let POLLING = false;
+let INSPECT_RUNNING = false;
+let POLL_TIMER = null;
 
 function $(id) { return document.getElementById(id) }
 
 // ============================================================
-// 轮询状态
+// 流程步骤 (8步对应图片模板)
 // ============================================================
-async function pollStatus() {
-  if (POLLING) return
-  POLLING = true
+const WORKFLOW_STEPS = [
+  {key:'0.回到首页',    name:'0. 回到首页'},
+  {key:'1.启动APP',    name:'1. 启动APP'},
+  {key:'1.5关闭教程',  name:'1.5 关闭教程'},
+  {key:'2.关闭广告',    name:'2. 关闭广告'},
+  {key:'3.英语Tab',    name:'3. 英语Tab'},
+  {key:'3.5版本检查',  name:'3.5 版本检查'},
+  {key:'4.专项突破',    name:'4. 进入专项突破'},
+  {key:'5.听力专项',    name:'5. 进入听力专项'},
+  {key:'6.逐题巡检',    name:'6. 逐题巡检'},
+  {key:'7.生成报告',    name:'7. 生成报告'},
+];
+
+function renderWorkflow() {
+  const el = $('workflowList');
+  el.innerHTML = WORKFLOW_STEPS.map((s, i) => `
+    <div class="flow-step pending" id="step_${i}">
+      <div class="dot">${i+1}</div>
+      <div class="body">
+        <div class="name">${s.name}</div>
+        <div class="detail" id="step_${i}_detail">等待</div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function updateStep(idx, status, detail='') {
+  const step = $('step_' + idx);
+  if (!step) return;
+  step.className = 'flow-step ' + status;
+  const det = $('step_' + idx + '_detail');
+  if (det) det.textContent = detail || (status === 'running' ? '进行中' : status === 'done' ? '完成' : status === 'error' ? '错误' : '等待');
+}
+
+// ============================================================
+// 状态轮询
+// ============================================================
+async function pollState() {
+  if (POLLING) return;
+  POLLING = true;
   while (true) {
     try {
-      const res = await fetch('/api/status')
-      const data = await res.json()
-      updateDeviceInfo(data)
-      updateTaskStatus(data.task_status)
-      await pollLog()
-    } catch(e) {
-      console.warn('poll error:', e)
+      // 设备状态
+      const sres = await fetch('/api/status');
+      const sd = await sres.json();
+      updateDevice(sd);
+      INSPECT_RUNNING = sd.task_status.running;
+      $('runBadge').textContent = INSPECT_RUNNING ? '🔴 运行中' : '空闲';
+      $('runBadge').style.color = INSPECT_RUNNING ? '#f87171' : '#4ade80';
+
+      // 检查流程状态
+      const fres = await fetch('/api/inspect/state');
+      const fd = await fres.json();
+      updateFlow(fd);
+      updateQuestions(fd);
+      updateScreenshot(fd);
+
+      // 日志
+      pollLog();
+    } catch(e) { console.warn(e) }
+    await sleep(1500);
+  }
+}
+
+function updateDevice(d) {
+  const dot = $('statusText').querySelector('.status-dot');
+  dot.className = 'status-dot ' + (d.device_connected ? 's-done' : 's-error');
+  $('statusText').innerHTML = '';
+  $('statusText').appendChild(dot);
+  $('statusText').appendChild(document.createTextNode(d.device_connected ? ' 在线' : ' 离线'));
+  $('serialText').textContent = d.device_serial || '—';
+  $('deviceBadge').textContent = '设备: ' + (d.device_connected ? '✅ 已连接' : '❌ 未连接');
+  if (d.current_version) $('currentVersionText').textContent = d.current_version;
+}
+
+function updateFlow(fd) {
+  const steps = fd.workflow_steps || [];
+  let done = 0;
+  steps.forEach((s, i) => {
+    const idx = WORKFLOW_STEPS.findIndex(w => w.key === s.step);
+    if (idx >= 0) {
+      updateStep(idx, s.status, s.detail || '');
+      if (s.status === 'done') done++;
     }
-    await sleep(2000)
+  });
+  $('flowProgress').textContent = `${done}/${WORKFLOW_STEPS.length}`;
+}
+
+function updateQuestions(fd) {
+  const questions = fd.questions || {};
+  const ids = Object.keys(questions).sort();
+  const total = ids.length;
+  const labeled = Object.values(questions).filter(q => q.human_label).length;
+  const passed = Object.values(questions).filter(q => q.human_label === '通过').length;
+  const failed = Object.values(questions).filter(q => q.human_label === '不通过').length;
+
+  $('qStats').textContent = total ? `${total}题 · ${passed}通过 · ${failed}不通过` : '待运行';
+  $('fbTotal').textContent = total;
+  $('fbLabeled').textContent = labeled;
+
+  if (!total) return;
+  const el = $('questionList');
+  el.innerHTML = ids.map(qid => {
+    const q = questions[qid];
+    const passed = q.overall_passed;
+    return `
+      <div class="q-card ${passed ? 'q-passed' : 'q-failed'}" id="qc_${qid}">
+        <div class="q-header">
+          <div class="left">
+            <span class="q-num">Q${String(q.idx).padStart(2,'0')}</span>
+            <span class="q-type">${q.question_type || '?'}</span>
+            <span class="q-ai-label ${passed ? 'pass' : 'fail'}">AI: ${passed ? '通过' : '不通过'}</span>
+            ${q.human_label ? `<span class="q-ai-label ${q.human_label === '通过' ? 'pass' : 'fail'}">人: ${q.human_label}</span>` : ''}
+          </div>
+          <div>
+            <span class="q-score ${q.overall_score >= 0.8 ? '' : (q.overall_score >= 0.5 ? 'low' : 'bad')}">${q.overall_score}</span>
+          </div>
+        </div>
+        <div class="dims">
+          <div class="dim ${q.ai_stem ? 'pass' : 'fail'}">
+            <div class="dim-icon">${q.ai_stem ? '✅' : '❌'}</div>
+            <div>题干</div>
+          </div>
+          <div class="dim ${q.ai_content ? 'pass' : 'fail'}">
+            <div class="dim-icon">${q.ai_content ? '✅' : '❌'}</div>
+            <div>内容</div>
+          </div>
+          <div class="dim ${q.ai_image ? 'pass' : (q.question_type && q.question_type.includes('图片') ? 'fail' : 'skip')}">
+            <div class="dim-icon">${q.ai_image ? '✅' : (q.question_type && q.question_type.includes('图片') ? '❌' : '⏭')}</div>
+            <div>配图</div>
+          </div>
+          <div class="dim ${q.ai_answer ? 'pass' : 'fail'}">
+            <div class="dim-icon">${q.ai_answer ? '✅' : '❌'}</div>
+            <div>作答</div>
+          </div>
+        </div>
+        <div class="q-reasons">
+          <b>(1)题干:</b> ${q.stem_reason || '-'}<br>
+          <b>(2)内容:</b> ${q.content_reason || '-'}<br>
+          <b>(3)配图:</b> ${q.image_reason || '-'}<br>
+          <b>(4)作答:</b> ${q.answer_reason || '-'}
+        </div>
+        <div class="human-actions">
+          ${q.human_label ? `<span class="h-label-tag">已标注: ${q.human_label} ${q.human_note || ''}</span>` : `
+            <input type="text" class="note-input" id="note_${qid}" placeholder="人工备注(可选)">
+            <button class="btn btn-success" style="padding:4px 8px;font-size:11px" onclick="humanLabel('${qid}', '通过')">✓ 通过</button>
+            <button class="btn btn-danger" style="padding:4px 8px;font-size:11px" onclick="humanLabel('${qid}', '不通过')">✗ 不通过</button>
+          `}
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function updateScreenshot(fd) {
+  const questions = fd.questions || {};
+  const ids = Object.keys(questions).sort();
+  if (!ids.length) return;
+  const latest = ids[ids.length - 1];
+  const q = questions[latest];
+  if (q.screenshot) {
+    const area = $('screenshotArea');
+    area.innerHTML = `<img src="/api/screenshot/${q.screenshot}" onerror="this.parentElement.innerHTML='<div class=placeholder>${latest}</div>'">`;
   }
 }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
 
 // ============================================================
-// 设备信息
-// ============================================================
-async function updateDeviceInfo(data) {
-  const statusText = $('statusText')
-  const dot = statusText.querySelector('.status-dot') || document.createElement('span')
-  dot.className = 'status-dot ' + (data.device_connected ? 'online' : 'offline')
-  statusText.innerHTML = ''
-  statusText.appendChild(dot)
-  statusText.appendChild(document.createTextNode(data.device_connected ? '在线' : '离线'))
-
-  $('serialText').textContent = data.device_serial
-  $('deviceBadge').textContent = '设备: ' + (data.device_connected ? '✅ 已连接' : '❌ 未连接')
-
-  // 加载硬件信息
-  try {
-    const hw = await (await fetch('/api/hardware-info')).json()
-    $('modelText').textContent = hw.model || '—'
-  } catch(e) {}
-
-  // 版本信息
-  const vi = $('versionInfo')
-  if (data.current_version) {
-    vi.style.display = 'flex'
-    $('currentVersionText').textContent = data.current_version
-  }
-}
-
-// ============================================================
-// 任务状态
-// ============================================================
-function updateTaskStatus(status) {
-  const fill = $('progressFill')
-  const text = $('progressText')
-  const progress = status.progress || []
-  const running = status.running
-
-  if (running) {
-    const last = progress[progress.length - 1]
-    if (last && last.total > 0) {
-      const pct = Math.round(last.step / last.total * 100)
-      fill.style.width = pct + '%'
-      text.textContent = `[${last.step}/${last.total}] ${last.msg}`
-    } else {
-      fill.style.width = '0%'
-      text.textContent = '运行中...'
-    }
-  } else if (status.end_time) {
-    fill.style.width = '100%'
-    fill.style.background = '#22c55e'
-    text.textContent = `✅ 完成 (${status.end_time})`
-    setTimeout(() => { fill.style.background = '#4a6cf7' }, 3000)
-  } else {
-    fill.style.width = '0%'
-    text.textContent = '等待操作...'
-  }
-
-  // 更新按钮状态
-  const btns = ['runBtn']
-  btns.forEach(id => {
-    $(id).disabled = running
-    if (running) $(id).style.cursor = 'not-allowed'
-    else $(id).style.cursor = 'pointer'
-  })
-}
-
-// ============================================================
 // 日志
 // ============================================================
-let lastLogCount = 0
-
+let lastLogCount = 0;
 async function pollLog() {
   try {
-    const res = await fetch('/api/log')
-    const log = await res.json()
+    const res = await fetch('/api/log');
+    const log = await res.json();
+    $('logCount').textContent = log.length;
     if (log.length > lastLogCount) {
-      const container = $('logContainer')
+      const container = $('logContainer');
       for (let i = lastLogCount; i < log.length; i++) {
-        const entry = log[i]
-        const div = document.createElement('div')
-        div.className = 'log-entry'
-        div.innerHTML = `<span class="time">${entry.time}</span><span class="level ${entry.level}">${entry.level.toUpperCase()}</span><span>${entry.msg}</span>`
-        container.appendChild(div)
+        const entry = log[i];
+        const div = document.createElement('div');
+        div.className = 'log-entry';
+        div.innerHTML = `<span class="time">${entry.time}</span><span class="level ${entry.level}">${entry.level.toUpperCase()}</span><span>${entry.msg}</span>`;
+        container.appendChild(div);
       }
-      container.scrollTop = container.scrollHeight
-      lastLogCount = log.length
+      container.scrollTop = container.scrollHeight;
+      lastLogCount = log.length;
     }
   } catch(e) {}
-}
-
-// ============================================================
-// 版本→年级联动
-// ============================================================
-const GRADE_DATA = {
-  "湘少版(2024审定)": {
-    "grades": ["一年级上册","一年级下册","二年级上册","二年级下册","三年级上册","三年级下册","四年级上册","四年级下册","五年级上册"],
-    "is_new": true, "hint": "新教材"
-  },
-  "湘鲁版(2024审定)": {
-    "grades": ["三年级上册","三年级下册","四年级上册","四年级下册","五年级上册","六年级上册"],
-    "is_new": true, "hint": "新教材"
-  },
-  "人教版(PEP)(2024审定)": {
-    "grades": ["三年级上册","三年级下册","四年级上册","四年级下册","五年级上册","五年级下册","六年级上册","六年级下册"],
-    "is_new": true, "hint": "新教材"
-  },
-  "教科版(2024审定)": {
-    "grades": ["一年级上册","一年级下册","二年级上册","二年级下册","三年级上册","三年级下册","四年级上册"],
-    "is_new": true, "hint": "新教材"
-  },
-  "教科版": {
-    "grades": ["一年级上册","一年级下册","二年级上册","二年级下册","三年级上册","三年级下册","四年级上册","四年级下册","五年级上册","五年级下册","六年级上册","六年级下册"],
-    "is_new": false, "hint": "老教材"
-  }
-}
-
-function onVersionChange() {
-  const version = $('versionSelect').value
-  const data = GRADE_DATA[version]
-  if (!data) return
-
-  const sel = $('gradeSelect')
-  sel.innerHTML = ''
-  data.grades.forEach(g => {
-    const opt = document.createElement('option')
-    opt.value = g
-    opt.textContent = g
-    sel.appendChild(opt)
-  })
-
-  // 提示新/老教材
-  $('gradeHint').textContent = ' — ' + data.hint
-}
-
-// ============================================================
-// 四步检查
-// ============================================================
-async function runCheck(num) {
-  const names = {0:'全检', 1:'题干', 2:'内容', 3:'图片', 4:'作答'}
-  const name = names[num] || '?'
-  addLog('info', `🔍 开始执行: 第${num === 0 ? '全检' : num}项 ${name}`)
-
-  const url = num === 0 ? '/api/check/full' : '/api/check/step'
-  const method = 'POST'
-  const body = num === 0 ? undefined : JSON.stringify({check: num})
-
-  try {
-    const res = await fetch(url, {method, headers:{'Content-Type':'application/json'}, body})
-    const data = await res.json()
-    showCheckResults(data, num)
-  } catch(e) {
-    addLog('error', `检查失败: ${e}`)
-  }
-}
-
-// ============================================================
-// 题目巡检 (逐题模式)
-// ============================================================
-let inspectTimer = null
-
-async function startInspect() {
-  const res = await fetch('/api/inspect/run', {method:'POST'})
-  const data = await res.json()
-  if (data.error) { alert(data.error); return }
-  addLog('info', '🔍 巡检启动')
-  $('inspectStatus').textContent = '运行中...'
-  $('inspectStatus').style.color = '#4a6cf7'
-  $('inspectProgress').style.display = 'block'
-  inspectTimer = setInterval(pollInspectProgress, 2000)
-}
-
-async function stopInspect() {
-  if (inspectTimer) clearInterval(inspectTimer)
-  $('inspectStatus').textContent = '已停止'
-  $('inspectStatus').style.color = '#888'
-  addLog('warning', '⏹ 巡检已停止')
-}
-
-// 听力专项巡检 (匹配CLI工作流)
-async function startListeningInspect() {
-  const version = document.getElementById('inspectVersion').value
-  const unit = parseInt(document.getElementById('inspectUnit').value)
-  const stage = document.getElementById('inspectStage').value
-  const sel = document.getElementById('reviewDocx')
-  const docx = sel ? sel.value : ''
-
-  addLog('info', `🚀 听力专项巡检: ${version} Unit${unit} ${stage}`)
-  $('inspectStatus').textContent = '运行中...'
-  $('inspectStatus').style.color = '#4a6cf7'
-  $('inspectProgress').style.display = 'block'
-
-  try {
-    const res = await fetch('/api/inspect/listening-run', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({version, unit, stage, docx})
-    })
-    const data = await res.json()
-    if (data.error) { alert(data.error); return }
-    addLog('info', `任务已启动: ${data.status}`)
-    inspectTimer = setInterval(pollInspectProgress, 2000)
-  } catch(e) { alert('启动失败: ' + e) }
-}
-
-async function pollInspectProgress() {
-  try {
-    const res = await fetch('/api/status')
-    const d = await res.json()
-    const t = d.task_status
-    // 更新进度
-    if (t.progress && t.progress.length > 0) {
-      const last = t.progress[t.progress.length - 1]
-      $('inspectBar').style.width = (last.step / last.total * 100).toFixed(0) + '%'
-      $('inspectCount').textContent = `Q${last.step}/${last.total}: ${last.msg}`
-    }
-    // 更新结果列表
-    const div = $('inspectResults')
-    const logs = t.log.filter(l => l.msg.startsWith('Q'))
-    if (logs.length > 0) {
-      div.innerHTML = ''
-      logs.forEach(l => {
-        const isSuccess = l.level === 'success'
-        const icon = isSuccess ? '✅' : '⏳'
-        div.innerHTML += `<div>${icon} ${l.msg}</div>`
-      })
-    }
-    if (!t.running) {
-      clearInterval(inspectTimer)
-      $('inspectStatus').textContent = '✅ 完成'
-      $('inspectStatus').style.color = '#22c55e'
-    }
-  } catch(e) {}
-}
-
-function showCheckResults(data, num) {
-  const div = $('checkResults')
-  if (num === 0) {
-    // 全检模式
-    const checks = data.checks || {}
-    let html = '<div style=\"margin-top:8px\">'
-    for (const [key, c] of Object.entries(checks)) {
-      const icon = c.passed ? '✅' : '❌'
-      html += `<div style=\"margin:4px 0;padding:4px 8px;background:#f8fafc;border-radius:4px\">
-        ${icon} <b>${c.name}</b>: ${c.passed ? '通过' : c.error || '失败'}
-        ${c.similarity ? '(相似度:'+(c.similarity*100).toFixed(0)+'%)' : ''}
-        ${c.actual ? '<br><span style=\"color:#666\">实际: '+c.actual+'</span>' : ''}
-        ${c.details?.length ? '<br><span style=\"color:#888\">'+c.details.join('<br>')+'</span>' : ''}
-      </div>`
-    }
-    html += `<div style=\"margin-top:6px;font-weight:500\">总结果: ${data.all_passed ? '✅ 全部通过' : '❌ 存在问题'}</div>`
-    html += '</div>'
-    div.innerHTML = html
-    addLog(data.all_passed ? 'success' : 'warning', `全检完成: ${data.all_passed ? '全部通过' : '存在问题'}`)
-  } else {
-    // 单项检查
-    const icon = data.passed ? '✅' : '❌'
-    const prev = div.innerHTML
-    div.innerHTML = prev + `<div style=\"margin:4px 0\">
-      ${icon} <b>第${num}项 ${data.name}</b>: ${data.passed ? '通过' : data.error || '失败'}
-      ${data.actual ? '<br><span style=\"color:#666\">文字: '+data.actual+'</span>' : ''}
-      ${data.details?.length ? '<br><span style=\"color:#888\">'+data.details.join('<br>')+'</span>' : ''}
-    </div>`
-    addLog(data.passed ? 'success' : 'warning', `第${num}项 ${data.name}: ${data.passed ? '通过' : data.error}`)
-  }
-}
-
-// ============================================================
-// 一键全流程运行
-// ============================================================
-async function startFullRun() {
-  const version = $('versionSelect').value
-  const grade = $('gradeSelect').value
-  const modules = []
-  document.querySelectorAll('#moduleGroups input[type="checkbox"]:checked').forEach(cb => {
-    modules.push(cb.value)
-  })
-  if (!version) {
-    alert('请选择版本')
-    return
-  }
-  if (modules.length === 0) {
-    alert('请至少选择一个模块')
-    return
-  }
-
-  $('runBtn').disabled = true
-  $('runBtn').textContent = '⏳ 运行中...'
-
-  addLog('info', `🚀 一键全流程启动: 版本=${version} 年级=${grade} 模块=${modules.length}个`)
-
-  const res = await fetch('/api/run-full', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ version, grade, modules }),
-  })
-  const data = await res.json()
-  if (data.error) { alert(data.error); $('runBtn').disabled = false; return }
-  addLog('info', '任务已启动，请等待...')
-}
-
-// ============================================================
-// 模块列表
-// ============================================================
-async function loadModules() {
-  try {
-    const res = await fetch('/api/modules')
-    const data = await res.json()
-    const container = $('moduleGroups')
-    container.innerHTML = ''
-    for (const [groupName, modules] of Object.entries(data)) {
-      const group = document.createElement('div')
-      group.className = 'module-group'
-      group.innerHTML = `<div class="module-group-title">${groupName}</div><div class="module-grid">`
-      for (const [name, coord] of Object.entries(modules)) {
-        group.querySelector('.module-grid').innerHTML += `
-          <div class="module-item">
-            <input type="checkbox" id="m_${name}" value="${name}">
-            <label for="m_${name}">${name}</label>
-          </div>`
-      }
-      container.appendChild(group)
-    }
-    $('runBtn').disabled = false
-  } catch(e) {
-    console.error('load modules error:', e)
-  }
-}
-
-function selectAll(checked) {
-  document.querySelectorAll('#moduleGroups input[type="checkbox"]').forEach(cb => cb.checked = checked)
-}
-
-// ============================================================
-// 工具函数
-// ============================================================
-async function waitForTaskDone(taskName) {
-  while (true) {
-    await sleep(1000)
-    const res = await fetch('/api/status')
-    const data = await res.json()
-    const ts = data.task_status
-    if (!ts.running && ts.current_task === taskName) return
-    if (!ts.running) return
-  }
 }
 
 function addLog(level, msg) {
-  const container = $('logContainer')
-  const now = new Date().toTimeString().slice(0,8)
-  const div = document.createElement('div')
-  div.className = 'log-entry'
-  div.innerHTML = `<span class="time">${now}</span><span class="level ${level}">${level.toUpperCase()}</span><span>${msg}</span>`
-  container.appendChild(div)
-  container.scrollTop = container.scrollHeight
+  const container = $('logContainer');
+  const now = new Date().toTimeString().slice(0,8);
+  const div = document.createElement('div');
+  div.className = 'log-entry';
+  div.innerHTML = `<span class="time">${now}</span><span class="level ${level}">${level.toUpperCase()}</span><span>${msg}</span>`;
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
 }
 
 // ============================================================
-// 脚本上传 + 审查智能体
+// 操作
 // ============================================================
+async function startListeningInspect() {
+  const version = $('inspectVersion').value;
+  const unit = $('inspectUnit').value;
+  const stage = $('inspectStage').value;
+  const sel = $('reviewDocx');
+  const docx = sel ? sel.value : '';
 
-// 文件拖拽上传
-const dropZone = document.getElementById('dropZone')
-if (dropZone) {
-  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.style.borderColor = '#4a6cf7' })
-  dropZone.addEventListener('dragleave', e => { dropZone.style.borderColor = '#d1d5db' })
-  dropZone.addEventListener('drop', e => {
-    e.preventDefault(); dropZone.style.borderColor = '#d1d5db'
-    if (e.dataTransfer.files.length) uploadFile(null, e.dataTransfer.files[0])
-  })
-}
+  $('runBtn').disabled = true;
+  addLog('info', `🚀 启动: ${version} U${unit} ${stage}`);
 
-async function uploadFile(input, file) {
-  file = file || (input && input.files[0])
-  if (!file) return
-  if (!file.name.endsWith('.docx')) { setUploadStatus('仅支持 .docx 文件', 'red'); return }
-  setUploadStatus(`正在上传 ${file.name}...`, '#888')
-  const form = new FormData()
-  form.append('file', file)
   try {
-    const res = await fetch('/api/upload-docx', { method: 'POST', body: form })
-    const data = await res.json()
-    if (data.error) { setUploadStatus(`❌ ${data.error}`, 'red'); return }
-    setUploadStatus(`✅ ${data.message}`, 'green')
-    loadUploadedFiles()
-    loadKBStatus()
-  } catch(e) { setUploadStatus(`❌ 上传失败: ${e}`, 'red') }
+    const res = await fetch('/api/inspect/listening-run', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({version, unit: parseInt(unit), stage, docx})
+    });
+    const data = await res.json();
+    if (data.error) { alert(data.error); $('runBtn').disabled = false; return }
+    addLog('success', `任务已启动: ${data.task || data.status}`);
+    INSPECT_RUNNING = true;
+    // 重置流程步骤显示
+    WORKFLOW_STEPS.forEach((s, i) => updateStep(i, 'pending', ''));
+  } catch(e) { alert('启动失败: ' + e); $('runBtn').disabled = false; }
 }
 
-function setUploadStatus(msg, color) {
-  const el = document.getElementById('uploadStatus')
-  if (el) { el.textContent = msg; el.style.color = color || '#888' }
+async function stopInspect() {
+  try {
+    await fetch('/api/inspect/stop', {method: 'POST'});
+    addLog('warning', '⏹ 停止信号已发送');
+  } catch(e) {}
 }
+
+async function humanLabel(qid, label) {
+  const noteEl = $('note_' + qid);
+  const note = noteEl ? noteEl.value : '';
+  try {
+    const res = await fetch('/api/inspect/human-label', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({qid, label, note})
+    });
+    const data = await res.json();
+    if (data.success) {
+      addLog(label === '通过' ? 'success' : 'warning', `Q${qid} 标注: ${label}`);
+      // 触发一次轮询以更新UI
+      const fres = await fetch('/api/inspect/state');
+      const fd = await fres.json();
+      updateQuestions(fd);
+      updateAgentStatus();
+    }
+  } catch(e) { addLog('error', '标注失败: ' + e) }
+}
+
+async function runReview() {
+  const sel = $('reviewDocx');
+  const docx = sel ? sel.value : '';
+  const unit = parseInt($('reviewUnit')?.value || '0');
+  $('reviewResult').innerHTML = '⏳ 审查中, 每张约5-30秒...';
+  try {
+    const res = await fetch('/api/review/run', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({docx, unit, stage: '基础巩固'})
+    });
+    const data = await res.json();
+    if (data.error) { $('reviewResult').innerHTML = `<span style="color:red">❌ ${data.error}</span>`; return; }
+    $('reviewResult').innerHTML = `✅ 完成: ${data.total}题, 通过${data.passed} (${data.avg_score})`;
+  } catch(e) { $('reviewResult').innerHTML = `<span style="color:red">❌ ${e}</span>`; }
+}
+
+// ============================================================
+// 上传 + 知识库
+// ============================================================
+async function uploadFile(file) {
+  const form = new FormData();
+  form.append('file', file);
+  $('uploadStatus').textContent = `上传中: ${file.name}`;
+  $('uploadStatus').style.color = '#888';
+  try {
+    const res = await fetch('/api/upload-docx', {method:'POST', body: form});
+    const data = await res.json();
+    if (data.error) { $('uploadStatus').textContent = `❌ ${data.error}`; $('uploadStatus').style.color = 'red'; return; }
+    $('uploadStatus').innerHTML = `✅ ${data.message}`;
+    $('uploadStatus').style.color = 'green';
+    loadUploadedFiles();
+    loadKBStatus();
+    loadAgentStatus();
+  } catch(e) { $('uploadStatus').textContent = `❌ ${e}`; }
+}
+
+$('fileInput').addEventListener('change', e => uploadFile(e.target.files[0]));
+
+const dropZone = $('dropZone');
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', e => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault(); dropZone.classList.remove('dragover');
+  if (e.dataTransfer.files.length) uploadFile(e.dataTransfer.files[0]);
+});
 
 async function loadUploadedFiles() {
-  const el = document.getElementById('uploadedFiles')
-  if (!el) return
+  const res = await fetch('/api/upload/list');
+  const data = await res.json();
+  const sel = $('reviewDocx');
+  if (data.files && data.files.length) {
+    $('uploadedFiles').innerHTML = data.files.map(f => `<div>📄 ${f.name}</div>`).join('');
+    sel.innerHTML = data.files.map(f => `<option value="${f.name}">${f.name}</option>`).join('');
+  } else {
+    $('uploadedFiles').innerHTML = '<div style="color:#888">暂无文件</div>';
+  }
+}
+
+async function loadKBStatus() {
   try {
-    const res = await fetch('/api/upload/list')
-    const data = await res.json()
-    if (data.files && data.files.length) {
-      el.innerHTML = data.files.map(f => `<div style="padding:2px 0">📄 ${f.name} (${(f.size/1024).toFixed(0)}KB)</div>`).join('')
-      // 更新审查文件选择器
-      const sel = document.getElementById('reviewDocx')
-      if (sel) {
-        sel.innerHTML = data.files.map((f, i) => `<option value="${f.name}" ${i===0?'selected':''}>${f.name}</option>`).join('')
-      }
+    const res = await fetch('/api/knowledge/status');
+    const d = await res.json();
+    if (d.total_entries > 0) {
+      $('kbCount').textContent = `${d.total_entries}条`;
+      $('kbStatus').innerHTML = `✅ ${d.total_entries}条<br><span style="color:#888">${d.grades.join(', ')}</span>`;
     } else {
-      el.innerHTML = '<div style="color:#888">暂无上传文件</div>'
+      $('kbStatus').innerHTML = '⚠ 空, 请上传';
     }
   } catch(e) {}
 }
 
-async function loadKBStatus() {
-  const el = document.getElementById('kbStatus')
-  const cnt = document.getElementById('kbCount')
-  if (!el) return
+async function loadAgentStatus() {
   try {
-    const res = await fetch('/api/knowledge/status')
-    const data = await res.json()
-    if (data.total_entries > 0) {
-      const grades = data.grades.join(', ')
-      el.innerHTML = `✅ ${data.total_entries} 条知识点<br><span style="color:#888">覆盖: ${grades}</span>`
-      if (cnt) cnt.textContent = `(${data.total_entries}条)`
-    } else {
-      el.innerHTML = '⚠ 知识库为空，请上传 DOCX 文件'
-    }
-  } catch(e) { el.textContent = '❌ 加载失败' }
-}
-
-async function runReview() {
-  const sel = document.getElementById('reviewDocx')
-  const docx = sel ? sel.value : ''
-  const unit = parseInt(document.getElementById('reviewUnit')?.value || '0')
-  const stage = document.getElementById('reviewStage')?.value || ''
-  const btn = event?.target || document.querySelector('button[onclick="runReview()"]')
-
-  document.getElementById('reviewSummary').style.display = 'none'
-  document.getElementById('reviewResults').innerHTML = '<div style="color:#4a6cf7">⏳ 审查中, 每张截图约需 5-30s, 请耐心等待...</div>'
-  if (btn) btn.disabled = true
-
-  try {
-    const res = await fetch('/api/review/run', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({docx, unit, stage})
-    })
-    const data = await res.json()
-    if (data.error) { showReviewError(data.error); return }
-    showReviewResults(data)
-  } catch(e) { showReviewError(String(e)) }
-  finally { if (btn) btn.disabled = false }
-}
-
-function showReviewError(msg) {
-  document.getElementById('reviewResults').innerHTML = `<div style="color:red">❌ ${msg}</div>`
-}
-
-function showReviewResults(data) {
-  const summary = document.getElementById('reviewSummary')
-  const results = document.getElementById('reviewResults')
-
-  summary.style.display = 'block'
-  const passRate = data.total > 0 ? (data.passed/data.total*100).toFixed(0) : 0
-  summary.innerHTML = `
-    <div style="font-weight:500">审查完成: ${data.total} 题, 通过 ${data.passed} (${passRate}%)</div>
-    <div style="color:#888;font-size:12px">综合得分 ${data.avg_score} | 脚本: ${data.docx}</div>
-  `
-
-  if (!data.results || !data.results.length) {
-    results.innerHTML = '<div style="color:#888">无结果</div>'
-    return
-  }
-
-  let html = '<table style="width:100%;font-size:12px;border-collapse:collapse">'
-  html += '<tr style="background:#f8fafc"><th>#</th><th>题型</th><th>题干</th><th>内容</th><th>配图</th><th>作答</th><th>得分</th></tr>'
-  data.results.forEach(r => {
-    const ic = p => p ? '✅' : '❌'
-    const color = r.overall_passed ? '#166534' : '#991b1b'
-    html += `<tr style="border-bottom:1px solid #eee">
-      <td style="padding:4px">Q${String(r.idx).padStart(2,'0')}</td>
-      <td style="padding:4px">${(r.type||'').slice(0,8)}</td>
-      <td style="padding:4px;text-align:center">${ic(r.stem.passed)}</td>
-      <td style="padding:4px;text-align:center">${ic(r.content.passed)}</td>
-      <td style="padding:4px;text-align:center">${ic(r.image.passed)}</td>
-      <td style="padding:4px;text-align:center">${ic(r.answer.passed)}</td>
-      <td style="padding:4px;text-align:center;color:${color};font-weight:500">${r.overall_score}</td>
-    </tr>`
-  })
-  html += '</table>'
-  results.innerHTML = html
-}
-
-async function exportReview() {
-  const btn = event?.target
-  if (btn) btn.disabled = true
-  try {
-    const res = await fetch('/api/review/export', { method: 'POST' })
-    const data = await res.json()
-    if (data.content) {
-      const blob = new Blob([data.content], {type: 'text/markdown'})
-      const a = document.createElement('a')
-      a.href = URL.createObjectURL(blob)
-      a.download = 'review_report.md'
-      a.click()
-      addLog('success', '📄 审查报告已导出')
-    } else if (data.error) {
-      alert('导出失败: ' + data.error)
-    }
-  } catch(e) { alert('导出失败: ' + e) }
-  finally { if (btn) btn.disabled = false }
+    const res = await fetch('/api/review/results');
+    // 顺便获取反馈统计
+    // (简化处理, 直接从已记录的标注统计)
+    const state = await fetch('/api/inspect/state').then(r=>r.json());
+    const questions = state.questions || {};
+    const total = Object.keys(questions).length;
+    const labeled = Object.values(questions).filter(q => q.human_label).length;
+    const correct = Object.values(questions).filter(q => q.human_label === '通过' && q.overall_passed).length
+                  + Object.values(questions).filter(q => q.human_label === '不通过' && !q.overall_passed).length;
+    $('fbTotal').textContent = total;
+    $('fbLabeled').textContent = labeled;
+    $('fbAccuracy').textContent = labeled > 0 ? `${(correct/labeled*100).toFixed(0)}%` : '-';
+  } catch(e) {}
 }
 
 // ============================================================
 // 初始化
 // ============================================================
-loadModules()
-onVersionChange()
-pollStatus()
-loadUploadedFiles()
-loadKBStatus()
+renderWorkflow();
+loadUploadedFiles();
+loadKBStatus();
+pollState();  // 持续轮询所有状态
 </script>
 </body>
 </html>

@@ -1093,63 +1093,185 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
     """
     听力专项巡检主循环 (完全复用 inspect_u6.py 的逻辑)
     """
+    def record_step(step, status, detail=""):
+        """记录流程步骤到后端"""
+        try:
+            import requests
+            requests.post("http://127.0.0.1:5000/api/inspect/workflow-step",
+                          json={"step": step, "status": status, "detail": detail},
+                          timeout=2)
+        except Exception:
+            pass  # 即使失败也不影响主流程
+
+    def record_q_result(qid, **kwargs):
+        """记录每题结果到后端"""
+        try:
+            import requests
+            requests.post("http://127.0.0.1:5000/api/inspect/question-result",
+                          json={"qid": qid, **kwargs},
+                          timeout=2)
+        except Exception:
+            pass
+
     try:
+        # 重置巡检状态
+        record_step("初始化", "running", f"{version_label} U{unit} {stage}")
+        try:
+            import requests
+            requests.post("http://127.0.0.1:5000/api/inspect/reset", timeout=2)
+        except Exception:
+            pass
+
         set_running("listening_inspect")
         config = load_config()
         adb = get_adb()
 
         log_msg(f"🚀 听力专项巡检: {version_label} Unit{unit} {stage}")
+        record_step("1.启动APP", "running", "")
+
+        # 0. 强制返回首页 + 关闭教程页(防止上次停留在教程页)
+        log_msg("强制回到首页")
+        record_step("0.回到首页", "running", "")
+        for _ in range(3):
+            adb.press_back()
+            time.sleep(0.5)
+        time.sleep(1)
+        record_step("0.回到首页", "done", "")
 
         # 1. 启动APP + 导航到首页
         log_msg("启动APP")
         adb.launch_app(config.app.package)
         time.sleep(4)
+        record_step("1.启动APP", "done", "")
 
-        # 2. 关闭广告 (不用固定坐标, 用UI识别)
+        # 1.5 检测并关闭教程页(如果有的话)
+        log_msg("检查教程页")
+        record_step("1.5关闭教程", "running", "")
+        for _ in range(8):
+            elements = adb.dump_ui()
+            # 教程页特征: 出现"眺望远眺" / "下一关" / "知道了" / "开始体验"
+            tutorial = False
+            for e in elements:
+                t = (e.text or '').strip()
+                if t in ['下一关', '知道了', '开始体验', '我知道了', 'Next', '跳过']:
+                    adb.tap(e.center[0], e.center[1])
+                    log_msg(f"  关教程: '{t}' at {e.center}")
+                    tutorial = True
+                    time.sleep(1.5)
+                    break
+            if not tutorial:
+                # 兜底: 点击屏幕中部右侧(教程"下一步"按钮区)
+                # 但要先确认不是已经进入APP首页
+                has_main = any('英语' in (e.text or '') for e in elements)
+                if has_main:
+                    break  # 已在APP首页
+                adb.tap(900, 2200)  # 教程页"下一步"通常在右下
+                time.sleep(1.5)
+        record_step("1.5关闭教程", "done", "")
+
+        # 2. 关闭广告 (用UI识别, 找到就停)
         log_msg("关闭广告")
+        record_step("2.关闭广告", "running", "")
+        ad_found = False
         for _ in range(3):
+            if ad_found:
+                break  # 已经关掉了, 不再跑后续兜底
             elements = adb.dump_ui(retries=1)
             found_close = False
             for e in elements:
                 t = (e.text or '').strip()
-                # 各种关闭按钮
-                if t in ['关闭', '关闭广告', '×', 'X', 'Close', '跳过', '忽略']:
+                if t in ['关闭', '关闭广告', '×', 'X', 'Close', '跳过', '忽略', '我知道了', '取消']:
                     adb.tap(e.center[0], e.center[1])
                     log_msg(f"  关闭广告: '{t}' at {e.center}")
                     found_close = True
+                    ad_found = True
+                    time.sleep(1)
                     break
-                # resource-id 包含 close/cancel
                 if 'close' in e.resource_id.lower() or 'cancel' in e.resource_id.lower():
                     adb.tap(e.center[0], e.center[1])
                     found_close = True
+                    ad_found = True
+                    time.sleep(1)
                     break
             if not found_close:
-                # 首次兜底: 点屏幕中部(常见广告关闭位置)
-                adb.tap(540, 1800)
+                # 只在屏幕顶部边缘点击, 绝不到底部(会触发HOME)
+                adb.tap(540, 40)
                 time.sleep(0.5)
-                adb.tap(540, 800)
+                adb.tap(540, 80)
             time.sleep(1)
+        record_step("2.关闭广告", "done", "")
 
         # 3. 确保在英语tab + 检查是否跑到了"消息"页
+        record_step("3.英语Tab", "running", "")
         adb.tap(108, 2233)
-        time.sleep(1)
-        # 检查当前页面 - 如果看到"消息"标题, 按返回
+        time.sleep(1.5)
         elements = adb.dump_ui()
         if any('消息' in (e.text or '') and e.center[1] < 300 for e in elements):
             log_msg("⚠ 进入了消息页, 按返回", "warning")
             adb.press_back()
             time.sleep(2)
-            adb.tap(108, 2233)  # 重新点英语tab
-            time.sleep(1)
+            adb.tap(108, 2233)
+            time.sleep(1.5)
+        record_step("3.英语Tab", "done", "")
+
+        # 3.5 检查当前APP显示的版本/年级是否与用户选择的一致
+        record_step("3.5版本检查", "running", f"用户选: {version_label}")
+        log_msg("检查版本是否匹配")
+        time.sleep(1)
+        elements = adb.dump_ui()
+        page_text = ' '.join([(e.text or '') for e in elements])
+        # 提取APP显示的年级文本 (如"五年级上册")
+        current_grade = ""
+        for grade_text in ['一年级上册','一年级下册','二年级上册','二年级下册',
+                           '三年级上册','三年级下册','四年级上册','四年级下册',
+                           '五年级上册','五年级下册','六年级上册','六年级下册']:
+            if grade_text in page_text:
+                current_grade = grade_text
+                break
+        # 提取用户期望的年级 (从version_label如"新湘鲁六上"中提取)
+        target_grade_map = {'五上':'五年级上册','五下':'五年级下册',
+                            '六上':'六年级上册','六下':'六年级下册'}
+        target_grade = ""
+        for k, v in target_grade_map.items():
+            if k in version_label:
+                target_grade = v
+                break
+
+        log_msg(f"  APP当前: {current_grade or '未知'} | 用户期望: {target_grade or '未知'}")
+        if current_grade and target_grade and current_grade != target_grade:
+            log_msg(f"  ⚠ 版本不匹配! 需要切换到 {target_grade}", "warning")
+            record_step("3.5版本检查", "running", f"切换 {current_grade} → {target_grade}")
+            for e in elements:
+                if current_grade in (e.text or ''):
+                    adb.tap(e.center[0], e.center[1])
+                    log_msg(f"  点版本标签 at {e.center}")
+                    break
+            time.sleep(2)
+            elements2 = adb.dump_ui()
+            for e in elements2:
+                t = (e.text or '').strip()
+                if target_grade in t:
+                    adb.tap(e.center[0], e.center[1])
+                    log_msg(f"  选择 {target_grade} at {e.center}")
+                    break
+            time.sleep(2)
+            for e in adb.dump_ui():
+                t = (e.text or '').strip()
+                if t in ['确认', '确定', '完成', 'OK', '保存']:
+                    adb.tap(e.center[0], e.center[1])
+                    log_msg(f"  确认选择 at {e.center}")
+                    break
+            time.sleep(2)
+        record_step("3.5版本检查", "done", current_grade or "已对齐")
 
         # 4. 导航到专项突破
+        record_step("4.专项突破", "running", "")
         log_msg("导航到专项突破")
         found = False
         for attempt in range(3):
             elements = adb.dump_ui()
             for e in elements:
                 if e.text and '专项突破' in e.text:
-                    # 只在有效区域点击 (排除顶部导航栏和底部Tab)
                     if 400 < e.center[1] < 2000:
                         adb.tap(e.center[0], e.center[1])
                         log_msg(f"  点'专项突破' at {e.center}")
@@ -1157,15 +1279,15 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
                         break
             if found:
                 break
-            # 没找到就向下滚动一点
             adb.swipe(540, 1500, 540, 1000, 300)
             time.sleep(1)
         if not found:
-            log_msg("  兜底: 点(414, 1700)", "warning")
             adb.tap(414, 1700)
         time.sleep(3)
+        record_step("4.专项突破", "done", "")
 
         # 5. 反复滚动找"听力专项"
+        record_step("5.听力专项", "running", "")
         log_msg("寻找听力专项")
         found_listening = False
         for scroll_i in range(10):
@@ -1173,7 +1295,6 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
             for e in elements:
                 if e.text and '听力专项' in (e.text or ''):
                     cx, cy = e.center
-                    # 验证点击区域在屏内
                     if 200 < cy < 2200 and cx > 50 and cx < 1030:
                         log_msg(f"  发现'听力专项' at {e.center}")
                         adb.tap(cx, cy)
@@ -1181,10 +1302,10 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
                         break
             if found_listening:
                 break
-            # 向下滚动
             adb.swipe(540, 1600, 540, 600, 500)
             time.sleep(1)
         time.sleep(3)
+        record_step("5.听力专项", "done", "")
 
         # 6. 选择对应版本年级 (五上/六上等)
         log_msg(f"选择版本: {version_label}")
@@ -1275,9 +1396,9 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
 
         # 10. 逐题巡检循环
         log_msg(f"逐题巡检开始: 脚本={docx_file or '无'}")
+        record_step("6.逐题巡检", "running", "")
         last_q = 0
         questions_reviewed = []
-        # 记录是否遇到结果页, 增加"下一题"按钮点击
         
         # 加载脚本数据 (用于LLM审查)
         from src.review_agent import ReviewAgent, ReviewConfig
@@ -1358,13 +1479,42 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
                             "image": "✅" if r.image_check.passed else "❌",
                             "answer": "✅" if r.answer_check.passed else "❌",
                             "score": r.overall_score,
+                            "stem_reason": r.stem_check.details[0] if r.stem_check.details else "",
+                            "content_reason": r.content_check.details[0] if r.content_check.details else "",
+                            "image_reason": r.image_check.details[0] if r.image_check.details else "",
+                            "answer_reason": r.answer_check.details[0] if r.answer_check.details else "",
                         }
                         log_msg(f"  审查: 题干{review_result['stem']} 内容{review_result['content']} 配图{review_result['image']} 作答{review_result['answer']} 得分{review_result['score']:.2f}")
-                        
-                        # 自动加入反馈
+
+                        # ====== 发送每题结果到后端 ======
+                        qid = f"{version_label}-U{unit}-Q{cur:02d}"
+                        record_q_result(
+                            qid,
+                            idx=cur,
+                            total=total_q,
+                            question_type=script_q.type_2,
+                            stem=script_q.stem[:40] + "..." if len(script_q.stem) > 40 else script_q.stem,
+                            recording=script_q.recording,
+                            script_answer=script_q.answer,
+                            ai_stem=r.stem_check.passed,
+                            ai_content=r.content_check.passed,
+                            ai_image=r.image_check.passed,
+                            ai_answer=r.answer_check.passed,
+                            overall_passed=r.overall_passed,
+                            overall_score=round(r.overall_score, 2),
+                            stem_reason=r.stem_check.details[0][:100] if r.stem_check.details else "",
+                            content_reason=r.content_check.details[0][:100] if r.content_check.details else "",
+                            image_reason=r.image_check.details[0][:100] if r.image_check.details else "",
+                            answer_reason=r.answer_check.details[0][:100] if r.answer_check.details else "",
+                            ai_reason=r.content_check.details[0][:100] if r.content_check.details else "",
+                            screenshot=shot_name,
+                            knowledge_check=r.knowledge_check,
+                        )
+
+                        # 加入反馈 (临时先用AI判断)
                         from src.feedback_loop import FeedbackSample
                         agent.feedback.add(FeedbackSample(
-                            question_id=f"{version_label}-U{unit}-Q{cur:02d}",
+                            question_id=qid,
                             check_dimension="all",
                             human_judgment="通过" if r.overall_passed else "不通过",
                             ai_judgment="通过" if r.overall_passed else "不通过",
@@ -1413,12 +1563,15 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
             # 完成
             if cur >= total_q:
                 log_msg(f"✅ 全部 {total_q} 题完成!", "success")
+                record_step("6.逐题巡检", "done", f"完成 {len(questions_reviewed)}/{total_q}")
+                record_step("7.生成报告", "running", "")
                 break
 
         # 保存审查结果
         if agent and questions_reviewed:
             agent.export_report(str(PROJECT_ROOT / "outputs" / f"review_{docx_file.replace('.docx','')}.md"))
             agent.export_json(str(PROJECT_ROOT / "outputs" / f"review_{docx_file.replace('.docx','')}.json"))
+            record_step("7.生成报告", "done", f"已保存到 outputs/")
 
         set_done()
         log_msg(f"✅ 听力专项巡检完成! {len(questions_reviewed)}题", "success")
@@ -1438,6 +1591,144 @@ def api_inspect_run():
     t = threading.Thread(target=run_inspect_loop, daemon=True)
     t.start()
     return jsonify({"status": "started", "task": "inspect_loop"})
+
+
+@app.route("/api/inspect/stop", methods=["POST"])
+def api_inspect_stop():
+    """停止正在运行的任务"""
+    if not task_status["running"]:
+        return jsonify({"status": "idle", "message": "没有正在运行的任务"})
+    task_status["running"] = False
+    log_msg("⏹ 任务已被手动停止", "warning")
+    # 不立即set_done(), 等线程自己结束
+    return jsonify({"status": "stopping", "message": "停止信号已发送"})
+
+
+# ============================================================
+# 🔵 审查反馈 路由区 — 存储AI判断+人工标注,让审查智能体学习
+# ============================================================
+
+_inspection_state = {
+    "current_question_idx": 0,
+    "questions": {},           # {qid: {ai_result, human_label, timestamp, ...}}
+    "workflow_steps": [],     # 当前运行的步骤
+    "docx": "",
+}
+
+def _save_inspection_state():
+    """保存巡检状态到文件, 审查智能体下次学习"""
+    import json
+    p = PROJECT_ROOT / "data" / "inspection_state.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(
+        json.dumps(_inspection_state, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+@app.route("/api/inspect/state", methods=["GET"])
+def api_inspect_state():
+    """获取当前巡检状态 (流式)"""
+    return jsonify(_inspection_state)
+
+
+@app.route("/api/inspect/question-result", methods=["POST"])
+def api_inspect_question_result():
+    """接收AI对一道题的判断结果"""
+    data = request.get_json() or {}
+    qid = data.get("qid", "")
+    if not qid:
+        return jsonify({"error": "缺少题号"}), 400
+
+    _inspection_state["questions"][qid] = {
+        **data,
+        "human_label": None,  # 等待人工标注
+        "human_note": "",
+        "timestamp": datetime.now().isoformat(),
+    }
+    _inspection_state["current_question_idx"] = data.get("idx", 0)
+    _save_inspection_state()
+    return jsonify({"success": True, "qid": qid})
+
+
+@app.route("/api/inspect/human-label", methods=["POST"])
+def api_inspect_human_label():
+    """人工标注某道题的对错 + 加入反馈循环"""
+    data = request.get_json() or {}
+    qid = data.get("qid", "")
+    label = data.get("label", "")  # "通过" / "不通过"
+    note = data.get("note", "")
+
+    if not qid or label not in ["通过", "不通过"]:
+        return jsonify({"error": "参数错误"}), 400
+
+    # 更新巡检状态
+    if qid in _inspection_state["questions"]:
+        _inspection_state["questions"][qid]["human_label"] = label
+        _inspection_state["questions"][qid]["human_note"] = note
+    _save_inspection_state()
+
+    # 加入反馈循环 (审查智能体学习)
+    q_data = _inspection_state["questions"][qid]
+    ai_judgment = "通过" if q_data.get("overall_passed") else "不通过"
+    try:
+        from src.feedback_loop import FeedbackSample
+        store = FeedbackStore()
+        store.add(FeedbackSample(
+            question_id=qid,
+            check_dimension=q_data.get("check_dimension", "all"),
+            human_judgment=label,
+            ai_judgment=ai_judgment,
+            ai_reason=str(q_data.get("ai_reason", ""))[:200],
+            human_note=note,
+            question_type=q_data.get("question_type", ""),
+            screenshot=q_data.get("screenshot", ""),
+        ))
+        return jsonify({
+            "success": True,
+            "qid": qid,
+            "feedback_stored": True,
+            "stats": store.get_stats(),
+        })
+    except Exception as e:
+        return jsonify({"success": True, "qid": qid, "feedback_error": str(e)})
+
+
+@app.route("/api/inspect/workflow-step", methods=["POST"])
+def api_inspect_workflow_step():
+    """记录流程步骤状态"""
+    data = request.get_json() or {}
+    step_name = data.get("step", "")
+    status = data.get("status", "")  # "running" / "done" / "error"
+    detail = data.get("detail", "")
+
+    # 替换或添加步骤
+    found = False
+    for s in _inspection_state["workflow_steps"]:
+        if s["step"] == step_name:
+            s["status"] = status
+            s["detail"] = detail
+            s["updated"] = datetime.now().isoformat()
+            found = True
+            break
+    if not found:
+        _inspection_state["workflow_steps"].append({
+            "step": step_name,
+            "status": status,
+            "detail": detail,
+            "updated": datetime.now().isoformat(),
+        })
+    _save_inspection_state()
+    return jsonify({"success": True})
+
+
+@app.route("/api/inspect/reset", methods=["POST"])
+def api_inspect_reset():
+    """清空当前巡检状态"""
+    _inspection_state["questions"] = {}
+    _inspection_state["workflow_steps"] = []
+    _inspection_state["current_question_idx"] = 0
+    _save_inspection_state()
+    return jsonify({"success": True})
 
 
 @app.route("/api/modules")

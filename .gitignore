@@ -22,6 +22,9 @@ outputs/flow_log_*.json
 outputs/*.png
 !outputs/.gitkeep
 
+# 敏感文件
+llm_config.json
+
 # 系统文件
 .DS_Store
 Thumbs.db
