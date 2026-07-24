@@ -1,0 +1,61 @@
+{
+  "current_question_idx": 0,
+  "questions": {},
+  "workflow_steps": [
+    {
+      "step": "1.启动APP",
+      "status": "done",
+      "detail": "",
+      "updated": "2026-07-24T17:08:11.429866"
+    },
+    {
+      "step": "0.回到首页",
+      "status": "done",
+      "detail": "",
+      "updated": "2026-07-24T17:08:03.831879"
+    },
+    {
+      "step": "1.5关闭教程",
+      "status": "done",
+      "detail": "",
+      "updated": "2026-07-24T17:08:19.843312"
+    },
+    {
+      "step": "2.关闭广告",
+      "status": "done",
+      "detail": "",
+      "updated": "2026-07-24T17:08:25.941234"
+    },
+    {
+      "step": "3.英语Tab",
+      "status": "done",
+      "detail": "",
+      "updated": "2026-07-24T17:08:31.566094"
+    },
+    {
+      "step": "3.5版本检查",
+      "status": "done",
+      "detail": "五年级上册",
+      "updated": "2026-07-24T17:08:35.841572"
+    },
+    {
+      "step": "4.专项突破",
+      "status": "done",
+      "detail": "",
+      "updated": "2026-07-24T17:08:42.459690"
+    },
+    {
+      "step": "5.听力专项",
+      "status": "done",
+      "detail": "",
+      "updated": "2026-07-24T17:08:49.479965"
+    },
+    {
+      "step": "6.逐题巡检",
+      "status": "running",
+      "detail": "",
+      "updated": "2026-07-24T17:09:42.158773"
+    }
+  ],
+  "docx": ""
+}
