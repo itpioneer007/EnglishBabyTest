@@ -250,63 +250,153 @@ class ReviewAgent:
         return r
 
     # ============================================================
-    # 四维检查实现
+    # 增强: 统一的教材知识专家角色
+    # ============================================================
+
+    def _build_role_prompt(self, q: YingYuBaoQuestion) -> str:
+        """
+        构建统一的"小学英语教材知识专家"角色定义
+        
+        每次审查前加载, 让AI知道:
+        - 它在审查什么版本/年级/单元的题目
+        - 该单元教了什么词汇、句型、知识点
+        - 它需要以"带备课的老师"视角来判断
+        """
+        # 1. 提取当前单元的知识
+        grade_label = self._name_to_grade(q.keywords) or "五上"
+        unit_vocab = self.kb.get_unit_vocab("湘鲁版", grade_label, q.unit)
+        unit_patterns = self.kb.get_unit_patterns("湘鲁版", grade_label, q.unit)
+
+        # 2. 格式化知识摘要 (取前20个词和5个句型)
+        vocab_str = ", ".join(sorted(set(unit_vocab))[:25]) if unit_vocab else "(未收录)"
+        patterns_str = "; ".join(unit_patterns[:5]) if unit_patterns else "(未收录)"
+
+        # 3. 从关键词提取版本和年级完整信息
+        kw_str = "; ".join(q.keywords[:3]) if q.keywords else ""
+
+        role = (
+            f"【你的身份】你是一位小学英语教材知识专家和题目质检专家。\n"
+            f"你负责审查本套教材中的题目质量, 确保题目与教材内容一致、"
+            f"知识点在合理范围内、图片正确匹配、作答方式可行。\n"
+            f"\n"
+            f"【教材上下文】\n"
+            f"- 教材版本: 湘鲁版 | 年级: {grade_label} | 单元: Unit {q.unit}\n"
+            f"- 关键词: {kw_str}\n"
+            f"- 本单元核心词汇({len(unit_vocab)}个): {vocab_str}\n"
+            f"- 本单元核心句型({len(unit_patterns)}个): {patterns_str}\n"
+            f"\n"
+            f"【审查原则】\n"
+            f"1. 以脚本文件为第一标准(公司提供的DOCX脚本是正确答案)\n"
+            f"2. 以知识库为背景参考(该年级学生应该学过这些词汇和句型)\n"
+            f"3. 如果APP中的内容与脚本不一致, 标注为不通过\n"
+            f"4. 如果APP内容与脚本一致但与教材知识不符(超纲/错位), 也需标注\n"
+            f"5. 保持严格但合理: 同义词、合理变形可接受\n"
+        )
+        return role
+
+    def _build_knowledge_context(self, q: YingYuBaoQuestion) -> str:
+        """构建当前题目的知识库上下文"""
+        grade_label = self._name_to_grade(q.keywords) or "五上"
+        unit_vocab = self.kb.get_unit_vocab("湘鲁版", grade_label, q.unit)
+
+        # 提取题目中使用的词汇
+        import re
+        question_vocab = []
+        for opt in q.options:
+            clean = re.sub(r'^[A-C][\.\、\s]+', '', opt).strip()
+            if clean:
+                question_vocab.extend(re.findall(r'[a-zA-Z]+', clean.lower()))
+        question_vocab.extend(re.findall(r'[a-zA-Z]+', q.recording.lower()))
+
+        # 哪些在知识库中, 哪些不在
+        in_kb = []
+        not_in_kb = []
+        for w in set(question_vocab):
+            if w.lower() in [v.lower() for v in unit_vocab]:
+                in_kb.append(w)
+            else:
+                results = self.kb.search_vocab(w)
+                if results:
+                    in_kb.append(f"{w}(在{results[0]['grade']}-U{results[0]['unit']}中出现)")
+                else:
+                    not_in_kb.append(w)
+
+        ctx = f"【知识库验证】\n"
+        if in_kb:
+            ctx += f"✅ 以下词汇在教材知识库中: {', '.join(in_kb[:8])}\n"
+        else:
+            ctx += f"⚠ 未在知识库中找到对应词汇\n"
+        if not_in_kb:
+            ctx += f"❓ 以下词汇不在当前知识库: {', '.join(not_in_kb[:5])}\n"
+
+        ctx += f"录音原文: {q.recording}\n"
+        ctx += f"脚本答案: {q.answer}\n"
+        return ctx
+
+    # ============================================================
+    # 重写: 四维检查 (统一角色 + 深度融合知识库)
     # ============================================================
 
     def _check_stem(self, q: YingYuBaoQuestion, shot: str) -> CheckResult:
-        """(1) 题干检查: OCR提取文字 vs 脚本 """
+        """(1) 题干检查: 文字完整清晰 + 与脚本一致"""
         result = CheckResult()
         try:
-            # 用视觉模型看题干是否完整清晰
+            role = self._build_role_prompt(q)
             prompt = self.trainer.build_enhanced_prompt(
-                f"你是英语题题干质检专家。\n题目: {q.stem}\n题型: {q.type_2}\n\n"
-                f"请看截图,判断:\n1. 题目文字是否完整清晰?\n2. 有无错别字?\n"
-                f"3. 是否与脚本'题目: {q.stem}'一致?\n"
-                f"用1行回答,末尾格式: [通过/不通过] + 理由",
+                role + "\n\n---\n\n"
+                f"【任务: 检查题干文字】\n"
+                f"脚本中的题干: {q.stem}\n"
+                f"题型: {q.type_2}\n\n"
+                f"请看截图, 判断:\n"
+                f"1. 题目文字是否完整、无截断、无模糊?\n"
+                f"2. 是否有错别字或拼写错误?\n"
+                f"3. 文字内容是否与脚本 '{q.stem[:40]}...' 一致?\n"
+                f"4. 题干中的词汇是否在该年级教材范围内?\n\n"
+                f"回答格式: [通过/不通过] | 理由",
                 dim_filter="stem"
             )
             answer = self.llm.ask(prompt, image_path=shot)
             passed = "通过" in answer and "不通过" not in answer
             result.passed = passed
             result.score = 1.0 if passed else 0.3
-            result.details.append(answer[:120])
+            result.details.append(answer[:150])
         except Exception as e:
             result.error = str(e)
         return result
 
     def _check_content(self, q: YingYuBaoQuestion, shot: str) -> CheckResult:
-        """(2) 内容检查: 选项文字 vs 脚本 + 知识库查证"""
+        """(2) 内容检查: 选项 vs 脚本 + 知识库双重验证"""
         result = CheckResult()
         try:
-            kb_verify = self._verify_knowledge(q)
-            kb_info = ""
-            if kb_verify:
-                matched = kb_verify.get("matched", [])
-                unknown = kb_verify.get("unknown", [])
-                if matched:
-                    kb_info = f"(知识库: {len(matched)}个词匹配教材)"
-                if unknown:
-                    kb_info += f" ⚠ {len(unknown)}个词不在教材范围={unknown[:3]}"
+            kb_ctx = self._build_knowledge_context(q)
+            role = self._build_role_prompt(q)
 
             prompt = self.trainer.build_enhanced_prompt(
-                f"你是英语题内容质检专家。\n题型: {q.type_2}\n答案: {q.answer}\n"
-                f"录音: {q.recording}\n{kb_info}\n\n"
-                f"请看截图,判断:\n1. 选项文字是否与录音匹配?\n2. 答案是否正确?\n"
-                f"3. 知识点是否在教材范围内?\n"
-                f"用1行回答,末尾格式: [通过/不通过] + 理由",
+                role + "\n\n---\n\n"
+                f"【任务: 检查题目内容】\n"
+                f"题型: {q.type_2}\n"
+                f"脚本答案: {q.answer}\n"
+                f"脚本选项: {', '.join(q.options) if q.options else '(图片选项)'}\n\n"
+                f"{kb_ctx}\n"
+                f"请看截图, 判断:\n"
+                f"1. 选项内容是否与脚本一致?\n"
+                f"2. 正确答案是否合理? (录音内容是否确实对应正确答案)\n"
+                f"3. 涉及的词汇/句型是否在该年级教材范围内?\n"
+                f"4. 如果有超出教材范围的词汇, 是否合理?(合理扩展可接受)\n\n"
+                f"回答格式: [通过/不通过] | 理由",
                 dim_filter="content"
             )
             answer = self.llm.ask(prompt, image_path=shot)
             passed = "通过" in answer and "不通过" not in answer
             result.passed = passed
             result.score = 1.0 if passed else 0.3
-            result.details.append(answer[:120])
+            result.details.append(answer[:150])
         except Exception as e:
             result.error = str(e)
         return result
 
     def _check_image(self, q: YingYuBaoQuestion, shot: str) -> CheckResult:
-        """(3) 配图检查: 图片内容是否匹配录音/答案"""
+        """(3) 配图检查: 图片匹配录音/答案 + 教材适合性"""
         result = CheckResult()
         if "图片" not in q.type_2:
             result.passed = True
@@ -315,44 +405,55 @@ class ReviewAgent:
             return result
 
         try:
+            role = self._build_role_prompt(q)
             prompt = self.trainer.build_enhanced_prompt(
-                f"你是英语听力题配图质检专家。\n"
-                f"录音: {q.recording}\n答案: {q.answer}\n题型: {q.type_2}\n\n"
-                f"截图中有配图,请判断:\n"
-                f"1. 图片是否清晰完整(无截断/模糊)?\n"
+                role + "\n\n---\n\n"
+                f"【任务: 检查配图】\n"
+                f"录音: {q.recording}\n"
+                f"脚本答案: {q.answer}\n"
+                f"题型: {q.type_2}\n\n"
+                f"请看截图中的图片, 判断:\n"
+                f"1. 图片是否清晰完整?(无截断/模糊/变形)\n"
                 f"2. 图片内容是否与录音匹配?\n"
-                f"3. 图片有无逻辑问题?\n"
-                f"用1行回答,末尾格式: [通过/不通过] + 理由",
+                f"3. 图片中的物品/场景是否适合该年级学生的认知水平?\n"
+                f"4. 图片有无逻辑问题?(如: 录音说'spoon'但图片是叉子)\n"
+                f"5. 如果是干扰项图片, 是否合理?(不会让学生混淆)\n\n"
+                f"回答格式: [通过/不通过] | 理由",
                 dim_filter="image"
             )
             answer = self.llm.ask(prompt, image_path=shot)
             passed = "通过" in answer and "不通过" not in answer
             result.passed = passed
             result.score = 1.0 if passed else 0.3
-            result.details.append(answer[:120])
+            result.details.append(answer[:150])
         except Exception as e:
             result.error = str(e)
         return result
 
     def _check_answer(self, q: YingYuBaoQuestion, shot: str) -> CheckResult:
-        """(4) 作答检查: 题目可否作答, 答案能否完整输入"""
+        """(4) 作答检查: 可作答 + 答案可完整输入"""
         result = CheckResult()
         try:
-            # 检查UI可点击元素 (通过截图识别)
+            role = self._build_role_prompt(q)
             prompt = self.trainer.build_enhanced_prompt(
-                f"你是英语题作答可行性质检专家。\n题型: {q.type_2}\n\n"
-                f"请看截图,判断:\n"
-                f"1. 这道题的选项/输入框是否可见?\n"
-                f"2. 能否正常作答(点击/输入)?\n"
-                f"3. 如果能填写答案, 答案'{q.answer}'能否完整输入?\n"
-                f"用1行回答,末尾格式: [通过/不通过] + 理由",
+                role + "\n\n---\n\n"
+                f"【任务: 检查作答可行性】\n"
+                f"题型: {q.type_2}\n"
+                f"脚本答案: {q.answer}\n\n"
+                f"请看截图, 判断:\n"
+                f"1. 选项/输入框/交互元素是否清晰可见?\n"
+                f"2. 用户能否正常作答?(点击选项/输入文字/拖拽等)\n"
+                f"3. 对于选择题: 选项是否完整显示, A/B/C/D齐了吗?\n"
+                f"4. 对于答案 '{q.answer}': 如果是输入题, 能否完整输入?\n"
+                f"5. 交互方式是否符合该题型的预期?(如听音选图应有图片可点)\n\n"
+                f"回答格式: [通过/不通过] | 理由",
                 dim_filter="answer"
             )
             answer = self.llm.ask(prompt, image_path=shot)
             passed = "通过" in answer and "不通过" not in answer
             result.passed = passed
             result.score = 1.0 if passed else 0.3
-            result.details.append(answer[:120])
+            result.details.append(answer[:150])
         except Exception as e:
             result.error = str(e)
         return result

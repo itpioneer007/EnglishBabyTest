@@ -62,9 +62,17 @@ MODULE_COORDS = {
     "口语训练":  (414, 2033),
     "复习回顾":  (666, 2033),
     "全脑记词":  (919, 2033),
-    # 专项突破 (深度-需先滚动)
-    "单元自检":      (414, 746),  # 滚动后位置
+    # 专项突破 (需滚动)
+    "单元自检":      (414, 746),
     "单元练习计划":  (666, 746),
+    # 听力专项 (需滚动更深)
+    "基础巩固":   (180, 1250),   # 听力专项下的三个阶段
+    "综合进阶":   (540, 1250),
+    "难点突破":   (900, 1250),
+    "听力专项_五上": (414, 1250),   # 五上入口
+    "听力专项_五下": (414, 950),    # 五下入口
+    "听力专项_六上": (414, 1150),   # 六上入口
+    "听力专项_六下": (414, 1050),   # 六下入口
 }
 
 # 需要先滚动才能看到的模块
@@ -74,6 +82,14 @@ DEEP_MODULES = {
     "教材同步题库",
     "听力训练",
     "你听一刻",
+    # 听力专项下的内容
+    "基础巩固",
+    "综合进阶",
+    "难点突破",
+    "听力专项_五上",
+    "听力专项_五下",
+    "听力专项_六上",
+    "听力专项_六下",
 }
 
 # 底部导航坐标
@@ -1035,6 +1051,385 @@ def api_check_full():
     return jsonify(engine.to_dict(report))
 
 
+# ============================================================
+# 听力专项 专属API — 与CLI脚本一致的工作流
+# ============================================================
+
+@app.route("/api/inspect/listening-run", methods=["POST"])
+def api_inspect_listening_run():
+    """
+    听力专项自动巡检 (与CLI脚本 inspect_u6.py 行为一致)
+    
+    请求参数:
+        version: "新湘鲁六上" / "新湘鲁五上" / ...
+        unit: 6 (单元号)
+        stage: "基础巩固" / "综合进阶" / "难点突破"
+        docx: 脚本文件名 (已在uploads目录的)
+    """
+    if task_status["running"]:
+        return jsonify({"error": "已有任务在运行"}), 409
+
+    data = request.get_json() or {}
+    version_label = data.get("version", "新湘鲁六上")
+    unit = data.get("unit", 6)
+    stage = data.get("stage", "基础巩固")
+    docx_file = data.get("docx", "")
+
+    # 启动线程
+    t = threading.Thread(
+        target=run_listening_inspect,
+        args=(version_label, unit, stage, docx_file),
+        daemon=True,
+    )
+    t.start()
+    return jsonify({
+        "status": "started",
+        "task": "listening_inspect",
+        "params": {"version": version_label, "unit": unit, "stage": stage},
+    })
+
+
+def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: str):
+    """
+    听力专项巡检主循环 (完全复用 inspect_u6.py 的逻辑)
+    """
+    try:
+        set_running("listening_inspect")
+        config = load_config()
+        adb = get_adb()
+
+        log_msg(f"🚀 听力专项巡检: {version_label} Unit{unit} {stage}")
+
+        # 1. 启动APP + 导航到首页
+        log_msg("启动APP")
+        adb.launch_app(config.app.package)
+        time.sleep(4)
+
+        # 2. 关闭广告 (不用固定坐标, 用UI识别)
+        log_msg("关闭广告")
+        for _ in range(3):
+            elements = adb.dump_ui(retries=1)
+            found_close = False
+            for e in elements:
+                t = (e.text or '').strip()
+                # 各种关闭按钮
+                if t in ['关闭', '关闭广告', '×', 'X', 'Close', '跳过', '忽略']:
+                    adb.tap(e.center[0], e.center[1])
+                    log_msg(f"  关闭广告: '{t}' at {e.center}")
+                    found_close = True
+                    break
+                # resource-id 包含 close/cancel
+                if 'close' in e.resource_id.lower() or 'cancel' in e.resource_id.lower():
+                    adb.tap(e.center[0], e.center[1])
+                    found_close = True
+                    break
+            if not found_close:
+                # 首次兜底: 点屏幕中部(常见广告关闭位置)
+                adb.tap(540, 1800)
+                time.sleep(0.5)
+                adb.tap(540, 800)
+            time.sleep(1)
+
+        # 3. 确保在英语tab + 检查是否跑到了"消息"页
+        adb.tap(108, 2233)
+        time.sleep(1)
+        # 检查当前页面 - 如果看到"消息"标题, 按返回
+        elements = adb.dump_ui()
+        if any('消息' in (e.text or '') and e.center[1] < 300 for e in elements):
+            log_msg("⚠ 进入了消息页, 按返回", "warning")
+            adb.press_back()
+            time.sleep(2)
+            adb.tap(108, 2233)  # 重新点英语tab
+            time.sleep(1)
+
+        # 4. 导航到专项突破
+        log_msg("导航到专项突破")
+        found = False
+        for attempt in range(3):
+            elements = adb.dump_ui()
+            for e in elements:
+                if e.text and '专项突破' in e.text:
+                    # 只在有效区域点击 (排除顶部导航栏和底部Tab)
+                    if 400 < e.center[1] < 2000:
+                        adb.tap(e.center[0], e.center[1])
+                        log_msg(f"  点'专项突破' at {e.center}")
+                        found = True
+                        break
+            if found:
+                break
+            # 没找到就向下滚动一点
+            adb.swipe(540, 1500, 540, 1000, 300)
+            time.sleep(1)
+        if not found:
+            log_msg("  兜底: 点(414, 1700)", "warning")
+            adb.tap(414, 1700)
+        time.sleep(3)
+
+        # 5. 反复滚动找"听力专项"
+        log_msg("寻找听力专项")
+        found_listening = False
+        for scroll_i in range(10):
+            elements = adb.dump_ui()
+            for e in elements:
+                if e.text and '听力专项' in (e.text or ''):
+                    cx, cy = e.center
+                    # 验证点击区域在屏内
+                    if 200 < cy < 2200 and cx > 50 and cx < 1030:
+                        log_msg(f"  发现'听力专项' at {e.center}")
+                        adb.tap(cx, cy)
+                        found_listening = True
+                        break
+            if found_listening:
+                break
+            # 向下滚动
+            adb.swipe(540, 1600, 540, 600, 500)
+            time.sleep(1)
+        time.sleep(3)
+
+        # 6. 选择对应版本年级 (五上/六上等)
+        log_msg(f"选择版本: {version_label}")
+        time.sleep(2)
+        elements = adb.dump_ui()
+        # 检查是否跑到消息页/错误页
+        if any('消息' in (e.text or '') and e.center[1] < 200 for e in elements):
+            adb.press_back()
+            time.sleep(2)
+            elements = adb.dump_ui()
+        grade_keywords = {"五上": "五上", "五下": "五下", "六上": "六上", "六下": "六下"}
+        target_kw = ""
+        for k, v in grade_keywords.items():
+            if k in version_label:
+                target_kw = v
+                break
+        if target_kw:
+            found_grade = False
+            for e in elements:
+                if e.text and target_kw in (e.text or ''):
+                    cx, cy = e.center
+                    if 200 < cy < 2200:
+                        adb.tap(cx, cy)
+                        log_msg(f"  选中 {target_kw} at ({cx},{cy})")
+                        found_grade = True
+                        break
+            if not found_grade:
+                log_msg(f"  ⚠ 未找到 {target_kw}, 尝试兜底", "warning")
+                adb.tap(540, 1200)
+        time.sleep(3)
+
+        # 7. 选择Unit
+        log_msg(f"选择 Unit {unit}")
+        elements = adb.dump_ui()
+        found_unit = False
+        for e in elements:
+            if e.text and f"Unit {unit}" in (e.text or ''):
+                cx, cy = e.center
+                if 200 < cy < 2200:
+                    adb.tap(cx, cy)
+                    log_msg(f"  Unit {unit} at ({cx},{cy})")
+                    found_unit = True
+                    break
+        if not found_unit:
+            log_msg(f"  ⚠ 未找到 Unit {unit}, 尝试兜底", "warning")
+            adb.tap(540, 1400)
+        time.sleep(3)
+
+        # 8. 选择阶段 (基础巩固/综合进阶/难点突破)
+        log_msg(f"选择阶段: {stage}")
+        elements = adb.dump_ui()
+        for e in elements:
+            if e.text and stage == (e.text or '').strip():
+                adb.tap(e.center[0], e.center[1])
+                log_msg(f"  {stage} at {e.center}")
+                break
+        time.sleep(3)
+
+        # 9. 开始答题 → 轮流尝试 "开始答题"/"去答题"→ 关弹窗 → 等待考题加载
+        log_msg("开始答题")
+        for attempt in range(5):
+            elements = adb.dump_ui()
+            # 先检查是否已经在考题页
+            in_question = any(re.match(r'^\d+/\d+$', (e.text or "").strip()) for e in elements)
+            if in_question:
+                log_msg("  已在考题页!", "success")
+                break
+            # 找"开始答题"/"去答题"按钮
+            found_btn = False
+            for e in elements:
+                t = (e.text or '').strip()
+                if t in ['开始答题', '去答题', '开始', 'Start']:
+                    if e.clickable and e.center[1] < 2000:
+                        adb.tap(e.center[0], e.center[1])
+                        log_msg(f"  点'{t}' at {e.center}")
+                        found_btn = True
+                        break
+            if not found_btn:
+                # 可能已经进入题目但还没加载, 或弹窗挡住了
+                # 尝试点屏幕底部中间 (有些APP的确认在底部)
+                adb.tap(540, 2100)
+                # 关可能存在的弹窗
+                adb.tap(540, 1800)
+            time.sleep(2)
+
+        # 再多等一会儿, 确保题目渲染完成
+        time.sleep(2)
+
+        # 10. 逐题巡检循环
+        log_msg(f"逐题巡检开始: 脚本={docx_file or '无'}")
+        last_q = 0
+        questions_reviewed = []
+        # 记录是否遇到结果页, 增加"下一题"按钮点击
+        
+        # 加载脚本数据 (用于LLM审查)
+        from src.review_agent import ReviewAgent, ReviewConfig
+        from src.parse_yingyubao_docx import parse
+
+        agent = None
+        docx_path = ""
+        if docx_file:
+            docx_path = str(UPLOAD_DIR / docx_file)
+            if Path(docx_path).exists():
+                cfg = ReviewConfig(docx_path=docx_path, unit=unit, stage=stage,
+                                   screenshot_dir=str(PROJECT_ROOT / "screenshots"), verbose=False)
+                agent = ReviewAgent(cfg)
+                log_msg(f"  脚本已加载: {docx_file} (共{len(agent.script_questions)}题)", "success")
+            else:
+                log_msg(f"  ⚠ 脚本不存在: {docx_path}", "warning")
+
+        for loop in range(80):
+            if not task_status["running"]:
+                log_msg("任务被手动停止", "warning")
+                break
+
+            elements = adb.dump_ui(retries=2)
+            all_texts = [(e.text or '').strip() for e in elements]
+
+            # ====== 检测是否在结果页 (有"正确答案"文本) ======
+            if any('正确答案' in t for t in all_texts):
+                log_msg("[结果页] 刚答完一题, 找'下一题'", "info")
+                found_next = False
+                for e in elements:
+                    t = (e.text or '').strip()
+                    if t in ['下一题', '完成', '继续', 'Next']:
+                        adb.tap(e.center[0], e.center[1])
+                        log_msg(f"  点'{t}' at {e.center}")
+                        found_next = True
+                        break
+                if not found_next:
+                    adb.tap(540, 2100)  # 底部兜底
+                time.sleep(1.5)
+                continue
+
+            # ====== 读题号 ======
+            cur = None
+            total_q = 0
+            for e in elements:
+                m = re.match(r'^(\d+)/(\d+)$', (e.text or "").strip())
+                if m:
+                    cur = int(m.group(1))
+                    total_q = int(m.group(2))
+                    break
+            if not cur:
+                log_msg("不在考题页,结束", "warning")
+                break
+            if cur == last_q:
+                time.sleep(0.3)
+                continue
+            last_q = cur
+
+            # 截图
+            shot_name = f"q{cur:02d}.png"
+            adb.screenshot(shot_name)
+            shot_path = str(PROJECT_ROOT / "screenshots" / shot_name)
+            log_msg(f"Q{cur:02d}", "success")
+            update_progress(cur, total_q, f"Q{cur}")
+
+            # 用ReviewAgent做四维审查 (如果脚本已加载)
+            review_result = None
+            if agent:
+                try:
+                    # 找对应脚本题目
+                    matching_qs = [q for q in agent.script_questions if q.global_idx == cur]
+                    if matching_qs:
+                        script_q = matching_qs[0]
+                        r = agent._review_one(script_q, shot_path)
+                        review_result = {
+                            "stem": "✅" if r.stem_check.passed else "❌",
+                            "content": "✅" if r.content_check.passed else "❌",
+                            "image": "✅" if r.image_check.passed else "❌",
+                            "answer": "✅" if r.answer_check.passed else "❌",
+                            "score": r.overall_score,
+                        }
+                        log_msg(f"  审查: 题干{review_result['stem']} 内容{review_result['content']} 配图{review_result['image']} 作答{review_result['answer']} 得分{review_result['score']:.2f}")
+                        
+                        # 自动加入反馈
+                        from src.feedback_loop import FeedbackSample
+                        agent.feedback.add(FeedbackSample(
+                            question_id=f"{version_label}-U{unit}-Q{cur:02d}",
+                            check_dimension="all",
+                            human_judgment="通过" if r.overall_passed else "不通过",
+                            ai_judgment="通过" if r.overall_passed else "不通过",
+                            ai_reason=r.content_check.details[0] if r.content_check.details else "",
+                            question_type=script_q.type_2,
+                            screenshot=shot_name,
+                        ))
+                except Exception as e:
+                    log_msg(f"  审查异常: {e}", "warning")
+
+            questions_reviewed.append({
+                "idx": cur, "screenshot": shot_name, "review": review_result
+            })
+
+            # 点击选项
+            found_option = False
+            for e in elements:
+                if e.clickable and 400 < e.bounds[1] < 2000 and (e.bounds[2]-e.bounds[0]) > 100:
+                    # 优先选中间偏左的选项区域
+                    if e.center[0] < 150: continue  # 太左可能是返回键
+                    adb.tap(e.center[0], e.center[1])
+                    found_option = True
+                    break
+            if not found_option:
+                # 兜底: 点屏幕中央
+                adb.tap(540, 800)
+            time.sleep(1.5)
+
+            # 找"检查"按钮, 点它
+            found_check = False
+            for _ in range(3):
+                new_elems = adb.dump_ui()
+                for e in new_elems:
+                    t = (e.text or '').strip()
+                    if t in ['检查', 'Check', '提交', '下一题', '完成']:
+                        adb.tap(e.center[0], e.center[1])
+                        log_msg(f"  '检查'点中 ({e.center[0]},{e.center[1]})")
+                        found_check = True
+                        break
+                if found_check:
+                    break
+                adb.tap(540, 2100)
+                time.sleep(0.5)
+            time.sleep(1.5)
+
+            # 完成
+            if cur >= total_q:
+                log_msg(f"✅ 全部 {total_q} 题完成!", "success")
+                break
+
+        # 保存审查结果
+        if agent and questions_reviewed:
+            agent.export_report(str(PROJECT_ROOT / "outputs" / f"review_{docx_file.replace('.docx','')}.md"))
+            agent.export_json(str(PROJECT_ROOT / "outputs" / f"review_{docx_file.replace('.docx','')}.json"))
+
+        set_done()
+        log_msg(f"✅ 听力专项巡检完成! {len(questions_reviewed)}题", "success")
+
+    except Exception as e:
+        import traceback
+        log_msg(f"❌ 巡检失败: {e}", "error")
+        log_msg(traceback.format_exc(), "error")
+        set_done()
+
+
 @app.route("/api/inspect/run", methods=["POST"])
 def api_inspect_run():
     """启动逐题巡检 (任务版)"""
@@ -1068,6 +1463,12 @@ def api_modules():
         "专项突破 (需滚动)": {
             "单元自检":     (414, 746),
             "单元练习计划": (666, 746),
+        },
+        "📢 听力专项": {
+            "听力专项_五上": (414, 1250),
+            "听力专项_五下": (414, 950),
+            "听力专项_六上": (414, 1150),
+            "听力专项_六下": (414, 1050),
         },
     })
 

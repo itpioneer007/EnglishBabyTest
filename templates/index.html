@@ -156,8 +156,23 @@ body { font-family:-apple-system,"Microsoft YaHei",sans-serif; background:#f0f2f
 
     <div class="card">
       <div class="card-title">🔍 题目巡检 <span id="inspectStatus" style="font-weight:400;color:#888">就绪</span></div>
+      <div style="margin-bottom:8px">
+        <label style="font-size:12px;color:#555;margin-right:6px">版本:</label>
+        <select id="inspectVersion" style="padding:4px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12px">
+          <option>新湘鲁五上</option>
+          <option selected>新湘鲁六上</option>
+        </select>
+        <label style="font-size:12px;color:#555;margin:0 6px">Unit:</label>
+        <select id="inspectUnit" style="padding:4px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12px">
+          <option>6</option><option>7</option><option>8</option><option>9</option>
+        </select>
+        <label style="font-size:12px;color:#555;margin:0 6px">阶段:</label>
+        <select id="inspectStage" style="padding:4px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12px">
+          <option selected>基础巩固</option><option>综合进阶</option><option>难点突破</option>
+        </select>
+      </div>
       <div class="btn-row">
-        <button class="btn" style="background:#4a6cf7;color:#fff;padding:8px 16px" onclick="startInspect()">▶ 开始巡检</button>
+        <button class="btn" style="background:#4a6cf7;color:#fff;padding:8px 16px" onclick="startListeningInspect()">▶ 听力专项巡检</button>
         <button class="btn btn-outline" style="padding:6px" onclick="stopInspect()">⏹ 停止</button>
       </div>
       <div id="inspectProgress" style="display:none;margin:8px 0">
@@ -450,6 +465,32 @@ async function stopInspect() {
   $('inspectStatus').textContent = '已停止'
   $('inspectStatus').style.color = '#888'
   addLog('warning', '⏹ 巡检已停止')
+}
+
+// 听力专项巡检 (匹配CLI工作流)
+async function startListeningInspect() {
+  const version = document.getElementById('inspectVersion').value
+  const unit = parseInt(document.getElementById('inspectUnit').value)
+  const stage = document.getElementById('inspectStage').value
+  const sel = document.getElementById('reviewDocx')
+  const docx = sel ? sel.value : ''
+
+  addLog('info', `🚀 听力专项巡检: ${version} Unit${unit} ${stage}`)
+  $('inspectStatus').textContent = '运行中...'
+  $('inspectStatus').style.color = '#4a6cf7'
+  $('inspectProgress').style.display = 'block'
+
+  try {
+    const res = await fetch('/api/inspect/listening-run', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({version, unit, stage, docx})
+    })
+    const data = await res.json()
+    if (data.error) { alert(data.error); return }
+    addLog('info', `任务已启动: ${data.status}`)
+    inspectTimer = setInterval(pollInspectProgress, 2000)
+  } catch(e) { alert('启动失败: ' + e) }
 }
 
 async function pollInspectProgress() {
