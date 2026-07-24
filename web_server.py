@@ -999,6 +999,12 @@ _current_screenshot = ""
 # 听力专项 专属API — 与CLI脚本一致的工作流
 # ============================================================
 
+@app.route("/api/log/clear", methods=["POST"])
+def api_log_clear():
+    """清空操作日志"""
+    task_status["log"] = []
+    return jsonify({"status": "cleared"})
+
 @app.route("/api/inspect/listening-run", methods=["POST"])
 def api_inspect_listening_run():
     """
@@ -1018,6 +1024,10 @@ def api_inspect_listening_run():
     unit = data.get("unit", 6)
     stage = data.get("stage", "基础巩固")
     docx_file = data.get("docx", "")
+    
+    # 新巡检自动清空日志和检查状态
+    task_status["log"] = []
+    clear_inspection_state()
 
     # 启动线程
     t = threading.Thread(
@@ -1281,31 +1291,86 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
                 adb.tap(540, 1200)
         time.sleep(3)
 
-        # 7. 选择Unit
+        # 7. 选择Unit - 必须同时点"去练习"按钮才能进入
         log_msg(f"选择 Unit {unit}")
         elements = adb.dump_ui()
-        found_unit = False
+        # 找到Unit文本的位置
+        unit_y = None
         for e in elements:
-            if e.text and f"Unit {unit}" in (e.text or ''):
-                cx, cy = e.center
-                if 200 < cy < 2200:
-                    adb.tap(cx, cy)
-                    log_msg(f"  Unit {unit} at ({cx},{cy})")
-                    found_unit = True
-                    break
-        if not found_unit:
-            log_msg(f"  ⚠ 未找到 Unit {unit}, 尝试兜底", "warning")
-            adb.tap(540, 1400)
-        time.sleep(3)
-
-        # 8. 选择阶段 (基础巩固/综合进阶/难点突破)
-        log_msg(f"选择阶段: {stage}")
-        elements = adb.dump_ui()
-        for e in elements:
-            if e.text and stage == (e.text or '').strip():
-                adb.tap(e.center[0], e.center[1])
-                log_msg(f"  {stage} at {e.center}")
+            if e.text and re.match(rf'^Unit {unit}\b', (e.text or '').strip()):
+                unit_y = e.center[1]
+                log_msg(f"  Unit {unit} 文本 at y={unit_y}")
                 break
+        # 兜底: 模糊匹配
+        if not unit_y:
+            for e in elements:
+                if e.text and f"Unit {unit}" in (e.text or ''):
+                    unit_y = e.center[1]
+                    log_msg(f"  Unit {unit} 文本(模糊) at y={unit_y}")
+                    break
+
+        found_unit = False
+        if unit_y:
+            # 找该Unit对应的"去练习"按钮 — y和unit_y接近且都在屏内
+            for e in elements:
+                t = (e.text or '').strip()
+                if '去练习' in t or '去答题' in t:
+                    cy = e.center[1]
+                    # Y范围放宽到2400(屏幕可能更高), 容差放宽到250
+                    if 100 < cy < 2400 and abs(cy - unit_y) < 250:
+                        if e.center[0] > 0:  # 不点(0,0)离屏的
+                            adb.tap(e.center[0], e.center[1])
+                            log_msg(f"  点'去练习' for Unit {unit} at {e.center}")
+                            found_unit = True
+                            break
+            if not found_unit:
+                # 兜底: 点Unit文本右侧水平方向 (881常见右边按钮x)
+                log_msg(f"  兜底: 点(881, {unit_y})", "warning")
+                adb.tap(881, unit_y)
+                found_unit = True
+        else:
+            log_msg(f"  ⚠ 没找到 Unit {unit} 文本", "warning")
+            adb.tap(540, 1400)
+        time.sleep(4)
+
+        # 8. 现在应该在阶段选择页 (基础巩固/综合进阶/难点突破)
+        log_msg(f"选择阶段: {stage}")
+        found_stage = False
+        for wait_i in range(5):
+            elements = adb.dump_ui()
+            # 先确认不在Unit列表页 (没看到"去练习"才说明已经进入下一页)
+            on_unit_list = any('去练习' in (e.text or '') and e.clickable for e in elements)
+            if on_unit_list:
+                log_msg(f"  还在Unit列表,再等等 ({wait_i+1}/5)")
+                time.sleep(1)
+                continue
+            # 找阶段按钮 — 三种匹配方式
+            for e in elements:
+                t = (e.text or '').strip()
+                if not t: continue
+                # 方式1: 精确匹配
+                # 方式2: stage是t的子串(如"基础巩固"在"基础巩固模式"中)
+                # 方式3: 尝试用关键字符找(基础/综合/难点、巩固/进阶/突破)
+                matched = False
+                if t == stage: matched = True
+                elif stage in t or t in stage: matched = True
+                elif any(kw in t for kw in stage.replace(' ','').split('·')):
+                    # 对付"基础·巩固"这类分隔符,拆开后分别匹配
+                    for seg in stage.replace('·','').split():
+                        if seg in t: matched = True; break
+                if matched and e.clickable and 50 < e.center[1] < 2200:
+                    adb.tap(e.center[0], e.center[1])
+                    log_msg(f"  点'{t}' at {e.center}")
+                    found_stage = True
+                    break
+            if found_stage:
+                break
+            log_msg(f"  未找到 {stage} ({wait_i+1}/5)")
+            time.sleep(1)
+        if not found_stage:
+            log_msg(f"  ⚠ 未找到 {stage},可能已是默认阶段,继续执行", "warning")
+            # 阶段选择失败不致命 — 可能该页面没有阶段选择,直接进入题目
+            # 或者"基础巩固"是默认已选中的
         time.sleep(3)
 
         # 9. 开始答题 → 轮流尝试 "开始答题"/"去答题"→ 关弹窗 → 等待考题加载
@@ -1835,12 +1900,13 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 
 @app.route("/api/upload-docx", methods=["POST"])
 def api_upload_docx():
-    """上传 DOCX 脚本文件, 自动导入知识库"""
+    """上传 DOCX/DOC 脚本文件, 自动导入知识库"""
     if "file" not in request.files:
         return jsonify({"error": "未选择文件"}), 400
     file = request.files["file"]
-    if not file.filename.lower().endswith(".docx"):
-        return jsonify({"error": "仅支持 .docx 文件"}), 400
+    ext = file.filename.lower().rsplit(".", 1)[-1] if "." in file.filename else ""
+    if ext not in ("docx", "doc"):
+        return jsonify({"error": "仅支持 .docx / .doc 文件"}), 400
     save_path = UPLOAD_DIR / file.filename
     file.save(str(save_path))
     try:
@@ -1864,7 +1930,8 @@ def api_upload_docx():
 def api_upload_list():
     """列出已上传的 DOCX 文件"""
     files = []
-    for f in sorted(UPLOAD_DIR.glob("*.docx")):
+    for f in sorted(UPLOAD_DIR.glob("*"), key=os.path.getmtime, reverse=True):
+        if f.suffix.lower() not in (".docx", ".doc"): continue
         files.append({
             "name": f.name,
             "size": f.stat().st_size,
@@ -1905,7 +1972,8 @@ def api_review_run():
         if not Path(docx_path).exists():
             return jsonify({"error": f"文件 {docx_file} 不存在"}), 404
     else:
-        files = sorted(UPLOAD_DIR.glob("*.docx"), key=os.path.getmtime, reverse=True)
+        files = [f for f in sorted(UPLOAD_DIR.glob("*"), key=os.path.getmtime, reverse=True)
+                 if f.suffix.lower() in (".docx", ".doc")]
         if files: docx_path = str(files[0])
         else: return jsonify({"error": "未找到脚本文件"}), 404
     try:
