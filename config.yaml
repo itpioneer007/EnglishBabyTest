@@ -8,7 +8,7 @@ device:
 
 # 英语宝APP
 app:
-  package: "com.dinoenglish.yyb"    # APP包名
+  package: "com.dinoenglish.yyb"    # APP包名 (英语宝)
   # activity: ""                    # 启动Activity (留空则用monkey启动)
 
 # 灰度账号

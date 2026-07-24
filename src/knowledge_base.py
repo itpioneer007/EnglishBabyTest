@@ -20,6 +20,7 @@ knowledge_base.py — 小学英语教材知识库
 
 import json
 import re
+import time
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
 from typing import Optional
@@ -93,6 +94,29 @@ class KnowledgeBase:
         else:
             self.data = {}
 
+    @staticmethod
+    def _try_convert_doc(doc_path: str) -> Optional[str]:
+        """用 Word COM 把 .doc 转成 .docx，返回转换后路径"""
+        import time as _time
+        docx_path = doc_path.rsplit('.', 1)[0] + '_converted.docx'
+        if Path(docx_path).exists() and Path(docx_path).stat().st_mtime >= Path(doc_path).stat().st_mtime:
+            return docx_path
+        try:
+            import win32com.client
+            word = win32com.client.Dispatch('Word.Application')
+            word.Visible = False
+            try:
+                doc = word.Documents.Open(str(Path(doc_path).resolve()))
+                doc.SaveAs2(str(Path(docx_path).resolve()), FileFormat=16)
+                doc.Close()
+            finally:
+                word.Quit()
+                _time.sleep(0.5)
+            return docx_path
+        except Exception as e:
+            print(f"[知识库] .doc→.docx 转换失败: {e}")
+            return None
+
     def save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.path, "w", encoding="utf-8") as f:
@@ -128,19 +152,27 @@ class KnowledgeBase:
 
     def add_bulk_from_docx(self, docx_path: str):
         """
-        从公司的 DOCX 脚本批量导入知识点
+        从公司的 DOCX/DOC 脚本批量导入知识点
         自动解析脚本中的录音原文、选项词汇、知识点说明
         """
         from src.parse_yingyubao_docx import parse
 
-        questions = parse(docx_path)
+        # .doc → .docx 自动转换
+        final_path = docx_path
+        if docx_path.lower().endswith('.doc') and not docx_path.lower().endswith('.docx'):
+            final_path = self._try_convert_doc(docx_path)
+            if not final_path:
+                print(f"[知识库] 无法转换 .doc 文件, 跳过: {docx_path}")
+                return {"vocab": 0, "patterns": 0, "questions": 0}
+
+        questions = parse(final_path)
         stats = {"vocab": 0, "patterns": 0, "questions": len(questions)}
 
-        for q in questions:
-            # 从脚本数据提取知识点
-            grade_label = self._guess_grade_label(docx_path)
-            version = self._guess_version(docx_path)
+        # 整个文档只猜一次年级+版本
+        grade_label = self._guess_grade_label(docx_path, questions)
+        version = self._guess_version(docx_path)
 
+        for q in questions:
             # 提取词汇 (从选项和录音中)
             vocab_words = []
             for opt in q.options:
@@ -298,17 +330,43 @@ class KnowledgeBase:
     # 内部工具
     # ============================================================
 
-    def _guess_grade_label(self, docx_path: str) -> str:
-        """从文件路径猜测年级"""
+    def _guess_grade_label(self, docx_path: str, questions: list = None) -> str:
+        """
+        从文件路径+文档内容推断年级
+        
+        优先级: 文件名 > 文档内容中的"标题行" > 试题单元号反推
+        """
         path = str(docx_path).lower()
-        mapping = [("三上", "三上"), ("三下", "三下"), ("四上", "四上"), ("四下", "四下"),
-                   ("五上", "五上"), ("五下", "五下"), ("六上", "六上"), ("六下", "六下")]
-        for label, kw in mapping:
-            if kw in path:
-                return label
-        # 从文件名提取
-        m = re.search(r'五上|五下|六上|六下|四上|四下|三上|三下', path)
-        return m.group(0) if m else "未知"
+
+        # 1. 从文件名提取
+        grade_labels = ["一上","一下","二上","二下","三上","三下","四上","四下","五上","五下","六上","六下"]
+        for lbl in grade_labels:
+            if lbl in path:
+                return lbl
+
+        # 2. 从文档标题提取 (如"五年级上册听力专项")
+        grade_map = {
+            '一年级上册':'一上','一年级下册':'一下','二年级上册':'二上','二年级下册':'二下',
+            '三年级上册':'三上','三年级下册':'三下','四年级上册':'四上','四年级下册':'四下',
+            '五年级上册':'五上','五年级下册':'五下','六年级上册':'六上','六年级下册':'六下',
+        }
+        if questions:
+            for q in questions[:5]:  # 查前5题的stem/keywords
+                text = (q.stem + ' '.join(q.keywords)).lower()
+                for full, short in grade_map.items():
+                    if full in text:
+                        return short
+
+        # 3. 从题目数量反推 (听力专项U6-9是五上/六上特征)
+        if questions:
+            units = set(q.unit for q in questions if q.unit > 0)
+            # U6-U9 多为五上或六上
+            if units and min(units) >= 6 and max(units) <= 9:
+                # 检查文件名含"六"→六上, 含"五"→五上
+                if '六' in path: return '六上'
+                if '五' in path: return '五上'
+
+        return "未知"
 
     def _guess_version(self, docx_path: str) -> str:
         """从文件路径猜测版本"""

@@ -100,6 +100,28 @@ TABS = {
 SETTINGS_ICON = (1000, 170)
 AD_CLOSE = (540, 1821)
 
+# ---- 模块自动识别 ----
+
+# 文件名关键词 → 模块名 + 导航方式
+MODULE_PATTERNS = {
+    # (关键词列表, 模块名, 区域, 点击坐标)
+    ("巧记单词", "巧记",): ("巧记单词", "教材精学", (876, 1191)),
+    ("听力专项", "听力",): ("听力专项", "专项突破", None),  # None = 滚动搜索
+    ("知识过关", "知识",): ("知识过关", "专项突破", None),
+    ("基础训练",): ("基础训练", "专项突破", (666, 1792)),
+    ("一课一练",): ("一课一练", "专项突破", (919, 1792)),
+    ("复习回顾",): ("复习回顾", "专项突破", (666, 2033)),
+    ("全脑记词",): ("全脑记词", "专项突破", (919, 2033)),
+}
+
+def detect_module_from_filename(filename: str):
+    """从文件名提取模块名和导航方式, 返回 (module_name, section, coords) 或 None"""
+    for keywords, (name, section, coords) in MODULE_PATTERNS.items():
+        for kw in keywords:
+            if kw in filename:
+                return name, section, coords
+    return None, None, None
+
 
 # ============================================================
 # 工具函数
@@ -1027,7 +1049,10 @@ def api_inspect_listening_run():
     
     # 新巡检自动清空日志和检查状态
     task_status["log"] = []
-    clear_inspection_state()
+    _inspection_state["questions"] = {}
+    _inspection_state["workflow_steps"] = []
+    _inspection_state["current_question_idx"] = 0
+    _save_inspection_state()
 
     # 启动线程
     t = threading.Thread(
@@ -1045,7 +1070,9 @@ def api_inspect_listening_run():
 
 def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: str):
     """
-    听力专项巡检主循环 (完全复用 inspect_u6.py 的逻辑)
+    通用模块巡检主循环
+    
+    自动从文件名识别模块(巧记单词/听力专项/知识过关...),导航到对应区域,逐题检查
     """
     def record_step(step, status, detail=""):
         """记录流程步骤到后端"""
@@ -1218,48 +1245,79 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
             time.sleep(2)
         record_step("3.5版本检查", "done", current_grade or "已对齐")
 
-        # 4. 导航到专项突破
-        record_step("4.专项突破", "running", "")
-        log_msg("导航到专项突破")
-        found = False
-        for attempt in range(3):
-            elements = adb.dump_ui()
-            for e in elements:
-                if e.text and '专项突破' in e.text:
-                    if 400 < e.center[1] < 2000:
-                        adb.tap(e.center[0], e.center[1])
-                        log_msg(f"  点'专项突破' at {e.center}")
-                        found = True
-                        break
-            if found:
-                break
-            adb.swipe(540, 1500, 540, 1000, 300)
-            time.sleep(1)
-        if not found:
-            adb.tap(414, 1700)
-        time.sleep(3)
-        record_step("4.专项突破", "done", "")
+        # ---- 模块自动识别 ----
+        module_name, module_section, module_coords = detect_module_from_filename(docx_file or "")
+        if module_name:
+            log_msg(f"🎯 识别到模块: {module_name}")
+        else:
+            module_name, module_section, module_coords = "听力专项", "专项突破", None
 
-        # 5. 反复滚动找"听力专项"
-        record_step("5.听力专项", "running", "")
-        log_msg("寻找听力专项")
-        found_listening = False
-        for scroll_i in range(10):
-            elements = adb.dump_ui()
-            for e in elements:
-                if e.text and '听力专项' in (e.text or ''):
-                    cx, cy = e.center
-                    if 200 < cy < 2200 and cx > 50 and cx < 1030:
-                        log_msg(f"  发现'听力专项' at {e.center}")
-                        adb.tap(cx, cy)
-                        found_listening = True
-                        break
-            if found_listening:
-                break
-            adb.swipe(540, 1600, 540, 600, 500)
-            time.sleep(1)
-        time.sleep(3)
-        record_step("5.听力专项", "done", "")
+        # 4. 根据模块区域分流
+        record_step("4.专项突破", "running", "")
+        skip_special_nav = False
+        if module_section == "教材精学" and module_coords:
+            # 教材精学区: 不进入专项突破,直接点模块
+            log_msg(f"导航到教材精学 → {module_name} at {module_coords}")
+            adb.tap(module_coords[0], module_coords[1])
+            time.sleep(3)
+            record_step("4.专项突破", "done", f"教材精学: {module_name}")
+            # 跳过专项突破+听力专项导航, 直接到阶段选择
+            skip_special_nav = True
+        else:
+            log_msg("导航到专项突破")
+
+        # ---- 专项突破区: 导航+找模块 (教材精学区直接跳过) ----
+        if not skip_special_nav:
+            found = False
+            for attempt in range(3):
+                elements = adb.dump_ui()
+                for e in elements:
+                    if e.text and '专项突破' in e.text:
+                        if 400 < e.center[1] < 2000:
+                            adb.tap(e.center[0], e.center[1])
+                            log_msg(f"  点'专项突破' at {e.center}")
+                            found = True
+                            break
+                if found:
+                    break
+                adb.swipe(540, 1500, 540, 1000, 300)
+                time.sleep(1)
+            if not found:
+                adb.tap(414, 1700)
+            time.sleep(3)
+            record_step("4.专项突破", "done", "")
+
+            # 5. 滚动找模块 (动态匹配,不限定"听力专项")
+            record_step("5.听力专项", "running", "")
+            log_msg(f"寻找模块: {module_name}")
+            found_module = False
+            for scroll_i in range(10):
+                elements = adb.dump_ui()
+                for e in elements:
+                    t = (e.text or '')
+                    # 支持多种匹配: 听力专项/巧记单词闯关/知识过关
+                    if module_name in t or any(kw in t for kw in module_name.split()):
+                        cx, cy = e.center
+                        if 200 < cy < 2200 and cx > 50 and cx < 1030:
+                            log_msg(f"  发现'{t.strip()}' at {e.center}")
+                            adb.tap(cx, cy)
+                            found_module = True
+                            break
+                if found_module:
+                    break
+                adb.swipe(540, 1600, 540, 600, 500)
+                time.sleep(1)
+            if not found_module:
+                log_msg(f"  ⚠ 未找到模块 '{module_name}', 尝试搜索全部文本", "warning")
+                # 最后尝试: dump所有文本 + 模糊匹配
+                elements = adb.dump_ui()
+                texts = [(e.center, e.text) for e in elements if e.text and e.clickable]
+                log_msg(f"  可点击元素: {[(c,t) for c,t in texts[:10]]}")
+            time.sleep(3)
+            record_step("5.听力专项", "done" if found_module else "error", module_name)
+        else:
+            # 教材精学区: 跳过专项突破+模块搜索
+            record_step("5.听力专项", "done", f"教材精学: {module_name}")
 
         # 6. 选择对应版本年级 (五上/六上等)
         log_msg(f"选择版本: {version_label}")
@@ -1311,22 +1369,24 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
 
         found_unit = False
         if unit_y:
-            # 找该Unit对应的"去练习"按钮 — y和unit_y接近且都在屏内
+            # Unit行的"去练习"按钮固定在该unit文本下方~100px处
+            # 直接找 y 在 (unit_y + 50, unit_y + 150) 范围内的"去练习"
+            btn_y_min = unit_y + 40
+            btn_y_max = unit_y + 160
             for e in elements:
                 t = (e.text or '').strip()
                 if '去练习' in t or '去答题' in t:
                     cy = e.center[1]
-                    # Y范围放宽到2400(屏幕可能更高), 容差放宽到250
-                    if 100 < cy < 2400 and abs(cy - unit_y) < 250:
-                        if e.center[0] > 0:  # 不点(0,0)离屏的
-                            adb.tap(e.center[0], e.center[1])
-                            log_msg(f"  点'去练习' for Unit {unit} at {e.center}")
-                            found_unit = True
-                            break
+                    if btn_y_min < cy < btn_y_max and e.center[0] > 0:
+                        adb.tap(e.center[0], e.center[1])
+                        log_msg(f"  点'去练习' for Unit {unit} at {e.center}")
+                        found_unit = True
+                        break
             if not found_unit:
-                # 兜底: 点Unit文本右侧水平方向 (881常见右边按钮x)
-                log_msg(f"  兜底: 点(881, {unit_y})", "warning")
-                adb.tap(881, unit_y)
+                # 兜底: 直接用固定偏移量点
+                btn_x = 881  # 常见右侧按钮x
+                log_msg(f"  兜底: 点({btn_x}, {unit_y + 99})", "warning")
+                adb.tap(btn_x, unit_y + 99)
                 found_unit = True
         else:
             log_msg(f"  ⚠ 没找到 Unit {unit} 文本", "warning")
@@ -1932,6 +1992,7 @@ def api_upload_list():
     files = []
     for f in sorted(UPLOAD_DIR.glob("*"), key=os.path.getmtime, reverse=True):
         if f.suffix.lower() not in (".docx", ".doc"): continue
+        if "_converted" in f.stem: continue  # 跳过转换生成的临时文件
         files.append({
             "name": f.name,
             "size": f.stat().st_size,
