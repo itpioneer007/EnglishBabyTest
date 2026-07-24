@@ -3,606 +3,553 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>E英语宝模块检测</title>
+<title>E英语宝模块检测 · 审查智能体平台</title>
 <style>
 * { margin:0; padding:0; box-sizing:border-box }
-body { font-family:-apple-system,"Microsoft YaHei",sans-serif; background:#f0f2f5; color:#333; font-size:14px; line-height:1.5 }
-.header { background:#4a6cf7; color:white; padding:14px 20px; display:flex; align-items:center; gap:16px }
-.header h1 { font-size:18px; font-weight:500 }
-.header .sub { font-size:12px; opacity:0.85 }
-.container { max-width:1280px; margin:0 auto; padding:14px; display:grid; grid-template-columns:300px 1fr 320px; gap:14px }
-.card { background:white; border-radius:10px; padding:14px; box-shadow:0 1px 3px rgba(0,0,0,.06) }
-.card-title { font-size:13px; font-weight:500; color:#4a6cf7; margin-bottom:10px; padding-bottom:6px; border-bottom:1px solid #eee; display:flex; justify-content:space-between; align-items:center }
-.card-title .badge { background:#f0f2f5; color:#666; padding:1px 8px; border-radius:10px; font-size:11px; font-weight:400 }
+body { font-family:-apple-system,"Microsoft YaHei","PingFang SC",sans-serif; background:#f1f4f9; color:#1a1a2e; font-size:14px; line-height:1.6 }
 
-/* 状态点 */
-.status-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px }
-.s-pending { background:#d1d5db }
-.s-running { background:#f59e0b; animation:pulse 1s infinite }
-.s-done { background:#22c55e }
-.s-error { background:#ef4444 }
-@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+/* ===== Header ===== */
+.header { background:linear-gradient(135deg,#4a6cf7,#3b5de7); color:white; padding:16px 28px; display:flex; align-items:center; gap:20px; box-shadow:0 2px 12px rgba(74,108,247,.25) }
+.header h1 { font-size:20px; font-weight:600; letter-spacing:.5px }
+.header .sub { font-size:12px; opacity:.9; display:flex; align-items:center; gap:6px }
+.header .tag { background:rgba(255,255,255,.2); padding:2px 12px; border-radius:12px; font-size:11px; margin-left:auto }
+.header .tag.running { background:rgba(239,68,68,.4) }
+.header .tag.idle { background:rgba(34,197,94,.35) }
 
-/* 按钮 */
-.btn { display:inline-flex; align-items:center; justify-content:center; gap:6px; padding:8px 14px; border:none; border-radius:8px; font-size:13px; font-weight:500; cursor:pointer; transition:all .2s }
+/* ===== Layout ===== */
+.container { max-width:1400px; margin:0 auto; padding:16px; display:grid; grid-template-columns:300px 1fr 300px; gap:16px; min-height:calc(100vh - 70px) }
+
+/* ===== Cards ===== */
+.card { background:white; border-radius:12px; padding:16px; box-shadow:0 1px 4px rgba(0,0,0,.06); margin-bottom:14px; border:1px solid #eef0f5 }
+.card-title { font-size:14px; font-weight:600; color:#2d3a6b; margin-bottom:12px; padding-bottom:8px; border-bottom:1px solid #f0f2f6; display:flex; justify-content:space-between; align-items:center; letter-spacing:.3px }
+.card-desc { font-size:11px; color:#94a3b8; margin-top:-8px; margin-bottom:12px; line-height:1.5 }
+.badge { background:#f1f4f9; color:#64748b; padding:2px 10px; border-radius:10px; font-size:11px; font-weight:500 }
+
+/* ===== Buttons ===== */
+.btn { display:inline-flex; align-items:center; justify-content:center; gap:6px; padding:9px 18px; border:none; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; transition:all .2s; letter-spacing:.3px }
 .btn:disabled { opacity:.5; cursor:not-allowed }
-.btn-primary { background:#4a6cf7; color:white }
-.btn-primary:hover:not(:disabled) { background:#3b5de7 }
-.btn-success { background:#22c55e; color:white }
-.btn-warning { background:#f59e0b; color:white }
-.btn-danger { background:#ef4444; color:white }
-.btn-outline { background:transparent; border:1.5px solid #4a6cf7; color:#4a6cf7; padding:6px 12px }
+.btn-primary { background:linear-gradient(135deg,#4a6cf7,#3b5de7); color:white; box-shadow:0 2px 8px rgba(74,108,247,.25) }
+.btn-primary:hover:not(:disabled) { transform:translateY(-1px); box-shadow:0 4px 14px rgba(74,108,247,.35) }
+.btn-success { background:linear-gradient(135deg,#22c55e,#16a34a); color:white }
+.btn-danger { background:linear-gradient(135deg,#ef4444,#dc2626); color:white }
+.btn-outline { background:transparent; border:1.5px solid #4a6cf7; color:#4a6cf7; padding:7px 14px }
 .btn-outline:hover:not(:disabled) { background:#4a6cf7; color:white }
+.btn-sm { padding:5px 12px; font-size:11px; border-radius:6px }
 .btn-row { display:flex; gap:8px }
 .btn-row .btn { flex:1 }
 
-/* === 流程面板 === */
-.flow-step { display:flex; align-items:flex-start; gap:10px; padding:8px 10px; margin-bottom:6px; border-radius:6px; transition:all .2s }
-.flow-step .dot { flex-shrink:0; width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:500; color:white; margin-top:2px }
-.flow-step .body { flex:1; min-width:0 }
-.flow-step .name { font-size:13px; font-weight:500; color:#333; margin-bottom:2px }
-.flow-step .detail { font-size:11px; color:#888; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
-.flow-step.pending { background:#f8fafc }
-.flow-step.pending .dot { background:#d1d5db }
-.flow-step.running { background:#fff7ed; border:1px solid #fed7aa }
-.flow-step.running .dot { background:#f59e0b; box-shadow:0 0 0 4px rgba(245,158,11,.2); animation:pulse 1.5s infinite }
-.flow-step.done { background:#f0fdf4 }
-.flow-step.done .dot { background:#22c55e }
-.flow-step.error { background:#fef2f2; border:1px solid #fecaca }
-.flow-step.error .dot { background:#ef4444 }
+/* ===== Status Dots ===== */
+.dot { display:inline-block; width:10px; height:10px; border-radius:50%; flex-shrink:0 }
+.dot-pending { background:#d1d5db }
+.dot-running { background:#f59e0b; animation:pulse 1s infinite }
+.dot-done { background:#22c55e }
+.dot-error { background:#ef4444 }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
 
-/* === 题目结果卡 === */
-.q-card { background:#fafbfc; border:1px solid #e5e7eb; border-radius:8px; padding:10px; margin-bottom:8px; transition:all .2s }
-.q-card.pending { opacity:.6 }
-.q-card.q-passed { border-left:3px solid #22c55e }
-.q-card.q-failed { border-left:3px solid #ef4444 }
-.q-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px }
-.q-header .left { display:flex; align-items:center; gap:10px }
-.q-num { font-size:15px; font-weight:500; color:#4a6cf7 }
-.q-type { font-size:11px; padding:1px 8px; border-radius:10px; background:#eef2ff; color:#4a6cf7 }
-.q-score { font-size:13px; color:#22c55e; font-weight:500 }
-.q-score.low { color:#f59e0b }
-.q-score.bad { color:#ef4444 }
-.q-ai-label { font-size:11px; padding:2px 8px; border-radius:10px; background:#f0f2f5; color:#888 }
-.q-ai-label.pass { background:#dcfce7; color:#166534 }
-.q-ai-label.fail { background:#fee2e2; color:#991b1b }
-.q-pending-tag { font-size:11px; padding:2px 8px; border-radius:10px; background:#fef3c7; color:#92400e }
-.dims { display:grid; grid-template-columns:repeat(4,1fr); gap:6px; margin-bottom:8px }
-.dim { text-align:center; padding:6px 4px; background:white; border-radius:6px; border:1px solid #e5e7eb; font-size:11px }
-.dim.pass { background:#dcfce7; color:#166534; border-color:#86efac }
-.dim.fail { background:#fee2e2; color:#991b1b; border-color:#fca5a5 }
-.dim.skip { background:#f3f4f6; color:#6b7280 }
-.dim-icon { font-size:14px; margin-bottom:2px }
-.dim-label { color:#666; font-size:10px }
-.q-reasons { font-size:11px; color:#555; padding:6px 8px; background:#f8fafc; border-radius:4px; margin-bottom:8px; line-height:1.5; max-height:60px; overflow-y:auto }
-.human-actions { display:flex; gap:6px; align-items:center }
-.human-actions .note-input { flex:1; padding:4px 8px; border:1px solid #e5e7eb; border-radius:4px; font-size:11px }
-.h-label-tag { font-size:10px; padding:1px 6px; border-radius:8px; background:#fef3c7; color:#92400e; margin-left:6px }
+/* ===== Device Info ===== */
+.device-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px }
+.device-item { background:#f8fafc; border-radius:8px; padding:10px 12px }
+.device-item .label { font-size:11px; color:#94a3b8 }
+.device-item .value { font-size:13px; font-weight:600; color:#1e293b; margin-top:2px; display:flex; align-items:center; gap:6px }
 
-/* 选择器 */
-.version-select, .text-input { width:100%; padding:8px 12px; border:1.5px solid #e2e8f0; border-radius:8px; font-size:13px; background:white }
+/* ===== Controls ===== */
+.param-group { display:flex; gap:8px; margin-bottom:8px }
+.param-group select, .param-group input { flex:1; padding:8px 12px; border:1.5px solid #e2e8f0; border-radius:8px; font-size:13px; background:white; color:#1e293b; outline:none; transition:border .2s }
+.param-group select:focus, .param-group input:focus { border-color:#4a6cf7; box-shadow:0 0 0 3px rgba(74,108,247,.1) }
 
-/* 文件上传 */
-.upload-area { border:2px dashed #d1d5db; border-radius:8px; padding:14px; text-align:center; transition:all .2s; margin-bottom:8px }
-.upload-area.dragover { border-color:#4a6cf7; background:#f0f5ff }
-.upload-area .icon { font-size:28px; color:#4a6cf7; margin-bottom:4px }
-.upload-area .txt { font-size:12px; color:#666; margin-bottom:6px }
+/* ===== Workflow ===== */
+.flow-step { display:flex; align-items:center; gap:10px; padding:7px 10px; margin-bottom:5px; border-radius:8px; transition:all .2s; border-left:3px solid transparent }
+.flow-step .num { width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; color:white; flex-shrink:0 }
+.flow-step .content { flex:1; min-width:0 }
+.flow-step .name { font-size:13px; font-weight:500 }
+.flow-step .detail { font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+.flow-step.pending { background:#f8fafc; border-left-color:#d1d5db }
+.flow-step.pending .num { background:#d1d5db }
+.flow-step.pending .detail { color:#94a3b8 }
+.flow-step.running { background:#fff7ed; border-left-color:#f59e0b }
+.flow-step.running .num { background:#f59e0b; animation:pulse 1.5s infinite }
+.flow-step.running .detail { color:#d97706 }
+.flow-step.done { background:#f0fdf4; border-left-color:#22c55e }
+.flow-step.done .num { background:#22c55e }
+.flow-step.done .detail { color:#166534 }
+.flow-step.error { background:#fef2f2; border-left-color:#ef4444 }
+.flow-step.error .num { background:#ef4444 }
+.flow-step.error .detail { color:#991b1b }
+
+/* ===== Question Cards ===== */
+.q-stats-bar { display:flex; gap:12px; padding:10px 14px; background:#f8fafc; border-radius:8px; margin-bottom:12px; font-size:12px }
+.q-stats-bar .stat { display:flex; align-items:center; gap:6px }
+.q-stats-bar .num { font-weight:700; font-size:16px }
+.q-stats-bar .num.green { color:#22c55e }
+.q-stats-bar .num.red { color:#ef4444 }
+.q-stats-bar .num.blue { color:#4a6cf7 }
+
+.q-card { background:white; border:1px solid #eef0f5; border-radius:10px; margin-bottom:10px; overflow:hidden; transition:all .2s }
+.q-card:hover { box-shadow:0 2px 8px rgba(0,0,0,.06) }
+.q-head { display:flex; align-items:center; gap:10px; padding:10px 14px; background:#fafbfc; border-bottom:1px solid #f0f2f6; cursor:pointer }
+.q-head .qnum { font-size:18px; font-weight:700; color:#4a6cf7; min-width:42px }
+.q-head .qtype { font-size:11px; padding:2px 8px; border-radius:6px; background:#eef2ff; color:#4a6cf7 }
+.q-head .qstatus { margin-left:auto; font-size:11px }
+.q-head .qstatus .tag { padding:2px 8px; border-radius:6px; font-size:11px; font-weight:500 }
+.q-head .qstatus .tag.pass { background:#dcfce7; color:#166534 }
+.q-head .qstatus .tag.fail { background:#fee2e2; color:#991b1b }
+.q-head .qstatus .tag.human-pass { background:#bbf7d0; color:#14532d; margin-left:4px }
+.q-head .qstatus .tag.human-fail { background:#fecaca; color:#7f1d1d; margin-left:4px }
+.q-head .qstatus .tag.pending-label { background:#fef3c7; color:#92400e; margin-left:4px; cursor:pointer }
+
+.q-body { padding:10px 14px }
+.q-dims { display:grid; grid-template-columns:repeat(4,1fr); gap:6px; margin-bottom:8px }
+.q-dim { text-align:center; padding:8px 4px; border-radius:8px; border:1px solid #eef0f5; background:#fafbfc }
+.q-dim .icon { font-size:18px; margin-bottom:2px }
+.q-dim .label { font-size:11px; font-weight:500; color:#64748b }
+.q-dim .score { font-size:11px; margin-top:2px }
+.q-dim.pass { background:#f0fdf4; border-color:#bbf7d0 }
+.q-dim.pass .label { color:#166534 }
+.q-dim.fail { background:#fef2f2; border-color:#fecaca }
+.q-dim.fail .label { color:#991b1b }
+.q-dim.skip { background:#f8fafc; border-color:#f1f5f9 }
+.q-dim.skip .label { color:#94a3b8 }
+
+.q-reasons { font-size:12px; color:#475569; background:#f8fafc; border-radius:6px; padding:8px 12px; margin-bottom:8px; line-height:1.7; max-height:70px; overflow-y:auto }
+.q-reasons b { color:#334155 }
+
+.q-actions { display:flex; gap:6px; align-items:center; flex-wrap:wrap }
+.q-actions .note { flex:1; min-width:100px; padding:6px 10px; border:1px solid #e2e8f0; border-radius:6px; font-size:12px; outline:none; transition:border .2s }
+.q-actions .note:focus { border-color:#4a6cf7 }
+.q-actions .action-label { font-size:11px; color:#94a3b8; margin-right:4px }
+.q-actions .btn-sm { padding:5px 10px; font-size:11px }
+.q-actions .done-tag { font-size:11px; padding:4px 10px; border-radius:6px; background:#fef3c7; color:#92400e; display:flex; align-items:center; gap:4px }
+
+/* ===== Upload Area ===== */
+.upload-area { border:2px dashed #e2e8f0; border-radius:10px; padding:20px; text-align:center; transition:all .2s; background:#f8fafc }
+.upload-area.dragover { border-color:#4a6cf7; background:#eef2ff }
+.upload-area .icon { font-size:32px; color:#4a6cf7; margin-bottom:6px }
+.upload-area .txt { font-size:13px; color:#64748b; margin-bottom:8px }
 .upload-area input[type=file] { display:none }
 
-/* 设备 */
-.device-info .row { display:flex; justify-content:space-between; padding:5px 0; font-size:12px; border-bottom:1px solid #f0f0f0 }
-.device-info .row:last-child { border:none }
-.device-info .key { color:#888 }
-.device-info .value { font-weight:500 }
+/* ===== Screenshot ===== */
+.screenshot-box { background:#f8fafc; border-radius:8px; overflow:hidden; min-height:120px; display:flex; align-items:center; justify-content:center; border:1px solid #eef0f5 }
+.screenshot-box img { max-width:100%; max-height:260px; display:block }
+.screenshot-box .ph { color:#94a3b8; font-size:12px; padding:20px; text-align:center }
 
-/* 日志 */
-.log-container { height:160px; overflow-y:auto; font-size:11px; font-family:monospace; background:#1e293b; color:#e2e8f0; border-radius:6px; padding:8px }
-.log-entry { padding:1px 0; display:flex; gap:6px }
-.log-entry .time { color:#64748b; flex-shrink:0 }
-.log-entry .level { flex-shrink:0; font-weight:500 }
-.log-entry .level.info { color:#60a5fa }
-.log-entry .level.success { color:#4ade80 }
-.log-entry .level.error { color:#f87171 }
-.log-entry .level.warning { color:#fbbf24 }
+/* ===== Log ===== */
+.log-box { height:140px; overflow-y:auto; font-size:11px; font-family:"Cascadia Code","Fira Code",monospace; background:#1e293b; color:#e2e8f0; border-radius:8px; padding:10px }
+.log-entry { padding:1px 0; display:flex; gap:6px; line-height:1.5 }
+.log-entry .t { color:#64748b; flex-shrink:0 }
+.log-entry .lv { flex-shrink:0; font-weight:600 }
+.log-entry .lv.info { color:#60a5fa }
+.log-entry .lv.success { color:#4ade80 }
+.log-entry .lv.error { color:#f87171 }
+.log-entry .lv.warning { color:#fbbf24 }
 
-/* 截图 */
-.screenshot-area { background:#f8fafc; border-radius:6px; overflow:hidden; text-align:center; min-height:80px; display:flex; align-items:center; justify-content:center }
-.screenshot-area img { max-width:100%; max-height:240px }
-.screenshot-area .placeholder { color:#94a3b8; font-size:12px; padding:14px }
+/* ===== Knowledge/AI Stats ===== */
+.info-row { display:flex; justify-content:space-between; padding:6px 0; font-size:12px; border-bottom:1px solid #f1f5f9 }
+.info-row:last-child { border:none }
+.info-row .key { color:#64748b }
+.info-row .val { font-weight:600; color:#1e293b }
+.file-list { font-size:12px; max-height:60px; overflow-y:auto }
+.file-list .item { padding:2px 0; color:#475569; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
 
-@media (max-width:900px) { .container { grid-template-columns:1fr } }
+@media (max-width:1024px) { .container { grid-template-columns:1fr } }
 </style>
 </head>
 <body>
 
 <div class="header">
   <h1>E英语宝模块检测</h1>
-  <span class="sub" id="deviceBadge">设备: —</span>
-  <span class="sub" id="runBadge" style="margin-left:auto">空闲</span>
+  <div class="sub"><span class="dot" id="hDot" style="background:#94a3b8"></span><span id="hDeviceText">检测连接中...</span></div>
+  <span class="tag idle" id="hTaskTag">空闲</span>
 </div>
 
 <div class="container">
 
-  <!-- 左栏: 流程可视化 -->
+  <!-- ===== LEFT COLUMN: CONTROLS + WORKFLOW ===== -->
+  <div>
+    <!-- 设备状态 -->
+    <div class="card">
+      <div class="card-title">📱 设备状态</div>
+      <div class="device-grid" id="deviceGrid">
+        <div class="device-item"><div class="label">连接</div><div class="value"><span class="dot" id="statusDot"></span><span id="statusText">检测中</span></div></div>
+        <div class="device-item"><div class="label">序列号</div><div class="value" id="serialText">—</div></div>
+        <div class="device-item"><div class="label">型号</div><div class="value" id="modelText">—</div></div>
+        <div class="device-item"><div class="label">APP版本</div><div class="value" id="currentVersionText">—</div></div>
+      </div>
+    </div>
+
+    <!-- 检查流程 -->
+    <div class="card">
+      <div class="card-title">
+        <span>⏱ 检查流程</span>
+        <span class="badge" id="flowBadge">等待开始</span>
+      </div>
+      <div class="card-desc">实时显示自动巡检的每一步进度，绿色=完成，橙色=运行中，灰色=等待。</div>
+      <div id="workflowList"></div>
+    </div>
+
+    <!-- 运行控制 -->
+    <div class="card">
+      <div class="card-title">🎮 运行控制</div>
+      <div class="card-desc">选择教材版本、单元和阶段，点击"开始检查"启动自动巡检。</div>
+      <div class="param-group">
+        <select id="inspectVersion"><option>新湘鲁五上</option><option>新湘鲁五下</option><option selected>新湘鲁六上</option><option>新湘鲁六下</option></select>
+      </div>
+      <div class="param-group">
+        <select id="inspectUnit"><option>6</option><option>7</option><option>8</option><option>9</option></select>
+        <select id="inspectStage"><option selected>基础巩固</option><option>综合进阶</option><option>难点突破</option></select>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="runBtn" onclick="startInsp()">▶ 开始检查</button>
+        <button class="btn btn-danger" id="stopBtn" onclick="stopInsp()">⏹ 停止</button>
+      </div>
+    </div>
+
+    <!-- 实时日志 -->
+    <div class="card">
+      <div class="card-title">📋 实时日志 <span class="badge" id="logBadge">0</span></div>
+      <div class="card-desc">后台自动操作的每一步记录，可按颜色区分(蓝=信息，绿=成功，红=错误，黄=警告)。</div>
+      <div class="log-box" id="logBox"><div class="log-entry"><span class="t">--:--:--</span><span class="lv info">等待</span></div></div>
+    </div>
+  </div>
+
+  <!-- ===== MIDDLE COLUMN: QUESTION RESULTS ===== -->
   <div>
     <div class="card">
       <div class="card-title">
-        <span>设备状态</span>
+        <span>🔍 题目检查结果</span>
+        <span class="badge" id="qBadge">待启动</span>
       </div>
-      <div class="device-info" id="deviceInfo">
-        <div class="row"><span class="key">状态</span><span class="value" id="statusText"><span class="status-dot s-pending"></span>检测中</span></div>
-        <div class="row"><span class="key">型号</span><span class="value" id="modelText">—</span></div>
-        <div class="row"><span class="key">序列号</span><span class="value" id="serialText">—</span></div>
-        <div class="row"><span class="key">APP版本</span><span class="value" id="currentVersionText">—</span></div>
+      <div class="card-desc">
+        每道题的AI四维检查结果(题干✅/内容✅/配图✅/作答✅) + 人工标注。
+        点击"通过/不通过"反馈给审查智能体，帮助它学习。
       </div>
-    </div>
-
-    <!-- ===== 流程可视化面板 ===== -->
-    <div class="card">
-      <div class="card-title">
-        <span>检查流程</span>
-        <span class="badge" id="flowProgress">0/8</span>
+      <!-- 统计栏 -->
+      <div class="q-stats-bar" id="qStatsBar" style="display:none">
+        <div class="stat">总题数: <span class="num blue" id="sTotal">0</span></div>
+        <div class="stat">AI通过: <span class="num green" id="sPassed">0</span></div>
+        <div class="stat">AI不通过: <span class="num red" id="sFailed">0</span></div>
+        <div class="stat" style="margin-left:auto">已人工标注: <span class="num blue" id="sLabeled">0</span></div>
       </div>
-      <div id="workflowList">
-        <!-- JS动态填充8个步骤 -->
-      </div>
-      <div style="margin-top:8px;padding-top:8px;border-top:1px solid #f0f0f0">
-        <div style="font-size:12px;color:#888;margin-bottom:6px">运行参数</div>
-        <select class="version-select" id="inspectVersion">
-          <option value="新湘鲁五上">新湘鲁五上</option>
-          <option value="新湘鲁五下">新湘鲁五下</option>
-          <option value="新湘鲁六上" selected>新湘鲁六上</option>
-          <option value="新湘鲁六下">新湘鲁六下</option>
-        </select>
-        <div style="display:flex;gap:6px;margin-top:6px">
-          <select class="version-select" id="inspectUnit" style="flex:1">
-            <option>6</option><option>7</option><option>8</option><option>9</option>
-          </select>
-          <select class="version-select" id="inspectStage" style="flex:2">
-            <option selected>基础巩固</option><option>综合进阶</option><option>难点突破</option>
-          </select>
+      <div id="questionList" style="max-height:760px;overflow-y:auto">
+        <div style="text-align:center;padding:50px 20px;color:#94a3b8">
+          <div style="font-size:40px;margin-bottom:12px">📋</div>
+          <div style="font-size:14px">尚未开始检查</div>
+          <div style="font-size:12px;margin-top:6px">在左侧面板选择版本/Unit/阶段后，点击"▶ 开始检查"</div>
         </div>
-        <div class="btn-row" style="margin-top:8px">
-          <button class="btn btn-primary" id="runBtn" onclick="startListeningInspect()">▶ 开始检查</button>
-          <button class="btn btn-danger" onclick="stopInspect()">⏹ 停止</button>
-        </div>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-title">实时日志 <span class="badge" id="logCount">0</span></div>
-      <div class="log-container" id="logContainer">
-        <div class="log-entry"><span class="time">--:--:--</span><span class="level info">等待开始</span></div>
       </div>
     </div>
   </div>
 
-  <!-- 中栏: 题目检查结果 -->
+  <!-- ===== RIGHT COLUMN: TOOLS + REVIEW ===== -->
   <div>
+    <!-- 脚本上传 -->
     <div class="card">
-      <div class="card-title">
-        <span>题目检查结果</span>
-        <span class="badge" id="qStats">待运行</span>
-      </div>
-      <div id="questionList" style="max-height:680px;overflow-y:auto">
-        <div style="text-align:center;color:#94a3b8;padding:30px 0;font-size:13px">
-          尚未开始检查<br><span style="font-size:11px">点击左上角"▶ 开始检查"</span>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- 右栏: 审查智能体 + 截图 -->
-  <div>
-    <div class="card">
-      <div class="card-title">脚本上传</div>
+      <div class="card-title">📤 脚本上传</div>
+      <div class="card-desc">上传公司提供的DOCX脚本文件，自动解析并导入知识库，供审查智能体核验题目。</div>
       <div class="upload-area" id="dropZone">
         <div class="icon">+</div>
-        <div class="txt">上传 DOCX → 自动入知识库</div>
+        <div class="txt">拖拽或选择 DOCX 文件</div>
         <input type="file" id="fileInput" accept=".docx">
-        <button class="btn btn-outline" style="padding:4px 10px;font-size:12px;width:auto" onclick="document.getElementById('fileInput').click()">选择文件</button>
+        <button class="btn btn-outline btn-sm" onclick="document.getElementById('fileInput').click()">选择文件</button>
       </div>
-      <div id="uploadStatus" style="font-size:11px;color:#888"></div>
-      <div id="uploadedFiles" style="font-size:11px;max-height:80px;overflow-y:auto;margin-top:4px"></div>
+      <div id="uploadStatus" style="font-size:12px;color:#64748b;margin-bottom:6px"></div>
+      <div class="file-list" id="uploadList"></div>
     </div>
 
+    <!-- 知识库 -->
     <div class="card">
-      <div class="card-title">知识库 <span class="badge" id="kbCount">0条</span></div>
-      <div id="kbStatus" style="font-size:11px;color:#888">加载中</div>
+      <div class="card-title">📚 知识库</div>
+      <div class="card-desc">教材知识点仓库，存储词汇、句型、语法。审查时AI会自动查证题目内容是否在教材范围内。</div>
+      <div id="kbContent">
+        <div class="info-row"><span class="key">总知识点</span><span class="val" id="kbTotal">加载中</span></div>
+        <div class="info-row"><span class="key">覆盖年级</span><span class="val" id="kbGrades">—</span></div>
+      </div>
     </div>
 
+    <!-- 审查智能体 -->
     <div class="card">
-      <div class="card-title">审查智能体</div>
-      <select class="version-select" id="reviewDocx" style="margin-bottom:6px"></select>
+      <div class="card-title">🤖 审查智能体</div>
+      <div class="card-desc">选择已上传的脚本文件，指定单元后一键运行批量审查。结果将保存在outputs/目录。</div>
+      <select class="param-group" id="reviewDocx" style="width:100%;margin-bottom:8px"></select>
       <div style="display:flex;gap:6px">
-        <input type="number" id="reviewUnit" class="text-input" value="0" placeholder="Unit (0=全部)" style="flex:1">
-        <button class="btn btn-primary" onclick="runReview()">审查</button>
+        <input type="number" id="reviewUnit" style="flex:1;padding:8px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;outline:none" placeholder="Unit (0=全)">
+        <button class="btn btn-primary btn-sm" onclick="runReview()">审查</button>
       </div>
-      <div id="reviewResult" style="margin-top:8px;font-size:11px;color:#888"></div>
+      <div id="reviewResult" style="margin-top:8px;font-size:12px;color:#64748b"></div>
     </div>
 
+    <!-- 学习状态 -->
     <div class="card">
-      <div class="card-title">智能体学习状态</div>
-      <div id="agentStatus" style="font-size:11px;color:#555;line-height:1.7">
-        <div>反馈样本: <b id="fbTotal">0</b></div>
-        <div>AI准确率: <b id="fbAccuracy">-</b></div>
-        <div>已标注: <b id="fbLabeled">0</b></div>
+      <div class="card-title">📊 智能体学习状态</div>
+      <div class="card-desc">人工标注累积数据：AI判断 vs 人工判定，一致越多AI越准。</div>
+      <div id="agentStats">
+        <div class="info-row"><span class="key">反馈样本</span><span class="val" id="fbTotal">0</span></div>
+        <div class="info-row"><span class="key">AI准确率</span><span class="val" id="fbAccuracy">—</span></div>
+        <div class="info-row"><span class="key">已人工标注</span><span class="val" id="fbLabeled">0</span></div>
       </div>
     </div>
 
+    <!-- 截图 -->
     <div class="card">
-      <div class="card-title">截图预览</div>
-      <div class="screenshot-area" id="screenshotArea">
-        <div class="placeholder">执行操作后显示</div>
-      </div>
+      <div class="card-title">📸 截图预览</div>
+      <div class="card-desc">当前最新一题的APP截图，供肉眼核验。</div>
+      <div class="screenshot-box" id="screenshotArea"><div class="ph">等待巡检截图</div></div>
     </div>
   </div>
 </div>
 
 <script>
 // ============================================================
-// 全局
+// GLOBALS
 // ============================================================
 let POLLING = false;
-let INSPECT_RUNNING = false;
-let POLL_TIMER = null;
-
+let LOG_LAST = 0;
 function $(id) { return document.getElementById(id) }
 
-// ============================================================
-// 流程步骤 (8步对应图片模板)
-// ============================================================
-const WORKFLOW_STEPS = [
-  {key:'0.回到首页',    name:'0. 回到首页'},
-  {key:'1.启动APP',    name:'1. 启动APP'},
-  {key:'1.5关闭教程',  name:'1.5 关闭教程'},
-  {key:'2.关闭广告',    name:'2. 关闭广告'},
-  {key:'3.英语Tab',    name:'3. 英语Tab'},
-  {key:'3.5版本检查',  name:'3.5 版本检查'},
-  {key:'4.专项突破',    name:'4. 进入专项突破'},
-  {key:'5.听力专项',    name:'5. 进入听力专项'},
-  {key:'6.逐题巡检',    name:'6. 逐题巡检'},
-  {key:'7.生成报告',    name:'7. 生成报告'},
+const STEPS = [
+  {k:'0.回到首页', n:'0. 回到首页'},{k:'1.启动APP', n:'1. 启动APP'},
+  {k:'1.5关闭教程', n:'1.5 关闭教程'},{k:'2.关闭广告', n:'2. 关闭广告'},
+  {k:'3.英语Tab', n:'3. 英语Tab'},{k:'3.5版本检查', n:'3.5 版本检查'},
+  {k:'4.专项突破', n:'4. 进入专项突破'},{k:'5.听力专项', n:'5. 进入听力专项'},
+  {k:'6.逐题巡检', n:'6. 逐题巡检'},{k:'7.生成报告', n:'7. 生成报告'}
 ];
 
-function renderWorkflow() {
-  const el = $('workflowList');
-  el.innerHTML = WORKFLOW_STEPS.map((s, i) => `
-    <div class="flow-step pending" id="step_${i}">
-      <div class="dot">${i+1}</div>
-      <div class="body">
-        <div class="name">${s.name}</div>
-        <div class="detail" id="step_${i}_detail">等待</div>
-      </div>
-    </div>
-  `).join('');
+function renderSteps() {
+  $('workflowList').innerHTML = STEPS.map((s,i)=>`
+    <div class="flow-step pending" id="st_${i}">
+      <div class="num">${i+1}</div>
+      <div class="content"><div class="name">${s.n}</div><div class="detail" id="st_${i}_d">等待</div></div>
+    </div>`).join('');
 }
-
-function updateStep(idx, status, detail='') {
-  const step = $('step_' + idx);
-  if (!step) return;
-  step.className = 'flow-step ' + status;
-  const det = $('step_' + idx + '_detail');
-  if (det) det.textContent = detail || (status === 'running' ? '进行中' : status === 'done' ? '完成' : status === 'error' ? '错误' : '等待');
+function updStep(i,st,dt='') {
+  const el=$('st_'+i); if(!el)return;
+  el.className='flow-step '+st;
+  const d=$('st_'+i+'_d');
+  if(d) d.textContent=dt||(st==='running'?'进行中':st==='done'?'完成':st==='error'?'错误':'等待');
 }
 
 // ============================================================
-// 状态轮询
+// POLLING
 // ============================================================
-async function pollState() {
-  if (POLLING) return;
-  POLLING = true;
-  while (true) {
+async function poll() {
+  if(POLLING) return; POLLING=true;
+  while(true) {
     try {
-      // 设备状态
-      const sres = await fetch('/api/status');
-      const sd = await sres.json();
-      updateDevice(sd);
-      INSPECT_RUNNING = sd.task_status.running;
-      $('runBadge').textContent = INSPECT_RUNNING ? '🔴 运行中' : '空闲';
-      $('runBadge').style.color = INSPECT_RUNNING ? '#f87171' : '#4ade80';
+      const s=await(await fetch('/api/status')).json();
+      updateDev(s);
+      const isRun=s.task_status.running;
+      $('hTaskTag').textContent=isRun?'运行中':'空闲';
+      $('hTaskTag').className='tag '+(isRun?'running':'idle');
+      $('runBtn').disabled=isRun;
 
-      // 检查流程状态
-      const fres = await fetch('/api/inspect/state');
-      const fd = await fres.json();
-      updateFlow(fd);
-      updateQuestions(fd);
-      updateScreenshot(fd);
-
-      // 日志
-      pollLog();
+      const f=await(await fetch('/api/inspect/state')).json();
+      updFlow(f); updQ(f); updShot(f);
+      await pollLog();
     } catch(e) { console.warn(e) }
-    await sleep(1500);
+    await new Promise(r=>setTimeout(r,1500));
   }
 }
 
-function updateDevice(d) {
-  const dot = $('statusText').querySelector('.status-dot');
-  dot.className = 'status-dot ' + (d.device_connected ? 's-done' : 's-error');
-  $('statusText').innerHTML = '';
-  $('statusText').appendChild(dot);
-  $('statusText').appendChild(document.createTextNode(d.device_connected ? ' 在线' : ' 离线'));
-  $('serialText').textContent = d.device_serial || '—';
-  $('deviceBadge').textContent = '设备: ' + (d.device_connected ? '✅ 已连接' : '❌ 未连接');
-  if (d.current_version) $('currentVersionText').textContent = d.current_version;
+function updateDev(d) {
+  const on=d.device_connected;
+  $('hDeviceText').textContent=on?'已连接':'离线';
+  $('hDot').style.background=on?'#22c55e':'#ef4444';
+  const dt=$('statusDot'); dt.className='dot '+(on?'dot-done':'dot-error');
+  $('statusText').textContent=on?'在线':'离线';
+  $('serialText').textContent=d.device_serial||'—';
+  $('modelText').textContent=d.model||'—';
+  if(d.current_version) $('currentVersionText').textContent=d.current_version;
 }
 
-function updateFlow(fd) {
-  const steps = fd.workflow_steps || [];
-  let done = 0;
-  steps.forEach((s, i) => {
-    const idx = WORKFLOW_STEPS.findIndex(w => w.key === s.step);
-    if (idx >= 0) {
-      updateStep(idx, s.status, s.detail || '');
-      if (s.status === 'done') done++;
-    }
-  });
-  $('flowProgress').textContent = `${done}/${WORKFLOW_STEPS.length}`;
+function updFlow(f) {
+  const steps=f.workflow_steps||[];
+  let done=0;
+  steps.forEach(s=>{const i=STEPS.findIndex(w=>w.k===s.step);if(i>=0){updStep(i,s.status,s.detail||'');if(s.status==='done')done++;}});
+  $('flowBadge').textContent=done+'/'+STEPS.length;
 }
 
-function updateQuestions(fd) {
-  const questions = fd.questions || {};
-  const ids = Object.keys(questions).sort();
-  const total = ids.length;
-  const labeled = Object.values(questions).filter(q => q.human_label).length;
-  const passed = Object.values(questions).filter(q => q.human_label === '通过').length;
-  const failed = Object.values(questions).filter(q => q.human_label === '不通过').length;
+function updQ(f) {
+  const qs=f.questions||{},ids=Object.keys(qs).sort(),t=ids.length;
+  const lb=Object.values(qs).filter(q=>q.human_label).length;
+  const pa=Object.values(qs).filter(q=>q.human_label==='通过').length;
+  const fa=Object.values(qs).filter(q=>q.human_label==='不通过').length;
+  const aipa=Object.values(qs).filter(q=>q.overall_passed).length;
+  const aifa=t-aipa;
 
-  $('qStats').textContent = total ? `${total}题 · ${passed}通过 · ${failed}不通过` : '待运行';
-  $('fbTotal').textContent = total;
-  $('fbLabeled').textContent = labeled;
+  $('qBadge').textContent=t?t+'题':'待启动';
+  const sb=$('qStatsBar');
+  if(t){sb.style.display='flex';$('sTotal').textContent=t;$('sPassed').textContent=aipa;$('sFailed').textContent=aifa;$('sLabeled').textContent=lb;}
+  else sb.style.display='none';
 
-  if (!total) return;
-  const el = $('questionList');
-  el.innerHTML = ids.map(qid => {
-    const q = questions[qid];
-    const passed = q.overall_passed;
-    return `
-      <div class="q-card ${passed ? 'q-passed' : 'q-failed'}" id="qc_${qid}">
-        <div class="q-header">
-          <div class="left">
-            <span class="q-num">Q${String(q.idx).padStart(2,'0')}</span>
-            <span class="q-type">${q.question_type || '?'}</span>
-            <span class="q-ai-label ${passed ? 'pass' : 'fail'}">AI: ${passed ? '通过' : '不通过'}</span>
-            ${q.human_label ? `<span class="q-ai-label ${q.human_label === '通过' ? 'pass' : 'fail'}">人: ${q.human_label}</span>` : ''}
-          </div>
-          <div>
-            <span class="q-score ${q.overall_score >= 0.8 ? '' : (q.overall_score >= 0.5 ? 'low' : 'bad')}">${q.overall_score}</span>
-          </div>
-        </div>
-        <div class="dims">
-          <div class="dim ${q.ai_stem ? 'pass' : 'fail'}">
-            <div class="dim-icon">${q.ai_stem ? '✅' : '❌'}</div>
-            <div>题干</div>
-          </div>
-          <div class="dim ${q.ai_content ? 'pass' : 'fail'}">
-            <div class="dim-icon">${q.ai_content ? '✅' : '❌'}</div>
-            <div>内容</div>
-          </div>
-          <div class="dim ${q.ai_image ? 'pass' : (q.question_type && q.question_type.includes('图片') ? 'fail' : 'skip')}">
-            <div class="dim-icon">${q.ai_image ? '✅' : (q.question_type && q.question_type.includes('图片') ? '❌' : '⏭')}</div>
-            <div>配图</div>
-          </div>
-          <div class="dim ${q.ai_answer ? 'pass' : 'fail'}">
-            <div class="dim-icon">${q.ai_answer ? '✅' : '❌'}</div>
-            <div>作答</div>
-          </div>
-        </div>
-        <div class="q-reasons">
-          <b>(1)题干:</b> ${q.stem_reason || '-'}<br>
-          <b>(2)内容:</b> ${q.content_reason || '-'}<br>
-          <b>(3)配图:</b> ${q.image_reason || '-'}<br>
-          <b>(4)作答:</b> ${q.answer_reason || '-'}
-        </div>
-        <div class="human-actions">
-          ${q.human_label ? `<span class="h-label-tag">已标注: ${q.human_label} ${q.human_note || ''}</span>` : `
-            <input type="text" class="note-input" id="note_${qid}" placeholder="人工备注(可选)">
-            <button class="btn btn-success" style="padding:4px 8px;font-size:11px" onclick="humanLabel('${qid}', '通过')">✓ 通过</button>
-            <button class="btn btn-danger" style="padding:4px 8px;font-size:11px" onclick="humanLabel('${qid}', '不通过')">✗ 不通过</button>
-          `}
+  $('fbTotal').textContent=t;$('fbLabeled').textContent=lb;
+  const corr=Object.values(qs).filter(q=>q.human_label==='通过'&&q.overall_passed).length
+            +Object.values(qs).filter(q=>q.human_label==='不通过'&&!q.overall_passed).length;
+  $('fbAccuracy').textContent=lb>0?(corr/lb*100).toFixed(0)+'%':'-';
+
+  if(!t) return;
+  $('questionList').innerHTML=ids.map(qid=>{
+    const q=qs[qid],pa=q.overall_passed;
+    return `<div class="q-card">
+      <div class="q-head">
+        <div class="qnum">Q${String(q.idx).padStart(2,'0')}</div>
+        <span class="qtype">${q.question_type||'?'}</span>
+        <div class="qstatus">
+          <span class="tag ${pa?'pass':'fail'}">AI:${pa?'通过':'不通过'}</span>
+          ${q.human_label?`<span class="tag ${q.human_label==='通过'?'human-pass':'human-fail'}">人:${q.human_label}</span>`
+          :`<span class="tag pending-label" onclick="document.getElementById('act_${qid}').scrollIntoView({behavior:'smooth'})">待标注</span>`}
         </div>
       </div>
-    `;
+      <div class="q-body">
+        <div class="q-dims">
+          <div class="q-dim ${q.ai_stem?'pass':'fail'}"><div class="icon">${q.ai_stem?'✅':'❌'}</div><div class="label">题干</div></div>
+          <div class="q-dim ${q.ai_content?'pass':'fail'}"><div class="icon">${q.ai_content?'✅':'❌'}</div><div class="label">内容</div></div>
+          <div class="q-dim ${q.ai_image?'pass':(q.question_type&&q.question_type.includes('图片')?'fail':'skip')}">
+            <div class="icon">${q.ai_image?'✅':(q.question_type&&q.question_type.includes('图片')?'❌':'⏭')}</div><div class="label">配图</div></div>
+          <div class="q-dim ${q.ai_answer?'pass':'fail'}"><div class="icon">${q.ai_answer?'✅':'❌'}</div><div class="label">作答</div></div>
+        </div>
+        <div class="q-reasons">
+          <b>(1)题干:</b> ${q.stem_reason||'-'}<br>
+          <b>(2)内容:</b> ${q.content_reason||'-'}<br>
+          <b>(3)配图:</b> ${q.image_reason||'-'}<br>
+          <b>(4)作答:</b> ${q.answer_reason||'-'}
+        </div>
+        <div class="q-actions" id="act_${qid}">
+          ${q.human_label
+            ? `<span class="done-tag">✅ 已标注: ${q.human_label}${q.human_note?' · '+q.human_note:''}</span>`
+            : `<span class="action-label">人工判断:</span>
+               <input class="note" id="nt_${qid}" placeholder="备注(选填)" onkeydown="if(event.key==='Enter')humanLabel('${qid}','通过')">
+               <button class="btn btn-success btn-sm" onclick="humanLabel('${qid}','通过')">✓ 通过</button>
+               <button class="btn btn-danger btn-sm" onclick="humanLabel('${qid}','不通过')">✗ 不通过</button>`
+          }
+        </div>
+      </div>
+    </div>`;
   }).join('');
 }
 
-function updateScreenshot(fd) {
-  const questions = fd.questions || {};
-  const ids = Object.keys(questions).sort();
-  if (!ids.length) return;
-  const latest = ids[ids.length - 1];
-  const q = questions[latest];
-  if (q.screenshot) {
-    const area = $('screenshotArea');
-    area.innerHTML = `<img src="/api/screenshot/${q.screenshot}" onerror="this.parentElement.innerHTML='<div class=placeholder>${latest}</div>'">`;
-  }
+function updShot(f) {
+  const qs=f.questions||{},ids=Object.keys(qs).sort();
+  if(!ids.length) return;
+  const q=qs[ids[ids.length-1]];
+  if(q.screenshot) $('screenshotArea').innerHTML=`<img src="/api/screenshot/${q.screenshot}" onerror="this.parentElement.innerHTML='<div class=ph>${q.screenshot}</div>'">`;
 }
 
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
-
 // ============================================================
-// 日志
+// LOG
 // ============================================================
-let lastLogCount = 0;
 async function pollLog() {
   try {
-    const res = await fetch('/api/log');
-    const log = await res.json();
-    $('logCount').textContent = log.length;
-    if (log.length > lastLogCount) {
-      const container = $('logContainer');
-      for (let i = lastLogCount; i < log.length; i++) {
-        const entry = log[i];
-        const div = document.createElement('div');
-        div.className = 'log-entry';
-        div.innerHTML = `<span class="time">${entry.time}</span><span class="level ${entry.level}">${entry.level.toUpperCase()}</span><span>${entry.msg}</span>`;
-        container.appendChild(div);
+    const l=await(await fetch('/api/log')).json();
+    $('logBadge').textContent=l.length;
+    if(l.length>LOG_LAST){
+      const b=$('logBox');
+      for(let i=LOG_LAST;i<l.length;i++){
+        const e=l[i],d=document.createElement('div');
+        d.className='log-entry';
+        d.innerHTML=`<span class="t">${e.time}</span><span class="lv ${e.level}">${e.level.toUpperCase()}</span><span>${e.msg}</span>`;
+        b.appendChild(d);
       }
-      container.scrollTop = container.scrollHeight;
-      lastLogCount = log.length;
+      b.scrollTop=b.scrollHeight;LOG_LAST=l.length;
     }
-  } catch(e) {}
+  }catch(e){}
 }
 
-function addLog(level, msg) {
-  const container = $('logContainer');
-  const now = new Date().toTimeString().slice(0,8);
-  const div = document.createElement('div');
-  div.className = 'log-entry';
-  div.innerHTML = `<span class="time">${now}</span><span class="level ${level}">${level.toUpperCase()}</span><span>${msg}</span>`;
-  container.appendChild(div);
-  container.scrollTop = container.scrollHeight;
+function addLog(level,msg){
+  const b=$('logBox'),d=document.createElement('div');
+  d.className='log-entry';
+  d.innerHTML=`<span class="t">${new Date().toTimeString().slice(0,8)}</span><span class="lv ${level}">${level.toUpperCase()}</span><span>${msg}</span>`;
+  b.appendChild(d);b.scrollTop=b.scrollHeight;
 }
 
 // ============================================================
-// 操作
+// ACTIONS
 // ============================================================
-async function startListeningInspect() {
-  const version = $('inspectVersion').value;
-  const unit = $('inspectUnit').value;
-  const stage = $('inspectStage').value;
-  const sel = $('reviewDocx');
-  const docx = sel ? sel.value : '';
-
-  $('runBtn').disabled = true;
-  addLog('info', `🚀 启动: ${version} U${unit} ${stage}`);
-
-  try {
-    const res = await fetch('/api/inspect/listening-run', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({version, unit: parseInt(unit), stage, docx})
-    });
-    const data = await res.json();
-    if (data.error) { alert(data.error); $('runBtn').disabled = false; return }
-    addLog('success', `任务已启动: ${data.task || data.status}`);
-    INSPECT_RUNNING = true;
-    // 重置流程步骤显示
-    WORKFLOW_STEPS.forEach((s, i) => updateStep(i, 'pending', ''));
-  } catch(e) { alert('启动失败: ' + e); $('runBtn').disabled = false; }
+async function startInsp() {
+  const v=$('inspectVersion').value,u=$('inspectUnit').value,s=$('inspectStage').value;
+  const sel=$('reviewDocx'),docx=sel?sel.value:'';
+  $('runBtn').disabled=true;addLog('info',`启动: ${v} U${u} ${s}`);
+  try{
+    const r=await(await fetch('/api/inspect/listening-run',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({version:v,unit:parseInt(u),stage:s,docx})})).json();
+    if(r.error){alert(r.error);$('runBtn').disabled=false;return;}
+    addLog('success','任务已启动');STEPS.forEach((_,i)=>updStep(i,'pending',''));
+  }catch(e){alert('失败:'+e);$('runBtn').disabled=false;}
 }
 
-async function stopInspect() {
-  try {
-    await fetch('/api/inspect/stop', {method: 'POST'});
-    addLog('warning', '⏹ 停止信号已发送');
-  } catch(e) {}
+async function stopInsp() {
+  try{await fetch('/api/inspect/stop',{method:'POST'});addLog('warning','⏹ 停止信号已发送');}catch(e){}
 }
 
-async function humanLabel(qid, label) {
-  const noteEl = $('note_' + qid);
-  const note = noteEl ? noteEl.value : '';
-  try {
-    const res = await fetch('/api/inspect/human-label', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({qid, label, note})
-    });
-    const data = await res.json();
-    if (data.success) {
-      addLog(label === '通过' ? 'success' : 'warning', `Q${qid} 标注: ${label}`);
-      // 触发一次轮询以更新UI
-      const fres = await fetch('/api/inspect/state');
-      const fd = await fres.json();
-      updateQuestions(fd);
-      updateAgentStatus();
-    }
-  } catch(e) { addLog('error', '标注失败: ' + e) }
+async function humanLabel(qid,label) {
+  const n=$('nt_'+qid);const note=n?n.value:'';
+  try{
+    const r=await(await fetch('/api/inspect/human-label',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({qid,label,note})})).json();
+    if(r.success){addLog(label==='通过'?'success':'warning',`${qid}标注:${label}`);
+      const f=await(await fetch('/api/inspect/state')).json();updQ(f);}
+  }catch(e){addLog('error','标注失败:'+e);}
 }
 
 async function runReview() {
-  const sel = $('reviewDocx');
-  const docx = sel ? sel.value : '';
-  const unit = parseInt($('reviewUnit')?.value || '0');
-  $('reviewResult').innerHTML = '⏳ 审查中, 每张约5-30秒...';
-  try {
-    const res = await fetch('/api/review/run', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({docx, unit, stage: '基础巩固'})
-    });
-    const data = await res.json();
-    if (data.error) { $('reviewResult').innerHTML = `<span style="color:red">❌ ${data.error}</span>`; return; }
-    $('reviewResult').innerHTML = `✅ 完成: ${data.total}题, 通过${data.passed} (${data.avg_score})`;
-  } catch(e) { $('reviewResult').innerHTML = `<span style="color:red">❌ ${e}</span>`; }
+  const d=$('reviewDocx').value,u=parseInt($('reviewUnit')?.value||'0');
+  $('reviewResult').innerHTML='⏳ 审查中...';
+  try{
+    const r=await(await fetch('/api/review/run',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({docx:d,unit:u,stage:'基础巩固'})})).json();
+    if(r.error){$('reviewResult').innerHTML=`<span style="color:red">❌ ${r.error}</span>`;return;}
+    $('reviewResult').innerHTML=`✅ ${r.total}题,通过${r.passed}(${r.avg_score})`;
+  }catch(e){$('reviewResult').innerHTML=`<span style="color:red">❌ ${e}</span>`;}
 }
 
 // ============================================================
-// 上传 + 知识库
+// UPLOAD + KB
 // ============================================================
-async function uploadFile(file) {
-  const form = new FormData();
-  form.append('file', file);
-  $('uploadStatus').textContent = `上传中: ${file.name}`;
-  $('uploadStatus').style.color = '#888';
-  try {
-    const res = await fetch('/api/upload-docx', {method:'POST', body: form});
-    const data = await res.json();
-    if (data.error) { $('uploadStatus').textContent = `❌ ${data.error}`; $('uploadStatus').style.color = 'red'; return; }
-    $('uploadStatus').innerHTML = `✅ ${data.message}`;
-    $('uploadStatus').style.color = 'green';
-    loadUploadedFiles();
-    loadKBStatus();
-    loadAgentStatus();
-  } catch(e) { $('uploadStatus').textContent = `❌ ${e}`; }
+$('fileInput').addEventListener('change',e=>up(e.target.files[0]));
+const dz=$('dropZone');
+dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('dragover')});
+dz.addEventListener('dragleave',e=>dz.classList.remove('dragover'));
+dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('dragover');if(e.dataTransfer.files.length)up(e.dataTransfer.files[0])});
+
+async function up(f) {
+  if(!f) return;
+  const fd=new FormData();fd.append('file',f);
+  $('uploadStatus').textContent=`⏳ 上传 ${f.name}`;
+  try{
+    const r=await(await fetch('/api/upload-docx',{method:'POST',body:fd})).json();
+    if(r.error){$('uploadStatus').innerHTML=`<span style="color:red">❌ ${r.error}</span>`;return;}
+    $('uploadStatus').innerHTML=`<span style="color:green">✅ ${r.message}</span>`;
+    loadUL();loadKB();
+  }catch(e){$('uploadStatus').innerHTML=`<span style="color:red">❌ ${e}</span>`;}
 }
 
-$('fileInput').addEventListener('change', e => uploadFile(e.target.files[0]));
-
-const dropZone = $('dropZone');
-dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
-dropZone.addEventListener('dragleave', e => dropZone.classList.remove('dragover'));
-dropZone.addEventListener('drop', e => {
-  e.preventDefault(); dropZone.classList.remove('dragover');
-  if (e.dataTransfer.files.length) uploadFile(e.dataTransfer.files[0]);
-});
-
-async function loadUploadedFiles() {
-  const res = await fetch('/api/upload/list');
-  const data = await res.json();
-  const sel = $('reviewDocx');
-  if (data.files && data.files.length) {
-    $('uploadedFiles').innerHTML = data.files.map(f => `<div>📄 ${f.name}</div>`).join('');
-    sel.innerHTML = data.files.map(f => `<option value="${f.name}">${f.name}</option>`).join('');
+async function loadUL() {
+  const d=await(await fetch('/api/upload/list')).json(),sel=$('reviewDocx');
+  if(d.files&&d.files.length){
+    $('uploadList').innerHTML=d.files.map(f=>`<div class="item">📄 ${f.name}</div>`).join('');
+    sel.innerHTML=d.files.map(f=>`<option>${f.name}</option>`).join('');
   } else {
-    $('uploadedFiles').innerHTML = '<div style="color:#888">暂无文件</div>';
+    $('uploadList').innerHTML='<div style="color:#94a3b8">暂无文件</div>';
   }
 }
 
-async function loadKBStatus() {
-  try {
-    const res = await fetch('/api/knowledge/status');
-    const d = await res.json();
-    if (d.total_entries > 0) {
-      $('kbCount').textContent = `${d.total_entries}条`;
-      $('kbStatus').innerHTML = `✅ ${d.total_entries}条<br><span style="color:#888">${d.grades.join(', ')}</span>`;
+async function loadKB() {
+  try{
+    const d=await(await fetch('/api/knowledge/status')).json();
+    if(d.total_entries>0){
+      $('kbTotal').textContent=d.total_entries+'条';
+      $('kbGrades').textContent=d.grades.join(', ');
     } else {
-      $('kbStatus').innerHTML = '⚠ 空, 请上传';
+      $('kbTotal').textContent='空';
     }
-  } catch(e) {}
-}
-
-async function loadAgentStatus() {
-  try {
-    const res = await fetch('/api/review/results');
-    // 顺便获取反馈统计
-    // (简化处理, 直接从已记录的标注统计)
-    const state = await fetch('/api/inspect/state').then(r=>r.json());
-    const questions = state.questions || {};
-    const total = Object.keys(questions).length;
-    const labeled = Object.values(questions).filter(q => q.human_label).length;
-    const correct = Object.values(questions).filter(q => q.human_label === '通过' && q.overall_passed).length
-                  + Object.values(questions).filter(q => q.human_label === '不通过' && !q.overall_passed).length;
-    $('fbTotal').textContent = total;
-    $('fbLabeled').textContent = labeled;
-    $('fbAccuracy').textContent = labeled > 0 ? `${(correct/labeled*100).toFixed(0)}%` : '-';
-  } catch(e) {}
+  }catch(e){}
 }
 
 // ============================================================
-// 初始化
+// INIT
 // ============================================================
-renderWorkflow();
-loadUploadedFiles();
-loadKBStatus();
-pollState();  // 持续轮询所有状态
+renderSteps();loadUL();loadKB();poll();
 </script>
 </body>
 </html>
