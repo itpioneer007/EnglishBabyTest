@@ -2080,6 +2080,141 @@ def api_review_export():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/report/teacher")
+def api_report_teacher():
+    """生成教师可读的可视化HTML报告"""
+    from datetime import datetime
+
+    st = _inspection_state
+    qs = st.get("questions", {})
+
+    total = len(qs)
+    passed = sum(1 for q in qs.values() if q.get("overall_passed"))
+    labeled = sum(1 for q in qs.values() if q.get("human_label"))
+    acc = 0
+    if labeled > 0:
+        corr = sum(1 for q in qs.values()
+                   if q.get("human_label") == "通过" and q.get("overall_passed")
+                   or q.get("human_label") == "不通过" and not q.get("overall_passed"))
+        acc = int(corr / labeled * 100)
+
+    # 构建HTML
+    questions_html = ""
+    for qid in sorted(qs.keys(), key=lambda x: int(re.findall(r'Q(\d+)', x)[0]) if re.findall(r'Q(\d+)', x) else 0):
+        q = qs[qid]
+        dims = [
+            ("题干", q.get("ai_stem"), q.get("stem_reason", "")),
+            ("内容", q.get("ai_content"), q.get("content_reason", "")),
+            ("配图", q.get("ai_image"), q.get("image_reason", "")),
+            ("作答", q.get("ai_answer"), q.get("answer_reason", "")),
+        ]
+        dim_html = "".join(
+            f'<div class="dim {"pass" if p else "fail"}">'
+            f'<div class="dim-icon">{ "✅" if p else "❌" }</div>'
+            f'<div class="dim-label">{n}</div>'
+            f'<div class="dim-reason">{r[:60] if r else "-"}</div>'
+            f'</div>'
+            for n, p, r in dims
+        )
+        hl = q.get("human_label", "")
+        hl_html = f'<span class="hl {"hl-pass" if hl=="通过" else "hl-fail"}">人工: {hl}</span>' if hl else '<span class="hl hl-pending">待标注</span>'
+        shot = q.get("screenshot", "")
+        shot_html = f'<img src="/api/screenshot/{shot}" onclick="window.open(this.src)" style="cursor:pointer">' if shot else '<div class="no-shot">无截图</div>'
+        questions_html += f'''
+        <div class="q-card">
+            <div class="q-hdr">
+                <span class="q-id">Q{str(q.get("idx","?")).zfill(2)}</span>
+                <span class="q-type">{q.get("question_type","?")}</span>
+                <span class="q-ans">脚本答案: {q.get("script_answer","-")}</span>
+                {hl_html}
+                <span class="q-ovr {"ovr-pass" if q.get("overall_passed") else "ovr-fail"}">{"通过" if q.get("overall_passed") else "不通过"} ({q.get("overall_score",0):.2f})</span>
+            </div>
+            <div class="q-bdy">
+                <div class="q-info">
+                    <div class="info-line"><b>题干:</b> {q.get("stem","-")[:80]}</div>
+                    <div class="info-line"><b>录音:</b> {q.get("recording","-")[:60]}</div>
+                    <div class="info-line"><b>答案:</b> {q.get("script_answer","-")}</div>
+                    {f'<div class="info-line kb"><b>知识库:</b> {q.get("knowledge_check","")[:80]}</div>' if q.get("knowledge_check") else ""}
+                </div>
+                <div class="q-shot">{shot_html}</div>
+            </div>
+            <div class="q-dims">{dim_html}</div>
+        </div>'''
+
+    docx_name = st.get("docx", st.get("version", "未知"))
+    version = st.get("version", "未知")
+    unit = st.get("unit", "?")
+    stage = st.get("stage", "?")
+
+    html = f'''<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>审查报告</title>
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{font-family:"Microsoft YaHei","PingFang SC",sans-serif;background:#f0f2f5;color:#1e293b;padding:20px;font-size:15px;line-height:1.8}}
+.hdr{{background:linear-gradient(135deg,#4a6cf7,#2952e8);color:#fff;border-radius:14px;padding:24px 32px;margin-bottom:20px}}
+.hdr h1{{font-size:24px}}
+.hdr .meta{{display:flex;gap:30px;margin-top:12px;font-size:14px;opacity:.9}}
+.stats{{display:flex;gap:16px;padding:16px 20px;background:#fff;border-radius:12px;box-shadow:0 1px 6px rgba(0,0,0,.06);margin-bottom:20px;flex-wrap:wrap}}
+.stat{{display:flex;align-items:center;gap:8px;font-size:15px}}
+.stat .n{{font-weight:700;font-size:22px}}
+.stat .n.g{{color:#16a34a}}
+.stat .n.r{{color:#dc2626}}
+.stat .n.b{{color:#4a6cf7}}
+.q-card{{background:#fff;border-radius:12px;margin-bottom:12px;border:1px solid #eef0f5;overflow:hidden}}
+.q-hdr{{display:flex;align-items:center;gap:12px;padding:10px 16px;background:#fafbfc;border-bottom:1px solid #f0f2f6;flex-wrap:wrap}}
+.q-id{{font-size:20px;font-weight:700;color:#4a6cf7;min-width:40px}}
+.q-type{{font-size:12px;padding:2px 10px;border-radius:6px;background:#eef2ff;color:#4a6cf7}}
+.q-ans{{font-size:12px;color:#64748b}}
+.q-ovr{{margin-left:auto;font-size:12px;padding:2px 10px;border-radius:6px;font-weight:600}}
+.ovr-pass{{background:#dcfce7;color:#166534}}
+.ovr-fail{{background:#fee2e2;color:#991b1b}}
+.hl{{font-size:12px;padding:2px 10px;border-radius:6px}}
+.hl-pass{{background:#bbf7d0;color:#14532d}}
+.hl-fail{{background:#fecaca;color:#7f1d1d}}
+.hl-pending{{background:#fef3c7;color:#92400e}}
+.q-bdy{{display:grid;grid-template-columns:1fr 180px;gap:14px;padding:12px 16px}}
+.q-info .info-line{{font-size:14px;padding:2px 0;color:#475569}}
+.q-info .info-line b{{color:#334155}}
+.q-info .kb{{color:#6b7280;font-size:12px;font-style:italic}}
+.q-shot img{{width:100%;border-radius:8px;border:1px solid #eef0f5;max-height:160px;object-fit:contain;background:#f8fafc}}
+.no-shot{{height:100px;display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:12px;background:#f8fafc;border-radius:8px}}
+.q-dims{{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;padding:0 16px 12px}}
+.dim{{text-align:center;padding:8px;border-radius:8px;border:1px solid #eef0f5;background:#fafbfc}}
+.dim.pass{{background:#f0fdf4;border-color:#bbf7d0}}
+.dim.fail{{background:#fef2f2;border-color:#fecaca}}
+.dim-icon{{font-size:20px}}
+.dim-label{{font-size:13px;font-weight:600;color:#64748b}}
+.dim-reason{{font-size:11px;color:#94a3b8;margin-top:2px;word-break:break-all}}
+.actions{{text-align:center;margin:20px 0}}
+.actions button{{padding:10px 24px;border:none;border-radius:8px;background:#4a6cf7;color:#fff;font-size:15px;cursor:pointer}}
+.actions button:hover{{background:#2952e8}}
+@media print{{.actions{{display:none}} .q-card{{break-inside:avoid}}}}
+</style></head>
+<body>
+<div class="hdr">
+    <h1>试题审查报告</h1>
+    <div class="meta">
+        <span>脚本: {docx_name}</span>
+        <span>版本: {version}</span>
+        <span>Unit {unit} · {stage}</span>
+        <span>{datetime.now().strftime("%Y-%m-%d %H:%M")}</span>
+    </div>
+</div>
+<div class="stats">
+    <div class="stat">总题数: <span class="n b">{total}</span></div>
+    <div class="stat">AI通过: <span class="n g">{passed}</span></div>
+    <div class="stat">AI不通过: <span class="n r">{total - passed}</span></div>
+    <div class="stat">已人工标注: <span class="n b">{labeled}</span></div>
+    <div class="stat">人机一致率: <span class="n g">{acc}%</span></div>
+</div>
+{questions_html}
+<div class="actions"><button onclick="window.print()">打印 / 保存为PDF</button></div>
+</body></html>'''
+
+    return Response(html, mimetype="text/html")
+
+
 # ============================================================
 # 启动
 # ============================================================

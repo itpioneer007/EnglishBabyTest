@@ -24,10 +24,24 @@ class ImageBank:
     DEFAULT_BASE = r"D:\压缩包存储\听力专项新湘鲁六上U6-9"
 
     def __init__(self, base_dir: str = None):
-        self.base_dir = Path(base_dir or self.DEFAULT_BASE)
-        # {(unit, keyword_lower): [path, ...]}
+        # 优先级: 传参 > config.yaml > DEFAULT_BASE
+        self.base_dir = None
+        if base_dir:
+            self.base_dir = Path(base_dir)
+        else:
+            try:
+                cfg_path = Path(__file__).parent.parent / "config.yaml"
+                if cfg_path.exists():
+                    import yaml
+                    cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+                    d = cfg.get("image_dir", "")
+                    if d:
+                        self.base_dir = Path(d)
+            except Exception:
+                pass
+        if not self.base_dir:
+            self.base_dir = Path(self.DEFAULT_BASE)
         self.index: dict = {}
-        # English keyword → list of image paths (built from KB)
         self.en_index: dict = {}
         self._loaded = False
 
