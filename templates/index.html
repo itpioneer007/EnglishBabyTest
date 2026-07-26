@@ -301,6 +301,12 @@ body { font-family:-apple-system,"Microsoft YaHei","PingFang SC",sans-serif; bac
         </select>
       </div>
 
+      <span class="form-label">📄 对照脚本 <span style="font-weight:400;color:#ef4444;font-size:12px">* 需先在右侧上传</span></span>
+      <span class="form-hint">审查时会用该脚本的答案核验APP题目</span>
+      <div class="input-group">
+        <select id="inspectDocx" style="width:100%"></select>
+      </div>
+
       <div class="btn-row">
         <button class="btn btn-primary" id="runBtn" onclick="startInsp()">▶ 开始检查</button>
         <button class="btn btn-danger" id="stopBtn" onclick="stopInsp()">⏹ 停止</button>
@@ -602,15 +608,17 @@ function addLog(level,msg){
 // ============================================================
 async function startInsp() {
   const v=$('inspectVersion').value,u=$('inspectUnit').value,s=$('inspectStage').value;
+  // 自动带入选中的脚本文件
+  const docx=$('inspectDocx')?.value||'';
   $('runBtn').disabled=true;
   // 清空旧日志和题目结果
   $('logBox').innerHTML=''; LOG_LAST=0;
   $('questionList').innerHTML='<div style="text-align:center;padding:60px 20px;color:#94a3b8"><div style="font-size:48px;margin-bottom:14px">📋</div><div style="font-size:17px;font-weight:500;color:#64748b">正在启动检查...</div></div>';
-  addLog('info',`启动: ${v} U${u} ${s}`);
+  addLog('info',`启动: ${v} U${u} ${s} 脚本:${docx||'自动'}`);
   try{
     const r=await(await fetch('/api/inspect/listening-run',{method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({version:v,unit:parseInt(u),stage:s})})).json();
+      body:JSON.stringify({version:v,unit:parseInt(u),stage:s,docx})})).json();
     if(r.error){alert(r.error);$('runBtn').disabled=false;return;}
     addLog('success','✅ 任务已启动');STEPS.forEach((_,i)=>updStep(i,'pending',''));
   }catch(e){alert('失败:'+e);$('runBtn').disabled=false;}
@@ -665,13 +673,19 @@ async function up(f) {
 }
 
 async function loadUL() {
-  const d=await(await fetch('/api/upload/list')).json(),sel=$('reviewDocx');
+  const d=await(await fetch('/api/upload/list')).json();
+  const opts = d.files && d.files.length
+    ? d.files.map(f=>`<option>${f.name}</option>`).join('')
+    : '<option>— 尚未上传 —</option>';
+  // 更新三个下拉框
+  ['reviewDocx','inspectDocx'].forEach(id => {
+    const sel=document.getElementById(id);
+    if(sel) sel.innerHTML=opts;
+  });
   if(d.files&&d.files.length){
     $('uploadList').innerHTML=d.files.map(f=>`<div class="item">${f.name} (${(f.size/1024).toFixed(0)}KB)</div>`).join('');
-    sel.innerHTML=d.files.map(f=>`<option>${f.name}</option>`).join('');
   } else {
     $('uploadList').innerHTML='<div style="color:#94a3b8;font-size:14px">暂无已上传的脚本文件</div>';
-    sel.innerHTML='<option>— 尚未上传 —</option>';
   }
 }
 
