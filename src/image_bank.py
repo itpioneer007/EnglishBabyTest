@@ -21,49 +21,55 @@ class ImageBank:
     索引方式: 中文文件名 + 知识库英文词汇(自动关联)
     """
 
-    DEFAULT_BASE = r"D:\压缩包存储\听力专项新湘鲁六上U6-9"
+    DEFAULT_BASE = r"D:\压缩包存储"
 
-    def __init__(self, base_dir: str = None):
+    def __init__(self, base_dirs: list = None):
         # 优先级: 传参 > config.yaml > DEFAULT_BASE
-        self.base_dir = None
-        if base_dir:
-            self.base_dir = Path(base_dir)
+        self.base_dirs = []
+        if base_dirs:
+            self.base_dirs = [Path(d) for d in (base_dirs if isinstance(base_dirs, list) else [base_dirs])]
         else:
             try:
                 cfg_path = Path(__file__).parent.parent / "config.yaml"
                 if cfg_path.exists():
                     import yaml
                     cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
-                    d = cfg.get("image_dir", "")
-                    if d:
-                        self.base_dir = Path(d)
+                    d = cfg.get("image_dir", [])
+                    if isinstance(d, str):
+                        self.base_dirs = [Path(d)]
+                    elif isinstance(d, list):
+                        self.base_dirs = [Path(x) for x in d]
             except Exception:
                 pass
-        if not self.base_dir:
-            self.base_dir = Path(self.DEFAULT_BASE)
+        # 如果都没配, 用默认值并在DEFAULT_BASE下找 U*图片/ 目录
+        if not self.base_dirs:
+            self.base_dirs = [Path(self.DEFAULT_BASE)]
         self.index: dict = {}
-        self.en_index: dict = {}
         self._loaded = False
 
     def load(self, unit: int = None):
-        """加载指定单元的图片, 自动关联知识库的英文词汇"""
-        if not self.base_dir.exists():
-            print(f"[ImageBank] 参考图目录不存在: {self.base_dir}")
+        """加载所有目录中指定单元的图片"""
+        dirs_found = []
+        for base_dir in self.base_dirs:
+            if not base_dir.exists():
+                print(f"[ImageBank] 目录不存在: {base_dir}")
+                continue
+            if unit:
+                dirs_found.extend(base_dir.glob(f"U{unit}图片*"))
+            else:
+                dirs_found.extend(base_dir.glob("U*图片*"))
+
+        if not dirs_found:
+            print(f"[ImageBank] 在 {[str(d) for d in self.base_dirs]} 下未找到 U*图片* 目录")
             return
 
-        if unit:
-            dirs = [self.base_dir / f"U{unit}图片"]
-        else:
-            dirs = list(self.base_dir.glob("U*图片*"))
-
-        for d in dirs:
+        for d in sorted(set(dirs_found)):
             if not d.exists():
                 continue
             m = re.search(r'U(\d+)', d.name)
             if not m:
                 continue
             u = int(m.group(1))
-
             for img_path in sorted(d.iterdir()):
                 if img_path.suffix.lower() not in ('.png', '.jpg', '.jpeg', '.gif', '.bmp'):
                     continue
@@ -85,41 +91,8 @@ class ImageBank:
         print(f"[ImageBank] 加载 {len(self.index)} 条索引, {len(all_paths)} 张图片")
 
     def _build_en_index(self, unit: int = None):
-        """
-        构建英文→图片文件名映射
-        
-        遍历知识库中指定单元的所有英文词汇, 
-        如果该英文词的中文含义匹配了图片文件名, 就建立关联
-        """
-        try:
-            from src.knowledge_base import KnowledgeBase
-            kb = KnowledgeBase()
-            if not kb.data:
-                return
-
-            for version_key, info in kb.data.items():
-                for unit_key, u_data in info.get("units", {}).items():
-                    u = int(unit_key)
-                    if unit and u != unit:
-                        continue
-                    for v in u_data.get("vocab", []):
-                        en_word = v.lower().strip()
-                        if not en_word or len(en_word) < 2:
-                            continue
-                        # 检查这个英文词是否与任何图片文件名匹配
-                        # 匹配方式：在图片的中文文件名中搜索这个英文词
-                        # 实际上不行, 因为文件名是中文. 
-                        # 换一种方式: 遍历所有图片, 对每个图片的中文名, 找对应的英文
-                        # 更简单: 用现有索引的反向匹配
-                        for (iu, ikw), paths in self.index.items():
-                            if unit and iu != unit:
-                                continue
-                            # 检查中文关键词的英文翻译是否等于 en_word
-                            # 我们不知道中文→英文翻译, 但可以用单元号作为约束:
-                            # 同一单元内, 图片数量≈英语词汇数量
-                            pass  # 交叉匹配太复杂, 改用下面的直接方法
-        except Exception as e:
-            print(f"[ImageBank] 英文索引构建失败: {e}")
+        """移除 — 改用 _english_to_chinese 启发式匹配"""
+        pass
 
     def _add_index(self, unit: int, keyword: str, path: str):
         key = (unit, keyword)
