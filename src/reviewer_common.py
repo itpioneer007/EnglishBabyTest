@@ -322,26 +322,33 @@ class LLMClient:
             vision_base_url=config.get("vision_base_url", ""),
         )
 
-    def ask(self, prompt: str, image_path: str = None) -> str:
+    def ask(self, prompt: str, image_path: str = None, image_paths: list = None) -> str:
         """
         智能路由：
           - 无图片 → 主模型 (DeepSeek)
           - 有图片 + 有视觉模型 → 视觉模型 (qwen3.7-plus)
           - 有图片 + 无视觉模型 → 主模型 (OCR 降级)
+          
+        参数:
+          prompt: 提示词
+          image_path: 单张图片路径 (兼容)
+          image_paths: 多张图片路径列表 (优先于 image_path)
         """
-        if image_path and Path(image_path).exists() and self.vision_model:
+        paths = image_paths if image_paths else ([image_path] if image_path else None)
+
+        if paths and self.vision_model:
             # 有视觉模型：直接发图
             try:
-                return self._call_api(prompt, image_path,
+                return self._call_api(prompt, paths,
                     model=self.vision_model,
                     base_url=self.vision_base_url or self.base_url,
                     api_key=self.vision_api_key)
             except Exception as e:
-                return f"[视觉模型失败: {e}] → 降级为纯文本分析\n{self._call_api(prompt, image_path=None)}"
+                return f"[视觉模型失败: {e}] → 降级为纯文本分析\n{self._call_api(prompt, image_paths=None)}"
 
-        if image_path and Path(image_path).exists():
+        if paths:
             # 无视觉模型：OCR 降级
-            return self._ask_with_ocr(prompt, image_path)
+            return self._ask_with_ocr(prompt, paths[0])
 
         # 纯文本
         try:
@@ -387,10 +394,10 @@ class LLMClient:
 
         return self._call_api(enhanced_prompt, image_path=None)
 
-    def _call_api(self, prompt: str, image_path: str = None,
+    def _call_api(self, prompt: str, image_paths: list = None,
                   model: str = None, base_url: str = None,
                   api_key: str = None) -> str:
-        """底层 API 调用"""
+        """底层 API 调用 (支持多图)"""
         import base64
         from urllib.request import Request, urlopen
 
@@ -401,13 +408,15 @@ class LLMClient:
         messages = [{"role": "user", "content": []}]
         messages[0]["content"].append({"type": "text", "text": prompt})
 
-        if image_path and Path(image_path).exists():
-            with open(image_path, "rb") as f:
-                img_b64 = base64.b64encode(f.read()).decode("utf-8")
-            messages[0]["content"].append({
-                "type": "image_url",
-                "image_url": {"url": f"data:image/png;base64,{img_b64}"}
-            })
+        if image_paths:
+            for img_path in image_paths:
+                if img_path and Path(img_path).exists():
+                    with open(img_path, "rb") as f:
+                        img_b64 = base64.b64encode(f.read()).decode("utf-8")
+                    messages[0]["content"].append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{img_b64}"}
+                    })
 
         body = json.dumps({
             "model": use_model,
