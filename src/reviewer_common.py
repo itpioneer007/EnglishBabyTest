@@ -352,7 +352,7 @@ class LLMClient:
 
         # 纯文本
         try:
-            return self._call_api(prompt, image_path=None)
+            return self._call_api(prompt, image_paths=None)
         except Exception as e:
             return f"[LLM 调用失败] {e}"
 
@@ -392,7 +392,7 @@ class LLMClient:
                 "如果题目是配图类题目，标注为[无法判断图文匹配--缺少视觉模型]。)"
             )
 
-        return self._call_api(enhanced_prompt, image_path=None)
+        return self._call_api(enhanced_prompt, image_paths=None)
 
     def _call_api(self, prompt: str, image_paths: list = None,
                   model: str = None, base_url: str = None,

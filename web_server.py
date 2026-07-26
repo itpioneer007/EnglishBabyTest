@@ -128,11 +128,11 @@ def detect_module_from_filename(filename: str):
 # ============================================================
 
 def get_adb():
-    """获取 ADBController 实例"""
+    """获取 ADBController 实例 (截图保存到 screenshots/)"""
     config = load_config()
-    out_dir = PROJECT_ROOT / "outputs" / "web"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    return ADBController(serial=config.device.serial, screenshot_dir=str(out_dir))
+    shot_dir = PROJECT_ROOT / "screenshots"
+    shot_dir.mkdir(parents=True, exist_ok=True)
+    return ADBController(serial=config.device.serial, screenshot_dir=str(shot_dir))
 
 
 def log_msg(msg: str, level: str = "info"):
@@ -1075,22 +1075,24 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
     自动从文件名识别模块(巧记单词/听力专项/知识过关...),导航到对应区域,逐题检查
     """
     def record_step(step, status, detail=""):
-        """记录流程步骤到后端"""
+        """记录流程步骤到后端 (用urllib避免依赖requests)"""
         try:
-            import requests
-            requests.post("http://127.0.0.1:5000/api/inspect/workflow-step",
-                          json={"step": step, "status": status, "detail": detail},
-                          timeout=2)
+            import urllib.request, json
+            data = json.dumps({"step": step, "status": status, "detail": detail}).encode()
+            req = urllib.request.Request("http://127.0.0.1:5000/api/inspect/workflow-step",
+                                        data=data, headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=2)
         except Exception:
-            pass  # 即使失败也不影响主流程
+            pass
 
     def record_q_result(qid, **kwargs):
         """记录每题结果到后端"""
         try:
-            import requests
-            requests.post("http://127.0.0.1:5000/api/inspect/question-result",
-                          json={"qid": qid, **kwargs},
-                          timeout=2)
+            import urllib.request, json
+            data = json.dumps({"qid": qid, **kwargs}).encode()
+            req = urllib.request.Request("http://127.0.0.1:5000/api/inspect/question-result",
+                                        data=data, headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=2)
         except Exception:
             pass
 
@@ -1098,8 +1100,10 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
         # 重置巡检状态
         record_step("初始化", "running", f"{version_label} U{unit} {stage}")
         try:
-            import requests
-            requests.post("http://127.0.0.1:5000/api/inspect/reset", timeout=2)
+            import urllib.request, json
+            req = urllib.request.Request("http://127.0.0.1:5000/api/inspect/reset",
+                                        data=b"{}", headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=2)
         except Exception:
             pass
 
