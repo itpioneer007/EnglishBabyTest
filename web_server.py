@@ -1589,7 +1589,9 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
                     if cur and 1 <= cur <= len(agent.script_questions):
                         script_q = agent.script_questions[cur - 1]
                     if script_q:
-                        r = agent._review_one(script_q, shot_path)
+                        # 从UI dump提取屏幕文字 (供文字题走文本模型加速)
+                        ui_texts = [e.text or '' for e in elements if e.text and e.text.strip()]
+                        r = agent._review_one(script_q, shot_path, ui_texts=ui_texts)
                         review_result = {
                             "stem": "✅" if r.stem_check.passed else "❌",
                             "content": "✅" if r.content_check.passed else "❌",

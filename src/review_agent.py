@@ -206,8 +206,14 @@ class ReviewAgent:
     # 单题审查
     # ============================================================
 
-    def _review_one(self, q: YingYuBaoQuestion, screenshot: str) -> QuestionReview:
-        """审查一道题 (四维 + 知识库)"""
+    def _review_one(self, q: YingYuBaoQuestion, screenshot: str,
+                    ui_texts: list = None) -> QuestionReview:
+        """审查一道题 (四维 + 知识库)
+        参数:
+          q: 脚本题目
+          screenshot: 截图路径
+          ui_texts: 从ADB dump提取的屏幕文本列表 (供非配图题加速用)
+        """
         r = QuestionReview(
             idx=q.global_idx,
             question_type=q.type_2,
@@ -224,13 +230,12 @@ class ReviewAgent:
             r.overall_passed = False
             return r
 
-        # ---- 批量审查 (一次LLM调用判4维, 比4次快3-4倍) ----
-        self._review_batch(q, screenshot, r)
+        # ---- 批量审查 (文字题走文本模型, 配图题走视觉模型) ----
+        self._review_batch(q, screenshot, r, ui_texts)
 
         r.knowledge_check = self._verify_knowledge(q)
 
         # ---- 综合评分 ----
-        scores = [
         scores = [
             r.stem_check.score,
             r.content_check.score,
@@ -359,23 +364,82 @@ class ReviewAgent:
     # 重写: 四维检查 (统一角色 + 深度融合知识库)
     # ============================================================
 
-    def _judge_result(self, answer: str) -> bool:
-        """智能判断AI回答是否为通过
-        - 明确说'通过'且前面没有'不' → True
-        - 说'不通过' → False  
-        - 说'匹配'/'一致'/'正确'/'无错误' → True
-        - 默认为通过
-        """
-        a = answer.strip()
-        # "不通过"优先判断
+    def _judge_result(self, a: str) -> bool:
+        """智能判断AI回答是否为通过"""
+        a = a.strip()
         if '不通过' in a:
             return False
-        # 通过/匹配/一致/正确/无错误
         if '通过' in a or '匹配' in a or '一致' in a or '正确' in a:
             return True
         if '无' in a and ('错误' in a or '问题' in a or '异常' in a):
             return True
         return True
+
+    def _review_batch(self, q, shot, r, ui_texts=None):
+        """一次LLM调用完成四维审查
+        文字题(非配图): 用 UI 文本 + 文本模型 (1~2秒)
+        配图题: 用 截图 + 视觉模型 (15~30秒)
+        """
+        try:
+            role = self._build_role_prompt(q)
+            kb_ctx = self._build_knowledge_context(q)
+            is_img = '图片' in q.type_2
+
+            # 决定用文本模型还是视觉模型
+            use_vision = is_img  # 配图题必须用视觉
+            if not use_vision and not ui_texts:
+                use_vision = True  # 没有UI文本时降级回视觉
+
+            # 提取屏幕文字供文本模型分析
+            screen_text = ''
+            if ui_texts:
+                screen_text = '\n'.join(ui_texts[:30])
+
+            prompt_text = (
+                role + '\n\n---\n\n'
+                f'【任务: 四维审查】\n'
+                f'题型: {q.type_2}\n'
+                f'脚本题干: {q.stem}\n'
+                f'录音: {q.recording}\n'
+                f'脚本答案: {q.answer}\n'
+                f'选项: {", ".join(q.options) if q.options else "(图片选项)"}\n'
+                f'{kb_ctx}\n\n'
+            )
+            if use_vision:
+                prompt_text += f'请看截图，完成以下四个维度的检查。\n'
+            else:
+                prompt_text += f'截图已用UI解析提取出以下文字：\n{screen_text[:3000]}\n\n请基于以上屏幕文字和脚本信息，完成四个维度的检查。\n'
+            prompt_text += (
+                f'回答格式(严格按此格式,一行一个):\n'
+                f'【题干】通过|理由\n'
+                f'【内容】通过|理由\n'
+                + (f'【配图】通过|理由\n' if is_img else '【配图】⏭ 非配图题\n') +
+                f'【作答】通过|理由'
+            )
+            prompt = self.trainer.build_enhanced_prompt(prompt_text, dim_filter='all')
+            answer = self.llm.ask(prompt, image_path=shot if use_vision else None)
+
+            import re
+            for dim_name, attr in [('题干','stem_check'),('内容','content_check'),
+                                    ('配图','image_check'),('作答','answer_check')]:
+                check = getattr(r, attr)
+                m = re.search(rf'【{dim_name}】\s*([^|]+?)\s*(?:\|\s*(.*))?$', answer, re.MULTILINE)
+                if m:
+                    verdict = m.group(1).strip()
+                    reason = m.group(2).strip() if m.group(2) else ''
+                    passed = self._judge_result(verdict)
+                    check.passed = passed
+                    check.score = 1.0 if passed else 0.5
+                    check.details.append(f'{verdict} | {reason}' if reason else verdict[:100])
+                elif dim_name == '配图' and not is_img:
+                    check.passed = True; check.score = 1.0; check.details.append('⏭ 非配图题')
+                else:
+                    check.details.append(f'[解析失败]')
+        except Exception as e:
+            r.stem_check = self._check_stem(q, shot)
+            r.content_check = self._check_content(q, shot)
+            r.image_check = self._check_image(q, shot)
+            r.answer_check = self._check_answer(q, shot)
 
     def _check_stem(self, q: YingYuBaoQuestion, shot: str) -> CheckResult:
         """(1) 题干检查: 文字完整清晰 + 与脚本一致"""
