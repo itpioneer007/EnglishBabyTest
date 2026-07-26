@@ -1450,13 +1450,7 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
         found_stage = False
         for wait_i in range(5):
             elements = adb.dump_ui()
-            # 先确认不在Unit列表页 (没看到"去练习"才说明已经进入下一页)
-            on_unit_list = any('去练习' in (e.text or '') and e.clickable for e in elements)
-            if on_unit_list:
-                log_msg(f"  还在Unit列表,再等等 ({wait_i+1}/5)")
-                time.sleep(1)
-                continue
-            # 找阶段按钮 — 三种匹配方式
+            # 直接找阶段按钮, 不判断"是否还在Unit列表"(避免误判)
             for e in elements:
                 t = (e.text or '').strip()
                 if not t: continue
