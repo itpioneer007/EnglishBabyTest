@@ -1333,8 +1333,8 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
                 time.sleep(1.5)
                 break
 
-        # 6. 选择对应版本年级 (五上/六上等)
-        log_msg(f"选择版本: {version_label}")
+        # 6. 版本检查: 如果页面上已经显示正确版本, 跳过
+        log_msg(f"检查版本: {version_label}")
         time.sleep(2)
         elements = adb.dump_ui()
         # 检查是否跑到消息页/错误页
@@ -1342,13 +1342,30 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
             adb.press_back()
             time.sleep(2)
             elements = adb.dump_ui()
+        
+        # 从version_label提取年级关键词
         grade_keywords = {"五上": "五上", "五下": "五下", "六上": "六上", "六下": "六下"}
         target_kw = ""
+        full_grade_map = {"五上":"五年级上册","五下":"五年级下册","六上":"六年级上册","六下":"六年级下册"}
+        target_grade_full = ""
         for k, v in grade_keywords.items():
             if k in version_label:
                 target_kw = v
+                target_grade_full = full_grade_map.get(k, "")
                 break
-        if target_kw:
+        
+        # 检查当前页面是否已经显示正确版本
+        page_text = ' '.join([(e.text or '') for e in elements])
+        version_already_set = False
+        if target_grade_full and target_grade_full in page_text:
+            version_already_set = True
+            log_msg(f"  版本已正确: {target_grade_full}")
+        elif target_kw and target_kw in page_text:
+            version_already_set = True
+            log_msg(f"  版本已正确(含 {target_kw})")
+        
+        if target_kw and not version_already_set:
+            # 需要手动点击切换版本
             found_grade = False
             for e in elements:
                 if e.text and target_kw in (e.text or ''):
@@ -1361,7 +1378,10 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
             if not found_grade:
                 log_msg(f"  ⚠ 未找到 {target_kw}, 尝试兜底", "warning")
                 adb.tap(540, 1200)
-        time.sleep(3)
+            time.sleep(3)
+        elif version_already_set:
+            log_msg(f"  版本一致, 跳过选择")
+            time.sleep(1)
 
         # 7. 选择Unit - 先关可能出现的完成弹窗
         time.sleep(1)
@@ -1376,14 +1396,22 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
 
         log_msg(f"选择 Unit {unit}")
         elements = adb.dump_ui()
-        # 找到Unit文本的位置
+        # 找到Unit文本的位置 (如果不在当前屏幕, 滚动查找)
         unit_y = None
-        for e in elements:
-            if e.text and re.match(rf'^Unit {unit}\b', (e.text or '').strip()):
-                unit_y = e.center[1]
-                log_msg(f"  Unit {unit} 文本 at y={unit_y}")
+        for scroll_attempt in range(6):  # 最多滚动5次
+            for e in elements:
+                if e.text and re.match(rf'^Unit {unit}\b', (e.text or '').strip()):
+                    unit_y = e.center[1]
+                    log_msg(f"  Unit {unit} 文本 at y={unit_y} (scroll={scroll_attempt})")
+                    break
+            if unit_y:
                 break
-        # 兜底: 模糊匹配
+            # 没找到, 向下滚动
+            if scroll_attempt < 5:
+                adb.swipe(540, 1800, 540, 500, 400)  # 大幅下滚
+                time.sleep(0.8)
+                elements = adb.dump_ui()
+        # 兜底: 模糊匹配 (针对Unit数字小但文本格式不同)
         if not unit_y:
             for e in elements:
                 if e.text and f"Unit {unit}" in (e.text or ''):
