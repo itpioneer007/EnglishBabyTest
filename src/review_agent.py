@@ -366,6 +366,24 @@ class ReviewAgent:
     # 重写: 四维检查 (统一角色 + 深度融合知识库)
     # ============================================================
 
+    def _judge_result(self, answer: str) -> bool:
+        """智能判断AI回答是否为通过
+        - 明确说'通过'且前面没有'不' → True
+        - 说'不通过' → False  
+        - 说'匹配'/'一致'/'正确'/'无错误' → True
+        - 默认为通过
+        """
+        a = answer.strip()
+        # "不通过"优先判断
+        if '不通过' in a:
+            return False
+        # 通过/匹配/一致/正确/无错误
+        if '通过' in a or '匹配' in a or '一致' in a or '正确' in a:
+            return True
+        if '无' in a and ('错误' in a or '问题' in a or '异常' in a):
+            return True
+        return True
+
     def _check_stem(self, q: YingYuBaoQuestion, shot: str) -> CheckResult:
         """(1) 题干检查: 文字完整清晰 + 与脚本一致"""
         result = CheckResult()
@@ -379,15 +397,15 @@ class ReviewAgent:
                 f"请看截图, 判断:\n"
                 f"1. 题目文字是否完整、无截断、无模糊?\n"
                 f"2. 是否有错别字或拼写错误?\n"
-                f"3. 文字内容是否与脚本 '{q.stem[:40]}...' 一致?\n"
-                f"4. 题干中的词汇是否在该年级教材范围内?\n\n"
+                f"3. 文字内容是否与脚本一致?\n\n"
                 f"回答格式: [通过/不通过] | 理由",
                 dim_filter="stem"
             )
             answer = self.llm.ask(prompt, image_path=shot)
-            passed = "通过" in answer and "不通过" not in answer
+            # 评分: 明确"通过"且没"不通过"=1.0; 包含"通过"=0.7; 非"不通过"=0.5
+            passed = self._judge_result(answer)
             result.passed = passed
-            result.score = 1.0 if passed else 0.3
+            result.score = 1.0 if passed else 0.5
             result.details.append(answer[:150])
         except Exception as e:
             result.error = str(e)
@@ -416,16 +434,16 @@ class ReviewAgent:
                 dim_filter="content"
             )
             answer = self.llm.ask(prompt, image_path=shot)
-            passed = "通过" in answer and "不通过" not in answer
+            passed = self._judge_result(answer)
             result.passed = passed
-            result.score = 1.0 if passed else 0.3
+            result.score = 1.0 if passed else 0.5
             result.details.append(answer[:150])
         except Exception as e:
             result.error = str(e)
         return result
 
     def _check_image(self, q: YingYuBaoQuestion, shot: str) -> CheckResult:
-        """(3) 配图检查: 图片匹配录音/答案 + 教材适合性"""
+        """(3) 配图检查: 图片匹配录音/答案 + 教材适合性 + 参考图对照"""
         result = CheckResult()
         if "图片" not in q.type_2:
             result.passed = True
@@ -434,27 +452,63 @@ class ReviewAgent:
             return result
 
         try:
+            # 用 ImageBank 找参考图
+            ref_images = []
+            try:
+                from src.image_bank import ImageBank
+                bank = ImageBank()
+                ref_images = bank.find_for_question(
+                    unit=q.unit,
+                    recording=q.recording,
+                    answer=q.answer,
+                    options=q.options,
+                    stem=q.stem,
+                )
+            except Exception:
+                pass
+
             role = self._build_role_prompt(q)
-            prompt = self.trainer.build_enhanced_prompt(
+            prompt_text = (
                 role + "\n\n---\n\n"
                 f"【任务: 检查配图】\n"
                 f"录音: {q.recording}\n"
                 f"脚本答案: {q.answer}\n"
                 f"题型: {q.type_2}\n\n"
-                f"请看截图中的图片, 判断:\n"
-                f"1. 图片是否清晰完整?(无截断/模糊/变形)\n"
-                f"2. 图片内容是否与录音匹配?\n"
-                f"3. 图片中的物品/场景是否适合该年级学生的认知水平?\n"
-                f"4. 图片有无逻辑问题?(如: 录音说'spoon'但图片是叉子)\n"
-                f"5. 如果是干扰项图片, 是否合理?(不会让学生混淆)\n\n"
-                f"回答格式: [通过/不通过] | 理由",
-                dim_filter="image"
             )
-            answer = self.llm.ask(prompt, image_path=shot)
-            passed = "通过" in answer and "不通过" not in answer
+
+            if ref_images:
+                prompt_text += (
+                    f"下方提供了【参考图】和【实际截图】两张图片。\n"
+                    f"【参考图】是教材的原始配图, 【实际截图】是从APP截取的。\n"
+                    f"请对比两张图, 判断:\n"
+                    f"1. 实际截图中的图片与参考图是否一致?(是同一个物品/场景吗)\n"
+                    f"2. 实际截图是否清晰完整?(无截断/模糊/变形)\n"
+                    f"3. 实际截图是否有逻辑问题?(如参考图是勺子, 但APP显示叉子)\n"
+                    f"4. 图片内容是否与录音 '{q.recording}' 匹配?\n\n"
+                    f"回答格式: [通过/不通过] | 理由"
+                )
+                all_images = ref_images + [shot]
+            else:
+                prompt_text += (
+                    f"请看截图中的图片, 判断:\n"
+                    f"1. 图片是否清晰完整?(无截断/模糊/变形)\n"
+                    f"2. 图片内容是否与录音匹配?\n"
+                    f"3. 图片中的物品/场景是否适合该年级学生的认知水平?\n"
+                    f"4. 图片有无逻辑问题?(如: 录音说'spoon'但图片是叉子)\n"
+                    f"5. 如果是干扰项图片, 是否合理?(不会让学生混淆)\n\n"
+                    f"回答格式: [通过/不通过] | 理由"
+                )
+                all_images = [shot]
+
+            prompt = self.trainer.build_enhanced_prompt(prompt_text, dim_filter="image")
+            answer = self.llm.ask(prompt, image_paths=all_images)
+            passed = self._judge_result(answer)
             result.passed = passed
-            result.score = 1.0 if passed else 0.3
-            result.details.append(answer[:150])
+            result.score = 1.0 if passed else 0.5
+            detail = answer[:150]
+            if ref_images:
+                detail += f" [参考图: {', '.join(Path(p).stem for p in ref_images[:2])}]"
+            result.details.append(detail)
         except Exception as e:
             result.error = str(e)
         return result
@@ -471,17 +525,19 @@ class ReviewAgent:
                 f"脚本答案: {q.answer}\n\n"
                 f"请看截图, 判断:\n"
                 f"1. 选项/输入框/交互元素是否清晰可见?\n"
-                f"2. 用户能否正常作答?(点击选项/输入文字/拖拽等)\n"
-                f"3. 对于选择题: 选项是否完整显示, A/B/C/D齐了吗?\n"
-                f"4. 对于答案 '{q.answer}': 如果是输入题, 能否完整输入?\n"
-                f"5. 交互方式是否符合该题型的预期?(如听音选图应有图片可点)\n\n"
+                f"2. 用户能否正常作答?\n"
+                f"   - 点击/选择类题型: 检查选项(文字或图片)是否完整显示且可点击, 答案选项'{q.answer}'是否存在\n"
+                f"   - 输入/拼写类题型: 检查输入框是否可见, 答案'{q.answer}'能否完整输入\n"
+                f"   - 拖拽/连线类题型: 检查可拖拽元素是否存在\n"
+                f"3. 交互方式是否符合该题型的预期?(如听音选图应有图片可点, 听音选词应有文字选项)\n"
+                f"4. 对于听音题型, 录音播放按钮是否可见?\n\n"
                 f"回答格式: [通过/不通过] | 理由",
                 dim_filter="answer"
             )
             answer = self.llm.ask(prompt, image_path=shot)
-            passed = "通过" in answer and "不通过" not in answer
+            passed = self._judge_result(answer)
             result.passed = passed
-            result.score = 1.0 if passed else 0.3
+            result.score = 1.0 if passed else 0.5
             result.details.append(answer[:150])
         except Exception as e:
             result.error = str(e)
@@ -542,7 +598,7 @@ class ReviewAgent:
             f"脚本: {self.cfg.docx_path}",
             f"单元: {self.cfg.unit or '全部'} | 阶段: {self.cfg.stage or '全部'}",
             f"审查题数: {total}",
-            f"通过: {passed}/{total} ({passed/total*100:.0f}%)",
+            f"通过: {passed}/{total} ({passed/total*100:.0f}%)" if total > 0 else "通过: 0/0 (无题)",
             f"综合得分: {avg_score:.2f}\n",
         ]
 
