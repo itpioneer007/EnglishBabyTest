@@ -130,9 +130,8 @@ def detect_module_from_filename(filename: str):
 def get_adb():
     """获取 ADBController 实例 (截图保存到 screenshots/)"""
     config = load_config()
-    shot_dir = PROJECT_ROOT / "screenshots"
-    shot_dir.mkdir(parents=True, exist_ok=True)
-    return ADBController(serial=config.device.serial, screenshot_dir=str(shot_dir))
+    # 用相对路径避免 adb pull 在 Windows 上拼接出错
+    return ADBController(serial=config.device.serial, screenshot_dir="screenshots")
 
 
 def log_msg(msg: str, level: str = "info"):
@@ -1323,6 +1322,17 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
             # 教材精学区: 跳过专项突破+模块搜索
             record_step("5.听力专项", "done", f"教材精学: {module_name}")
 
+        # 5.5 关"已完成"弹窗 (如果之前跑过该单元)
+        time.sleep(1)
+        elements = adb.dump_ui()
+        for e in elements:
+            t = (e.text or '').strip()
+            if t in ['先走一步', '继续练习', '已完成', '完成']:
+                adb.tap(e.center[0], e.center[1])
+                log_msg(f"  关完成弹窗: '{t}' at {e.center}")
+                time.sleep(1.5)
+                break
+
         # 6. 选择对应版本年级 (五上/六上等)
         log_msg(f"选择版本: {version_label}")
         time.sleep(2)
@@ -1353,7 +1363,17 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
                 adb.tap(540, 1200)
         time.sleep(3)
 
-        # 7. 选择Unit - 必须同时点"去练习"按钮才能进入
+        # 7. 选择Unit - 先关可能出现的完成弹窗
+        time.sleep(1)
+        elements = adb.dump_ui()
+        for e in elements:
+            t = (e.text or '').strip()
+            if t in ['先走一步', '继续练习', '已完成', '完成']:
+                adb.tap(e.center[0], e.center[1])
+                log_msg(f"  关完成弹窗: '{t}' at {e.center}")
+                time.sleep(1.5)
+                break
+
         log_msg(f"选择 Unit {unit}")
         elements = adb.dump_ui()
         # 找到Unit文本的位置
