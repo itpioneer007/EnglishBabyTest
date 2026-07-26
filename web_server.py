@@ -1583,10 +1583,12 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
             review_result = None
             if agent:
                 try:
-                    # 找对应脚本题目
-                    matching_qs = [q for q in agent.script_questions if q.global_idx == cur]
-                    if matching_qs:
-                        script_q = matching_qs[0]
+                    # 找对应脚本题目 — 用列表索引而非global_idx
+                    # APP题号是相对位置的(1/15), 脚本按unit+stage过滤后也是有序的
+                    script_q = None
+                    if cur and 1 <= cur <= len(agent.script_questions):
+                        script_q = agent.script_questions[cur - 1]
+                    if script_q:
                         r = agent._review_one(script_q, shot_path)
                         review_result = {
                             "stem": "✅" if r.stem_check.passed else "❌",

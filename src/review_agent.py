@@ -224,20 +224,13 @@ class ReviewAgent:
             r.overall_passed = False
             return r
 
-        # ---- (1) 题干检查 ----
-        r.stem_check = self._check_stem(q, screenshot)
+        # ---- 批量审查 (一次LLM调用判4维, 比4次快3-4倍) ----
+        self._review_batch(q, screenshot, r)
 
-        # ---- (2) 内容检查 + 知识库 ----
-        r.content_check = self._check_content(q, screenshot)
         r.knowledge_check = self._verify_knowledge(q)
 
-        # ---- (3) 配图检查 ----
-        r.image_check = self._check_image(q, screenshot)
-
-        # ---- (4) 作答检查 ----
-        r.answer_check = self._check_answer(q, screenshot)
-
         # ---- 综合评分 ----
+        scores = [
         scores = [
             r.stem_check.score,
             r.content_check.score,

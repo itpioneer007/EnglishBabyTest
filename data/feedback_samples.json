@@ -1695,12 +1695,60 @@
       "screenshot": "q02.png",
       "knowledge_ref": "",
       "timestamp": "2026-07-26T19:49:07.197292"
+    },
+    {
+      "question_id": "新湘鲁六上-U6-Q01",
+      "docx_script_id": 0,
+      "unit": 0,
+      "check_dimension": "all",
+      "question_type": "听音选择词汇",
+      "human_judgment": "通过",
+      "ai_judgment": "通过",
+      "ai_reason": "[不通过] | 理由：\n1. **选项内容与脚本严重不一致**：脚本提供的选项为 \"A. care, B. card, C. careful\"，而截图显示的选项为 \"A. help, B. helpful, C. happy\"。根据审查原则“以脚本文件为第一标准”，APP内容与脚本不符，判定为不通过",
+      "human_note": "",
+      "suggested_fix": "",
+      "image_type": "",
+      "screenshot": "q01.png",
+      "knowledge_ref": "",
+      "timestamp": "2026-07-26T20:48:24.108452"
+    },
+    {
+      "question_id": "新湘鲁六上-U6-Q02",
+      "docx_script_id": 0,
+      "unit": 0,
+      "check_dimension": "all",
+      "question_type": "听音选择词汇",
+      "human_judgment": "通过",
+      "ai_judgment": "通过",
+      "ai_reason": "[通过] | 理由：\n1. **题干与选项一致性**：题干要求“听录音，选择你所听到的单词”，APP展示了三个单词选项（care, card, careful），题型匹配。虽然脚本标注选项为“(图片选项)”，但截图中的文字呈现为手写体风格（可能是特殊字体或图片化文字），符合题意。\n2. **答案逻辑",
+      "human_note": "",
+      "suggested_fix": "",
+      "image_type": "",
+      "screenshot": "q02.png",
+      "knowledge_ref": "",
+      "timestamp": "2026-07-26T20:50:33.279298"
+    },
+    {
+      "question_id": "新湘鲁六上-U6-Q03",
+      "docx_script_id": 0,
+      "unit": 0,
+      "check_dimension": "all",
+      "question_type": "听音选择词汇",
+      "human_judgment": "通过",
+      "ai_judgment": "通过",
+      "ai_reason": "[视觉模型失败: The read operation timed out] → 降级为纯文本分析\n[通过] | 理由：  \n1. **题干文字检查（Stem）**：题型为“听音选择词汇”，题干简洁明确，无截断、错别字或语法错误；与湘鲁版六上Unit 6听力专项脚本一致（脚本标注“听音选词”，题干隐",
+      "human_note": "",
+      "suggested_fix": "",
+      "image_type": "",
+      "screenshot": "q03.png",
+      "knowledge_ref": "",
+      "timestamp": "2026-07-26T20:52:58.756820"
     }
   ],
   "bad": [],
   "stats": {
-    "total": 106,
-    "good_samples": 106,
+    "total": 109,
+    "good_samples": 109,
     "bad_samples": 0,
     "accuracy": "100.0%",
     "dimension_accuracy": {
@@ -1729,13 +1777,13 @@
         "accuracy": "100.0%"
       },
       "all": {
-        "total": 86,
-        "correct": 86,
+        "total": 89,
+        "correct": 89,
         "wrong": 0,
         "accuracy": "100.0%"
       }
     },
-    "last_updated": "2026-07-26T19:49:07.197419"
+    "last_updated": "2026-07-26T20:52:58.756864"
   },
   "trend": []
 }
