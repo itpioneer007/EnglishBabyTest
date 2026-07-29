@@ -23,10 +23,13 @@ print("=" * 60)
 from src.post_error_check import PostErrorChecker
 from pathlib import Path
 
-shot = 'screenshots/test_result.png'
+shot = 'screenshots/test_question.png'
 if not Path(shot).exists():
-    print(f'\n  ⚠ 截图不存在: {shot}')
-    print('  请把答错后的截图保存到 screenshots/test_result.png')
+    shot = 'screenshots/test_result.png'
+if not Path(shot).exists():
+    shot = 'screenshots/test.png'
+if not Path(shot).exists():
+    print(f'\n  ⚠ 截图不存在，请把答错后的截图放到 screenshots/ 目录下')
 else:
     mock_q = {
         'qid': 'U6-Q01', 'answer': 'B',
