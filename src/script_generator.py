@@ -173,6 +173,8 @@ class ScriptGenerator:
 
         # 2. 从知识库提取词汇和句型
         vocab = self.kb.get_unit_vocab("湘鲁版", grade_label, unit)
+        # 过滤：只保留包含英文字母的词汇（排除纯中文短语）
+        vocab = [v for v in vocab if any(c.isalpha() and ord(c) < 128 for c in v)]
         patterns = self.kb.get_unit_patterns("湘鲁版", grade_label, unit)
 
         if not vocab:
