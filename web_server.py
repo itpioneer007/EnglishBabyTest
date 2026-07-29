@@ -32,6 +32,17 @@ from config_loader import load_config
 app = Flask(__name__)
 
 # ============================================================
+# 三人协作路由注册（按角色拆分）
+#   A: routes/trace_routes.py  → 溯源系统
+#   B: routes/batch_routes.py  → 批量自动化
+#   C: routes/export_routes.py → 报告输出分发
+# ============================================================
+from routes import register_trace, register_batch, register_export
+register_trace(app)
+register_batch(app)
+register_export(app)
+
+# ============================================================
 # 全局状态
 # ============================================================
 task_status = {
@@ -1110,11 +1121,32 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
         config = load_config()
         adb = get_adb()
 
-        log_msg(f"🚀 听力专项巡检: {version_label} Unit{unit} {stage}")
+        # ===== B: 通用导航引擎 =====
+        from src.universe_navigator import UniverseNavigator
+        nav = UniverseNavigator(adb)
+
+        log_msg(f"🚀 巡检: {version_label} Unit{unit} {stage}")
         record_step("1.启动APP", "running", "")
 
-        # 0. 强制返回首页 + 关闭教程页(防止上次停留在教程页)
+        # 强制回首页
         log_msg("强制回到首页")
+        nav.universal_reset()
+        record_step("1.启动APP", "done")
+        time.sleep(1)
+
+        # 通用导航: 首页 → 答题页
+        record_step("2.导航到模块", "running")
+        ok = nav.navigate_to("question_page", {
+            "version": version_label,
+            "unit": unit,
+            "stage": stage,
+        })
+        if not ok:
+            log_msg("⚠ 导航失败，尝试通用重置后重试...", "warning")
+            nav.universal_reset()
+            time.sleep(3)
+            nav.navigate_to("question_page", {"version": version_label, "unit": unit, "stage": stage})
+        record_step("2.导航到模块", "done")
         record_step("0.回到首页", "running", "")
         for _ in range(3):
             adb.press_back()
@@ -1648,17 +1680,51 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
                 "idx": cur, "screenshot": shot_name, "review": review_result
             })
 
-            # 点击选项
+            # 点击选项 — 根据脚本答案选择正确选项
             found_option = False
-            for e in elements:
-                if e.clickable and 400 < e.bounds[1] < 2000 and (e.bounds[2]-e.bounds[0]) > 100:
-                    # 优先选中间偏左的选项区域
-                    if e.center[0] < 150: continue  # 太左可能是返回键
-                    adb.tap(e.center[0], e.center[1])
-                    found_option = True
-                    break
+            if script_q and script_q.answer in 'ABC':
+                # 找对应选项字母的文本 (A/B/C)
+                ans_letter = script_q.answer
+                for e in elements:
+                    t = (e.text or '').strip()
+                    # 匹配 "A." / "A、" / "A" 等格式的选项文本
+                    if re.match(rf'^{ans_letter}[\.\、\)\s]', t) and e.clickable and 50 < e.center[1] < 2200:
+                        adb.tap(e.center[0], e.center[1])
+                        log_msg(f"  点选项 {ans_letter} at {e.center}")
+                        found_option = True
+                        break
+                if not found_option:
+                    # 按选项位置推定: A左/B中/C右
+                    opt_x = {'A': 250, 'B': 500, 'C': 750, 'D': 950}.get(ans_letter, 500)
+                    candidates = [e for e in elements if e.clickable and 400 < e.bounds[1] < 2000
+                                 and abs(e.center[0] - opt_x) < 200 and (e.bounds[2]-e.bounds[0]) > 60]
+                    if candidates:
+                        # 选最靠上的一个
+                        best = min(candidates, key=lambda e: e.center[1])
+                        adb.tap(best.center[0], best.center[1])
+                        log_msg(f"  点选项(位置推定) {ans_letter} at {best.center}")
+                        found_option = True
+            
+            if script_q and script_q.answer in 'TF':
+                # 判断题: 点T或F
+                ans_word = {'T': 'T', 'F': 'F'}.get(script_q.answer, '')
+                for e in elements:
+                    t = (e.text or '').strip().upper()
+                    if t == ans_word and e.clickable:
+                        adb.tap(e.center[0], e.center[1])
+                        log_msg(f"  点 {'正确' if ans_word=='T' else '错误'} at {e.center}")
+                        found_option = True
+                        break
+            
             if not found_option:
-                # 兜底: 点屏幕中央
+                # 兜底: 点中间偏左单选区域
+                for e in elements:
+                    if e.clickable and 400 < e.bounds[1] < 2000 and (e.bounds[2]-e.bounds[0]) > 100:
+                        if e.center[0] < 150: continue
+                        adb.tap(e.center[0], e.center[1])
+                        found_option = True
+                        break
+            if not found_option:
                 adb.tap(540, 800)
             time.sleep(1.5)
 
