@@ -213,39 +213,54 @@ def register(app):
         def run():
             global _BATCH_STATUS
             from src.dry_run import DryRunner
-            from web_server import get_adb, log_msg
+            from web_server import get_adb
+            import time as _time
 
             adb = get_adb()
             runner = DryRunner(adb)
+            module_start = None
 
             tasks = []
             for u in plan.get("units", []):
                 for s in plan.get("stages", []):
                     tasks.append({"unit": u, "stage": s})
             _BATCH_STATUS["pending"] = [dict(t) for t in tasks]
+            overall_start = _time.time()
 
             for task in tasks:
                 if not _BATCH_STATUS["running"]:
                     break
                 while _BATCH_STATUS.get("paused"):
-                    time.sleep(1)
+                    _time.sleep(1)
 
                 _BATCH_STATUS["current"] = {"unit": task["unit"], "stage": task["stage"]}
+                log = f"▶ 开始模块: U{task['unit']} {task['stage']}"
+                module_start = _time.time()
 
                 result = runner.click_through_module(
                     task["unit"], task["stage"],
                     plan.get("version", "新湘鲁六上")
                 )
+                module_elapsed = _time.time() - module_start
+                mod_time = f"{int(module_elapsed//60)}m{int(module_elapsed%60)}s"
+
+                entry = {
+                    "unit": task["unit"],
+                    "stage": task["stage"],
+                    "questions": result.get("questions_done", 0),
+                    "duration": mod_time,
+                }
                 if result["success"]:
-                    _BATCH_STATUS["completed"].append({
-                        "unit": task["unit"], "stage": task["stage"],
-                        "questions": result["questions_done"],
-                    })
+                    entry["status"] = "done"
+                    _BATCH_STATUS["completed"].append(entry)
                 else:
-                    _BATCH_STATUS["failed_modules"].append({
-                        "unit": task["unit"], "stage": task["stage"],
-                        "reason": result.get("error", "未知"),
-                    })
+                    entry["status"] = "failed"
+                    entry["error"] = result.get("error", "未知")
+                    _BATCH_STATUS["failed_modules"].append(entry)
+
+                # 累计耗时
+                elapsed = _time.time() - overall_start
+                _BATCH_STATUS["eta_remaining"] = f"{int(elapsed//60)}m{int(elapsed%60)}s"
 
             _BATCH_STATUS["running"] = False
             _BATCH_STATUS["current"] = None
@@ -290,3 +305,9 @@ def register(app):
         """批量控制页面"""
         from flask import render_template
         return render_template("batch.html")
+
+    @app.route("/runner")
+    def page_runner():
+        """纯遍历专用页面 — B同学"""
+        from flask import render_template
+        return render_template("runner.html")

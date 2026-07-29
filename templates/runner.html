@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>英语宝 — 自动遍历</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:"Microsoft YaHei","PingFang SC",sans-serif;background:#0f172a;color:#e2e8f0;font-size:14px}
+
+/* 布局 */
+.app{display:grid;grid-template-columns:360px 1fr;height:100vh}
+@media(max-width:800px){.app{grid-template-columns:1fr}}
+
+/* 左侧面板 */
+.sidebar{background:#1e293b;border-right:1px solid #334155;padding:20px;display:flex;flex-direction:column;gap:16px;overflow-y:auto}
+.sidebar h1{font-size:18px;font-weight:700;color:#f8fafc;display:flex;align-items:center;gap:8px}
+
+/* 输入区 */
+.input-area{background:#1e293b;border:1px solid #334155;border-radius:10px;padding:14px}
+.input-area textarea{width:100%;height:72px;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:10px;font-size:13px;color:#e2e8f0;resize:none;outline:none;font-family:inherit}
+.input-area textarea:focus{border-color:#6366f1}
+.input-area .row{display:flex;justify-content:space-between;align-items:center;margin-top:8px}
+.btn{padding:8px 20px;border:none;border-radius:8px;font-size:14px;cursor:pointer;font-weight:600}
+.btn-primary{background:#6366f1;color:#fff}
+.btn-primary:hover{background:#4f46e5}
+.btn-primary:disabled{background:#475569;cursor:not-allowed}
+.btn-danger{background:#ef4444;color:#fff}
+.btn-sm{padding:5px 12px;font-size:12px}
+.hint{font-size:12px;color:#94a3b8}
+
+/* 状态 */
+.status{display:flex;flex-direction:column;gap:8px}
+.status-row{display:flex;justify-content:space-between;padding:8px 12px;background:#0f172a;border-radius:8px;font-size:13px}
+.status-row .label{color:#94a3b8}
+.status-row .value{color:#f1f5f9;font-weight:600}
+.status-row .value.running{color:#6366f1}
+.status-row .value.done{color:#22c55e}
+.status-row .value.failed{color:#ef4444}
+
+/* 模块列表 */
+.module-list{display:flex;flex-direction:column;gap:6px;max-height:400px;overflow-y:auto}
+.module-item{display:flex;align-items:center;gap:10px;padding:8px 12px;background:#0f172a;border-radius:8px;font-size:13px;border:1px solid transparent}
+.module-item.active{border-color:#6366f1;background:#1e293b}
+.module-item.done{opacity:.7}
+.module-item.failed{border-color:#ef4444}
+.module-item .idx{width:24px;height:24px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0}
+.module-item .idx.wait{background:#334155;color:#94a3b8}
+.module-item .idx.run{background:#6366f1;color:#fff}
+.module-item .idx.ok{background:#166534;color:#4ade80}
+.module-item .idx.err{background:#7f1d1d;color:#fca5a5}
+.module-item .name{flex:1}
+.module-item .time{color:#64748b;font-size:11px}
+.module-item .info{color:#94a3b8;font-size:10px;white-space:nowrap}
+
+/* 日志区 */
+.log-area{flex:1;display:flex;flex-direction:column;min-height:0}
+.log-area h2{font-size:13px;font-weight:600;color:#94a3b8;margin-bottom:8px}
+.log-box{flex:1;background:#0f172a;border-radius:10px;padding:12px;font-family:"Consolas","Courier New",monospace;font-size:12px;overflow-y:auto;line-height:1.8;min-height:200px}
+.log-box .s{color:#4ade80}
+.log-box .i{color:#94a3b8}
+.log-box .w{color:#fbbf24}
+.log-box .e{color:#f87171}
+.log-box .em{color:#6366f1;font-weight:700}
+
+/* 分隔线 */
+hr{border:none;border-top:1px solid #334155;margin:4px 0}
+
+/* 统计卡片 */
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px}
+.stat-card{background:#0f172a;border-radius:8px;padding:10px;text-align:center}
+.stat-card .num{font-size:22px;font-weight:700;color:#f1f5f9}
+.stat-card .label{font-size:11px;color:#64748b;margin-top:2px}
+.stat-card .num.ok{color:#22c55e}
+.stat-card .num.fail{color:#ef4444}
+
+/* 错误提示 */
+.error-panel{background:#450a0a;border:1px solid #7f1d1d;border-radius:8px;padding:10px 12px;margin-top:8px;display:none}
+.error-panel.show{display:block}
+.error-panel .title{color:#fca5a5;font-weight:600;font-size:13px;margin-bottom:4px}
+.error-panel .body{color:#fecaca;font-size:12px;line-height:1.5}
+
+/* 占满 */
+.fill{flex:1}
+
+/* 工具条 */
+.toolbar{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ===== 左侧 ===== -->
+  <div class="sidebar">
+    <h1>▶ 自动遍历器</h1>
+
+    <!-- 输入 -->
+    <div class="input-area">
+      <textarea id="nlInput" placeholder='例如：帮我检测新湘鲁六年级上册的U6-U9听力专项基础巩固&#10;或：跑一下湘少五上6到9单元知识过关综合进阶'></textarea>
+      <div class="row">
+        <span class="hint" id="nlHint">粘贴一句话，自动解析要跑什么</span>
+        <button class="btn btn-primary btn-sm" id="btnRun" onclick="startRun()">▶ 开始跑</button>
+      </div>
+    </div>
+
+    <!-- 状态 -->
+    <div class="status">
+      <div class="status-row"><span class="label">状态</span><span class="value" id="sStatus">就绪</span></div>
+      <div class="status-row"><span class="label">当前模块</span><span class="value" id="sCurrent">—</span></div>
+      <div class="status-row"><span class="label">已耗时</span><span class="value" id="sElapsed">0s</span></div>
+      <div class="status-row"><span class="label">完成/总数</span><span class="value" id="sProgress">0 / 0</span></div>
+    </div>
+
+    <!-- 统计 -->
+    <div class="stats">
+      <div class="stat-card"><div class="num ok" id="scOk">0</div><div class="label">通过模块</div></div>
+      <div class="stat-card"><div class="num fail" id="scFail">0</div><div class="label">失败模块</div></div>
+    </div>
+
+    <!-- 模块列表 -->
+    <div class="module-list" id="moduleList">
+      <div style="color:#475569;font-size:12px;text-align:center;padding:20px">等待启动...</div>
+    </div>
+
+    <!-- 错误面板 -->
+    <div class="error-panel" id="errorPanel">
+      <div class="title">❌ 运行出错</div>
+      <div class="body" id="errorBody"></div>
+    </div>
+  </div>
+
+  <!-- ===== 右侧日志 ===== -->
+  <div class="log-area" style="padding:20px">
+    <h2>📜 操作日志</h2>
+    <div class="log-box" id="logBox">
+      <div class="i">等待任务启动...</div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ====== 工具 ======
+function $(id){return document.getElementById(id)}
+function addLog(level,msg){
+  const map={'success':'s','info':'i','warning':'w','error':'e','em':'em'}
+  const cls=map[level]||'i'
+  const t=new Date().toLocaleTimeString()
+  const el=$('logBox')
+  el.innerHTML+=`<div class="${cls}">[${t}] ${msg}</div>`
+  el.scrollTop=el.scrollHeight
+}
+
+// ====== 计时器 ======
+let timerId=null,startTime=null
+
+function startTimer(){
+  startTime=Date.now()
+  if(timerId)clearInterval(timerId)
+  timerId=setInterval(()=>{
+    const el=Math.floor((Date.now()-startTime)/1000)
+    $('sElapsed').textContent=el<60?el+'s':Math.floor(el/60)+'m'+el%60+'s'
+  },500)
+}
+function stopTimer(){
+  if(timerId)clearInterval(timerId)
+  timerId=null
+}
+
+// ====== 启动 ======
+async function startRun(){
+  const text=$('nlInput').value.trim()
+  if(!text){$('nlHint').textContent='请先输入描述';$('nlHint').style.color='#ef4444';return}
+
+  $('btnRun').disabled=true;$('btnRun').textContent='⏳ 运行中'
+  $('sStatus').textContent='运行中';$('sStatus').className='value running'
+  $('errorPanel').classList.remove('show')
+  $('logBox').innerHTML=''
+  addLog('info','🚀 任务启动...')
+  startTimer()
+
+  try{
+    const r=await(await fetch('/api/batch/dry-run',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({text})
+    })).json()
+
+    if(r.error){throw new Error(r.error)}
+    addLog('success',`✅ 已启动: ${r.modules} 个模块, 预计${r.eta}`)
+    pollStatus()
+  }catch(e){
+    addLog('error','❌ 启动失败: '+e.message)
+    $('sStatus').textContent='失败';$('sStatus').className='value failed'
+    $('btnRun').disabled=false;$('btnRun').textContent='▶ 开始跑'
+    $('errorPanel').classList.add('show')
+    $('errorBody').textContent=e.message
+    stopTimer()
+  }
+}
+
+// ====== 轮询进度 ======
+let pollId=null,totalModules=0
+
+function pollStatus(){
+  if(pollId)clearInterval(pollId)
+  pollId=setInterval(async ()=>{
+    try{
+      const s=await(await fetch('/api/batch/status')).json()
+      updateUI(s)
+      if(!s.running && !s.paused) endRun(s)
+    }catch(e){}
+  },1000)
+}
+
+function updateUI(s){
+  const done=s.completed?.length||0
+  const fail=s.failed_modules?.length||0
+  const pending=s.pending?.length||0
+  totalModules=done+fail+pending
+
+  $('scOk').textContent=done
+  $('scFail').textContent=fail
+  $('sProgress').textContent=`${done+fail} / ${totalModules}`
+  if(s.current){$('sCurrent').textContent=`U${s.current.unit} [${s.current.stage}]`}
+  else $('sCurrent').textContent='—'
+
+  // 模块列表
+  const items=[]
+  s.completed?.forEach(m=>items.push({state:'ok',name:`U${m.unit} ${m.stage}`,time:m.duration||'done',detail:`${m.questions||'?'}题`}))
+  if(s.current) items.push({state:'run',name:`U${s.current.unit} ${s.current.stage}`,time:'⏳',detail:s.current.question||'运行中'})
+  s.pending?.forEach(m=>items.push({state:'wait',name:`U${m.unit} ${m.stage}`,time:'',detail:''}))
+  s.failed_modules?.forEach(m=>items.push({state:'err',name:`U${m.unit} ${m.stage}`,time:'❌',detail:(m.reason||'失败').slice(0,30)}))
+
+  $('moduleList').innerHTML=items.map(m=>
+    `<div class="module-item ${m.state}">
+      <div class="idx ${m.state}">${m.state==='ok'?'✓':m.state==='run'?'▶':'●'}</div>
+      <div class="name">${m.name}</div>
+      <div class="info">${m.detail}</div>
+      <div class="time">${m.time}</div>
+    </div>`
+  ).join('')
+}
+
+function endRun(s){
+  stopTimer()
+  $('btnRun').disabled=false;$('btnRun').textContent='▶ 重新开始'
+  $('sStatus').textContent='已完成'
+  $('sStatus').className='value done'
+  if(pollId){clearInterval(pollId);pollId=null}
+  addLog('success',`🏁 全部完成: ${s.completed?.length||0} 模块成功, ${s.failed_modules?.length||0} 模块失败`)
+  addLog('info',`总耗时: ${$('sElapsed').textContent}`)
+}
+
+// ====== 自动解析提示 ======
+$('nlInput').addEventListener('input',debounce(async function(){
+  const t=this.value.trim()
+  if(t.length<5){$('nlHint').textContent='输入描述后自动解析';$('nlHint').style.color='#94a3b8';return}
+  try{
+    const r=await(await fetch('/api/batch/parse',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({text:t})
+    })).json()
+    if(r&&r.version){
+      $('nlHint').innerHTML=`✅ 解析: ${r.version} U${r.units[0]}-${r.units[r.units.length-1]} [${(r.stages||[]).join(',')}] ${r.module_type||''}`
+      $('nlHint').style.color='#4ade80'
+    }
+  }catch(e){}
+},500))
+
+function debounce(fn,ms){let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>fn.apply(this,a),ms)}}
+</script>
+</body>
+</html>
