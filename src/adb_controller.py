@@ -118,9 +118,14 @@ class ADBController:
                 time.sleep(retry_delay)
 
             self._adb(["shell", "uiautomator", "dump", remote])
+            # 等待文件写入
+            time.sleep(0.3)
             code, output = self._adb(["shell", "cat", remote])
+            # 过滤掉 error 行
+            clean_lines = [ln for ln in output.split('\n') if 'ERROR' not in ln and 'error' not in ln]
+            clean_out = '\n'.join(clean_lines)
 
-            if output and "<hierarchy" in output:
+            if clean_out and "<hierarchy" in clean_out:
                 self._adb(["shell", "rm", remote])
                 elements = self._parse_ui_xml(output)
                 if elements:
@@ -128,8 +133,71 @@ class ADBController:
             last_error = f"attempt {attempt+1} 失败"
 
         self._adb(["shell", "rm", remote])
-        self._log("dump_ui", f"重试{retries}次仍失败: {last_error}", success=False)
-        return []
+        self._log("dump_ui", f"重试{retries}次仍失败: {last_error}, 降级到OCR", success=False)
+        # uiautomator 兜底：用 OCR 从截图提取文字
+        return self._dump_ui_ocr()
+
+    def _dump_ui_ocr(self) -> list[UIElement]:
+        """uiautomator失败时的 OCR 兜底方案"""
+        try:
+            import os as _os
+            import pytesseract
+            from PIL import Image
+            from dataclasses import dataclass
+
+            # 设置Tesseract路径
+            tess_path = r"C:\Program Files\Tesseract-OCR\tessdata"
+            if _os.path.exists(tess_path):
+                _os.environ["TESSDATA_PREFIX"] = tess_path
+            pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+
+            # 截图到内存
+            shot_name = "_ocr_shot.png"
+            self.screenshot(shot_name)
+            shot_path = os.path.join(self.screenshot_dir, shot_name)
+
+            if not os.path.exists(shot_path):
+                return []
+
+            img = Image.open(shot_path)
+            w, h = img.size
+
+            # OCR 识别 — 中英文
+            custom_config = r'--oem 3 --psm 6'
+            data = pytesseract.image_to_data(img, config=custom_config,
+                                             lang='chi_sim+eng',
+                                             output_type=pytesseract.Output.DICT)
+
+            elements = []
+            # 需要合并相邻字符为词组
+            for i in range(len(data['text'])):
+                text = (data['text'][i] or '').strip()
+                conf = int(data['conf'][i]) if data['conf'][i] != '-1' else 0
+                x, y, bw, bh = data['left'][i], data['top'][i], data['width'][i], data['height'][i]
+
+                # 过滤短、低可信、单个符号
+                if not text or conf < 40 or bw < 15 or bh < 10:
+                    continue
+                if len(text) == 1 and not ('\u4e00' <= text <= '\u9fff') and not text.isalpha():
+                    continue
+
+                center = (x + bw // 2, y + bh // 2)
+                bounds = (x, y, x + bw, y + bh)
+                elements.append(UIElement(
+                    center=center,
+                    bounds=bounds,
+                    text=text,
+                    clickable=True,
+                ))
+
+            os.remove(shot_path)
+            if elements:
+                self._log("dump_ui", f"OCR兜底成功: {len(elements)}个元素")
+            return elements
+
+        except Exception as e:
+            self._log("dump_ui", f"OCR兜底也失败: {e}", success=False)
+            return []
 
     def _parse_ui_xml(self, xml_str: str) -> list[UIElement]:
         """解析UI XML，返回元素列表"""

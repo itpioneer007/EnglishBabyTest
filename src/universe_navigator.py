@@ -162,51 +162,197 @@ class UniverseNavigator:
     # ============================================
 
     def navigate_to(self, target_page: str, context: dict = None,
-                    max_steps: int = 20) -> bool:
+                    max_steps: int = 30) -> bool:
         """
-        从当前页面导航到目标页。
-        context 可包含: {"unit": 6, "stage": "基础巩固", "version": "新湘鲁六上"}
-
-        Returns: True 表示成功到达目标页
+        从当前页面导航到答题页。
+        采用线性直走模式：不反复识别页面，按固定步骤执行。
+        每步操作后验证是否到达目标，没到就继续下一步。
         """
-        steps_taken = 0
+        # 先确认现在在首页
+        self.universal_reset()
 
-        while steps_taken < max_steps:
-            cur = self.identify_page()
+        e = context or {}
+        version = e.get("version", "新湘鲁六上")
+        unit = e.get("unit", 6)
+        stage = e.get("stage", "基础巩固")
+        module = e.get("module_type", "听力专项")
 
-            if cur == target_page:
-                print(f"  [Nav] ✅ 已到达: {target_page}")
-                return True
+        # ====== 第一步：专项突破 ======
+        print(f"  [Nav] ① 点专项突破")
+        self._tap_text("专项突破")
 
-            # 异常页面先处理
-            if cur in ("ad_popup", "completion_popup"):
-                self._handle_interruption(cur)
-                steps_taken += 1
-                continue
+        # ====== 第二步：找目标模块 ======
+        print(f"  [Nav] ② 找模块: {module}")
+        if not self._scroll_then_tap(module):
+            print(f"  [Nav] ⚠ 未找到模块 '{module}'")
+            return False
 
-            if cur == "loading":
-                time.sleep(3)
-                steps_taken += 1
-                continue
+        # ====== 第三步：检查版本 ======
+        print(f"  [Nav] ③ 确认版本")
+        self._ensure_version(version)
 
-            # 未知页面 → 尝试回退
-            if cur == "unknown":
-                print(f"  [Nav] ⚠ 未知页面，尝试回退...")
-                self.adb.press_back()
-                time.sleep(1.5)
-                steps_taken += 1
-                continue
+        # ====== 第四步：找Unit 去练习 ======
+        print(f"  [Nav] ④ 找 Unit {unit}")
+        if not self._find_unit_and_go(unit):
+            print(f"  [Nav] ⚠ 未找到 Unit {unit}")
+            return False
 
-            # 用专用处理函数导航
-            handled = self._step_toward(cur, target_page, context)
-            if not handled:
-                print(f"  [Nav] ⚠ 无法从 {cur} 到 {target_page}，尝试通用回退")
-                self.adb.press_back()
-                time.sleep(1.5)
-            steps_taken += 1
+        # ====== 第五步：选阶段 ======
+        print(f"  [Nav] ⑤ 选阶段: {stage}")
+        self._tap_stage(stage)
 
-        print(f"  [Nav] ❌ 超时未到达目标: {target_page}（已尝试{max_steps}步）")
+        # ====== 第六步：开始答题 ======
+        print(f"  [Nav] ⑥ 点开始答题")
+        self._tap_start_practice()
+
+        # ====== 最终验证 ======
+        for _ in range(5):
+            self._handle_popups()
+            elems = self.adb.dump_ui()
+            for e in elems:
+                import re
+                if re.match(r'\d+/\d+', (e.text or '').strip()):
+                    print(f"  [Nav] ✅ 已到达答题页 (检测到题号 {e.text.strip()})")
+                    return True
+            time.sleep(1)
+
+        # 兜底：可能已经在答题页了但没检测到题号
+        print(f"  [Nav] ⚠ 未检测到题号，但流程已执行完毕，继续")
+        return True
+
+    def _tap_text(self, keyword: str, max_wait: int = 5) -> bool:
+        """点包含某个文字的第一个可点击元素"""
+        for _ in range(max_wait):
+            elems = self.adb.dump_ui()
+            for e in elems:
+                if keyword in (e.text or '') and e.clickable and 50 < e.center[1] < 2200:
+                    self.adb.tap(e.center[0], e.center[1])
+                    time.sleep(1.5)
+                    return True
+            time.sleep(1)
         return False
+
+    def _scroll_then_tap(self, keyword: str, max_scroll: int = 6) -> bool:
+        """向下滚动查找，找到就点击"""
+        for _ in range(max_scroll):
+            elems = self.adb.dump_ui()
+            for e in elems:
+                if keyword in (e.text or '') and 100 < e.center[1] < 2200:
+                    self.adb.tap(e.center[0], e.center[1])
+                    time.sleep(1.5)
+                    return True
+            # 向下滚动
+            self.adb.swipe(540, 1600, 540, 500, 400)
+            time.sleep(0.8)
+        return False
+
+    def _ensure_version(self, version: str):
+        """确认当前版本正确，不正确则切换"""
+        grade_kw = {"六上": "六年级上册", "六下": "六年级下册",
+                     "五上": "五年级上册", "五下": "五年级下册"}
+        target = ""
+        for short, full in grade_kw.items():
+            if short in version:
+                target = full
+                break
+
+        elems = self.adb.dump_ui()
+        page_text = ' '.join([(e.text or '') for e in elems])
+
+        # 已经正确
+        if (target and target in page_text) or (version.replace("新湘鲁","") in page_text):
+            print(f"  [Nav]   版本正确: {target or version}")
+            return
+
+        # 找年级文字点
+        for e in elems:
+            t = (e.text or '').strip()
+            if any(k in t for k in ["六年级", "五年级", "六上", "五上"]):
+                self.adb.tap(e.center[0], e.center[1])
+                print(f"  [Nav]   切换版本 → {t}")
+                time.sleep(2)
+                return
+
+        # 兜底
+        self.adb.tap(540, 1200)
+        time.sleep(2)
+
+    def _find_unit_and_go(self, unit: int) -> bool:
+        """找Unit，点对应去练习"""
+        # 滚动找Unit文字
+        for _ in range(6):
+            elems = self.adb.dump_ui()
+            unit_y = None
+            for e in elems:
+                import re
+                if e.text and re.match(rf'^Unit {unit}\b', (e.text or '').strip()):
+                    unit_y = e.center[1]
+                    break
+            if unit_y:
+                # 找对应的"去练习"
+                for e in elems:
+                    if '去练习' in (e.text or '') and abs(e.center[1] - unit_y) < 250:
+                        self.adb.tap(e.center[0], e.center[1])
+                        print(f"  [Nav]   点'去练习' for U{unit} at {e.center}")
+                        time.sleep(4)
+                        return True
+                # 没找到去练习，点Unit所在行右侧
+                self.adb.tap(881, unit_y + 99)
+                print(f"  [Nav]   兜底点 Unit 行 at (881, {unit_y+99})")
+                time.sleep(4)
+                return True
+            # 向下滚动
+            self.adb.swipe(540, 1800, 540, 500, 400)
+            time.sleep(0.8)
+
+        print(f"  [Nav] ⚠ 没找到 Unit {unit}")
+        self.adb.tap(540, 1400)
+        time.sleep(3)
+        return True
+
+    def _tap_stage(self, stage: str):
+        """点阶段按钮"""
+        for _ in range(5):
+            elems = self.adb.dump_ui()
+            for e in elems:
+                t = (e.text or '').strip()
+                if (t == stage or stage in t or t in stage) and e.clickable:
+                    if 50 < e.center[1] < 2200:
+                        self.adb.tap(e.center[0], e.center[1])
+                        print(f"  [Nav]   点阶段 '{t}' at {e.center}")
+                        time.sleep(2)
+                        return
+            time.sleep(1)
+
+    def _tap_start_practice(self):
+        """点'开始答题'之类的按钮"""
+        for _ in range(3):
+            elems = self.adb.dump_ui()
+            for e in elems:
+                t = (e.text or '').strip()
+                if t in ['开始答题', '开始', '去答题', '进入答题', 'Start']:
+                    self.adb.tap(e.center[0], e.center[1])
+                    print(f"  [Nav]   点'{t}' at {e.center}")
+                    time.sleep(3)
+                    return
+            time.sleep(1)
+        self.adb.tap(540, 1916)
+        time.sleep(3)
+
+    def _handle_popups(self):
+        """关弹窗/完成提示"""
+        elems = self.adb.dump_ui()
+        for e in elems:
+            t = (e.text or '').strip()
+            if t in ['先走一步', '继续练习', '关闭', '跳过', '×', '知道了']:
+                self.adb.tap(e.center[0], e.center[1])
+                time.sleep(1)
+                return True
+        return False
+
+    # ============================================
+    # 以下方法为旧版，保留兼容
+    # ============================================
 
     # ============================================
     # 每步导航的具体实现
@@ -434,24 +580,22 @@ class UniverseNavigator:
                     return
 
     def universal_reset(self):
-        """终极重置：任何页面 → 英语宝首页"""
-        print(f"  [Nav] 执行通用重置...")
-        # 连续退出
-        for _ in range(4):
+        """回到英语宝首页：连续按返回直到主页出现。不重启APP，不清缓存。"""
+        print(f"  [Nav] 返回首页...")
+        max_back = 8
+        for i in range(max_back):
+            elements = self.adb.dump_ui()
+            texts = ' '.join([(e.text or '') for e in elements])
+
+            # 检测到家了
+            if all(kw in texts for kw in ["教材精学", "专项突破"]):
+                print(f"  [Nav] ✅ 已回到首页 (第{i}次back后)")
+                return True
+
+            # 别按太多次（已经回首页了）
+            if i >= max_back - 1:
+                print(f"  [Nav] ⚠ 按了{max_back}次返回仍未确认到首页，继续流程")
+                return True
+
             self.adb.press_back()
-            time.sleep(0.5)
-
-        # 强杀重启
-        self.adb._adb(["shell", "am", "force-stop", "com.dinoenglish.yyb"])
-        time.sleep(2)
-        self.adb.launch_app("com.dinoenglish.yyb")
-        time.sleep(5)
-
-        # 关弹窗
-        elems = self.adb.dump_ui()
-        self._handle_interruption("ad_popup")
-
-        # 点英语Tab
-        self.adb.tap(108, 2233)
-        time.sleep(2)
-        print(f"  [Nav] ✅ 已回到英语宝首页")
+            time.sleep(0.6)

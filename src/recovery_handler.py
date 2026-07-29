@@ -55,32 +55,13 @@ class RecoveryHandler:
     # ============================================
 
     def handle_crash(self) -> bool:
-        """APP崩溃：强杀 → 等待 → 重启 → 回到首页"""
-        pkg = 'com.dinoenglish.yyb'
+        """回到首页：连续按返回。不重启APP，不清缓存。"""
         try:
-            # 1. 强杀APP
-            self.adb._adb(["shell", "am", "force-stop", pkg])
-            time.sleep(3)
-
-            # 2. 清缓存（避免残留在某个错误页面）
-            self.adb._adb(["shell", "pm", "clear", pkg])
-            time.sleep(2)
-
-            # 3. 重新启动
-            self.adb.launch_app(pkg)
-            time.sleep(5)
-
-            # 4. 回首页（有些APP启动后可能显示广告/弹窗）
-            self.adb.tap(108, 2233)
-            time.sleep(2)
-
-            # 5. 尝试关闭可能的弹窗
-            elements = self.adb.dump_ui()
-            self.handle_ad_popup(elements)
-
-            return True
+            from src.universe_navigator import UniverseNavigator
+            nav = UniverseNavigator(self.adb)
+            return nav.universal_reset()
         except Exception as e:
-            print(f"  [Recovery] 崩溃恢复失败: {e}")
+            print(f"  [Recovery] 返回首页失败: {e}")
             return False
 
     # ============================================
