@@ -155,12 +155,12 @@ body { font-family:-apple-system,"Microsoft YaHei","PingFang SC",sans-serif; bac
 
 .q-body { padding:14px 16px }
 
-/* 四个维度网格 */
-.q-dims { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:10px }
-.q-dim { text-align:center; padding:10px 4px; border-radius:10px; border:1px solid #eef0f5; background:#fafbfc }
-.q-dim .icon { font-size:22px; margin-bottom:3px }
-.q-dim .label { font-size:13px; font-weight:600; color:#64748b }
-.q-dim .score { font-size:12px; margin-top:2px }
+/* 六个维度网格 */
+.q-dims { display:grid; grid-template-columns:repeat(6,1fr); gap:6px; margin-bottom:10px }
+.q-dim { text-align:center; padding:8px 2px; border-radius:10px; border:1px solid #eef0f5; background:#fafbfc }
+.q-dim .icon { font-size:18px; margin-bottom:2px }
+.q-dim .label { font-size:11px; font-weight:600; color:#64748b }
+.q-dim .score { font-size:10px; margin-top:1px }
 .q-dim.pass { background:#f0fdf4; border-color:#bbf7d0 }
 .q-dim.pass .label { color:#166534 }
 .q-dim.fail { background:#fef2f2; border-color:#fecaca }
@@ -317,7 +317,7 @@ body { font-family:-apple-system,"Microsoft YaHei","PingFang SC",sans-serif; bac
         <span class="badge" id="qBadge">待启动</span>
       </div>
       <div class="card-desc">
-        每道题展示AI的<strong>四维检查结果</strong>（题干 / 内容 / 配图 / 作答）。
+        每道题展示AI的<strong>六维检查结果</strong>（题干 / 内容 / 配图 / 作答 / 音频 / 答错后）。
         每个维度有✅通过或❌不通过。底部可<strong>人工标注</strong>（✓通过 / ✗不通过），标注结果会自动存入反馈库供审查智能体学习。
       </div>
 
@@ -377,7 +377,7 @@ body { font-family:-apple-system,"Microsoft YaHei","PingFang SC",sans-serif; bac
       <div class="card-title">🤖 审查智能体</div>
       <div class="card-desc">
         选择已上传的脚本文件，指定单元后一键审查。<br>
-        <strong>审查流程</strong>：AI逐题做四维检查 → 结果保存在中栏 → 可人工标注 → 智能体自动学习。
+        <strong>审查流程</strong>：AI逐题做六维检查 → 结果保存在中栏 → 可人工标注 → 智能体自动学习。
       </div>
 
       <span class="form-label">📄 脚本文件</span>
@@ -541,12 +541,20 @@ function updQ(f) {
             <div class="icon">${q.ai_image?'✅':(q.question_type&&q.question_type.includes('图片')?'❌':'⏭')}</div>
             <div class="label">配图</div></div>
           <div class="q-dim ${q.ai_answer?'pass':'fail'}"><div class="icon">${q.ai_answer?'✅':'❌'}</div><div class="label">作答</div></div>
+          <div class="q-dim ${q.ai_audio===true?'pass':(q.ai_audio===false?'fail':'skip')}">
+            <div class="icon">${q.ai_audio===true?'✅':(q.ai_audio===false?'❌':'⏭')}</div>
+            <div class="label">音频</div></div>
+          <div class="q-dim ${q.ai_post_error===true?'pass':(q.ai_post_error===false?'fail':'skip')}">
+            <div class="icon">${q.ai_post_error===true?'✅':(q.ai_post_error===false?'❌':'⏭')}</div>
+            <div class="label">答错后</div></div>
         </div>
         <div class="q-reasons">
           <b>(1)题干:</b> ${q.stem_reason||'-'}<br>
           <b>(2)内容:</b> ${q.content_reason||'-'}<br>
           <b>(3)配图:</b> ${q.image_reason||'-'}<br>
-          <b>(4)作答:</b> ${q.answer_reason||'-'}
+          <b>(4)作答:</b> ${q.answer_reason||'-'}<br>
+          <b>(5)音频:</b> ${q.audio_reason||'-'}<br>
+          <b>(6)答错后:</b> ${q.post_error_reason||'-'}
         </div>
         <div class="q-actions">
           ${q.human_label
