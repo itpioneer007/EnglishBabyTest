@@ -9,7 +9,7 @@ import uiautomator2 as u2
 import time
 
 # ═══════════ 模块列表（逗号分隔即可） ═══════════
-TARGET_MODULES = ["听力专项", "单词听写", "单元自检"]
+TARGET_MODULES = ["听力专项"]
 # ═══════════ 切换年级/版本 ══════════════════
 GRADE_LEVEL = "五年级上册"
 BOOK_VERSION = "湘少版"
@@ -55,17 +55,40 @@ MODULE_CONFIG = {
     },
     "听力专项": {
         "entry_text": "听力专项",
-        "entry_actions": [
-            {"type": "click", "text": "去练习", "timeout": 4},
+        # 单元遍历：逐个点击"去练习"。有 units 时 entry_actions 里的去练习自动跳过
+        "units": [1],  # Unit 1-9, 测试先跑 U1
+        "entry_actions": [],  # 由 unit loop 点击去练习
+        # 子模块：每个单元内，基础巩固→综合进阶→难点突破，中间左滑
+        "sub_modules": [
+            {"name": "基础巩固", "enter_action": None},
+            {"name": "综合进阶", "enter_action": "swipe_left_sub"},
+            {"name": "难点突破",  "enter_action": "swipe_left_sub"},
         ],
         "post_entry_actions": [
             {"type": "click", "text": "开始答题", "timeout": 3},
             {"type": "click", "text": "重新答题", "timeout": 2},
         ],
+        # 报告页：前N-1个子模块点"继续练习"，最后子模块点左上角回单元列表
+        "report_action": {
+            "trigger": {"type": "click", "text": "练习报告"},
+            "after_report": [
+                {"type": "click", "text": "继续练习", "timeout": 3},
+            ],
+        },
         "next_button_texts": ["下一题", "继续"],
         "finish_texts": ["完成", "提交"],
         "empty_text": ["暂无数据"],
         "has_pagination": True,
+        "question_types": {
+            "sort": {
+                "detect_text": ["排序", "按顺序", "排序题", "给句子排序"],
+                "action": "sort_questions",
+            },
+            "match": {
+                "detect_text": ["匹配", "配对", "为人物选择", "选择正确的描述"],
+                "action": "match_questions",
+            },
+        },
     },
     "口语训练": {
         "entry_text": "口语训练",
@@ -105,7 +128,7 @@ GLOBAL_POPUPS = ["允许", "取消", "关闭", "以后再说", "暂不", "跳过
 
 # ==================== ③ 广告关闭（非文字按钮，用 description / ImageView 匹配） ====================
 def close_ad(d):
-    """关闭广告：先匹配 description='关闭'，再找右上角 ImageView，最后坐标兜底"""
+    """关闭广告：多种策略按顺序尝试"""
     # 方式1：contentDescription 包含"关闭"
     try:
         if d(description="关闭").exists(timeout=1):
@@ -116,7 +139,40 @@ def close_ad(d):
     except Exception:
         pass
 
-    # 方式2：className=ImageView，可点击，且在右上角
+    # 方式2：找广告文字（"老师伴学"/"打卡服务"），点其右上角的 X
+    try:
+        for kw in ("老师伴学", "打卡服务", "点击参与"):
+            for elem in (d.xpath('//*[@text!=""]').all() or []):
+                if kw in (elem.text or ""):
+                    # 找父级 clickable 容器的 bounds，再点右上角
+                    b = elem.bounds
+                    # 容器通常从 [705, 1787] 到 [1022, 2104]
+                    # X 按钮在右上角，约 (986, 1823)
+                    close_x = min(b[2] + 50, 1080) - 30   # 右边 X 按钮
+                    close_y = b[1] - 0  # 卡片顶部
+                    d.click(close_x, close_y)
+                    print(f"    🔔 通过 ad 文字 [{kw}] 定位 X 按钮 ({close_x},{close_y})")
+                    time.sleep(0.8)
+                    return True
+    except Exception:
+        pass
+
+    # 方式3：找内嵌的小尺寸 clickable（X 通常很小）
+    try:
+        for elem in (d.xpath('//*[@clickable="true"]').all() or []):
+            b = elem.bounds
+            w = b[2] - b[0]
+            h = b[3] - b[1]
+            # X 按钮特征：尺寸小（< 80x80）、位于右侧、y>600
+            if w < 80 and h < 80 and b[0] > 800 and b[1] > 600:
+                elem.click()
+                print(f"    🔔 通过小尺寸 clickable (X) 关闭广告 ({sum(b)//4},{h*1000})")
+                time.sleep(0.8)
+                return True
+    except Exception:
+        pass
+
+    # 方式4：className=ImageView，右上角
     try:
         for elem in d(className="android.widget.ImageView"):
             info = elem.info
@@ -131,10 +187,10 @@ def close_ad(d):
     except Exception:
         pass
 
-    # 方式3：硬编码坐标兜底（常见广告关闭在右上角）
+    # 方式5：硬编码右上角坐标
     try:
-        d.click(1000, 120)
-        print("    🔔 通过坐标 (1000,120) 关闭广告")
+        d.click(986, 1823)
+        print("    🔔 通过 ad-X 坐标 (986,1823) 关闭广告")
         time.sleep(0.8)
         return True
     except Exception:
@@ -195,6 +251,18 @@ def execute_actions(d, actions, label=""):
         elif at == "close_ad":
             close_ad(d)
 
+        elif at == "swipe_left":
+            # 水平左滑切换子模块
+            d.swipe(900, 600, 200, 600, duration=0.3)
+            time.sleep(1.5)
+            print(f"    👈 左滑切换子模块")
+
+        elif at == "swipe_left_sub":
+            # 子模块区左滑：用 swipe_ext，在基础巩固文字稍上方
+            d.swipe_ext("left", scale=0.5)
+            time.sleep(1.5)
+            print(f"    👈 swipe_ext 左滑")
+
 # ==================== ⑤ 基础工具 ====================
 def safe_click(d, text, timeout=3) -> bool:
     try:
@@ -216,9 +284,16 @@ def dismiss_global_popups(d):
     return False
 
 def scroll_and_find(d, text, max_swipes=8) -> bool:
+    """查找文字：先直接找，然后向上滑（内容下移）找下方，再向下滑（内容上移）找上方"""
     if d(text=text).exists(timeout=2): return True
+    # 第一轮：向上滑（内容下移）
     for _ in range(max_swipes):
         d.swipe(500, 1400, 500, 400, duration=0.3)
+        time.sleep(0.8)
+        if d(text=text).exists(timeout=1.5): return True
+    # 第二轮：向下滑（内容上移，返回顶部区域）
+    for _ in range(max_swipes):
+        d.swipe(500, 400, 500, 1400, duration=0.3)
         time.sleep(0.8)
         if d(text=text).exists(timeout=1.5): return True
     return False
@@ -279,7 +354,6 @@ def ensure_grade(d, grade_level, book_version=""):
 def back_to_home(d, grade_level):
     """从模块内部回到年级主页：按 back 直到看到年级文字"""
     for _ in range(8):
-        # 处理途中弹窗
         dismiss_global_popups(d)
         if d(textContains=grade_level).exists(timeout=1):
             return True
@@ -291,49 +365,162 @@ def back_to_home(d, grade_level):
     return d(textContains=grade_level).exists(timeout=2)
 
 # ==================== ⑦ 核心：单模块检测 ====================
-def run_single_module(d, module_name, config):
-    print(f"\n{'='*45}")
-    print(f"🔍 检测模块：{module_name}")
-    print(f"{'='*45}")
 
-    questions = 0
-    entry = config["entry_text"]
+def _detect_question_type(d, config):
+    """识别当前题型：扫描题干关键词，返回 action 名或 None"""
+    qt = config.get("question_types", {})
+    if not qt:
+        return None
+    # 获取当前页面所有文字
+    all_texts = ""
+    for e in (d.xpath('//*[@text!=""]').all() or []):
+        all_texts += (e.text or "") + " "
+    for qtype, qcfg in qt.items():
+        for kw in qcfg.get("detect_text", []):
+            if kw in all_texts:
+                return qcfg["action"]
+    return None
 
-    # 1. 找模块入口（支持滑动）
-    print(f"  [1] 查找「{entry}」...")
-    if not scroll_and_find(d, entry):
-        print(f"  ❌ 未找到模块: {entry}")
-        return 0
-    d(text=entry).click()
-    print(f"  ✅ 已进入 {module_name}")
-    time.sleep(2)
 
-    # 2. 空态检测
-    for kw in config.get("empty_text", []):
-        if d(text=kw).exists(timeout=2):
-            print(f"  ⚠ {module_name} [{kw}]，跳过")
-            return 0
+def _handle_sort_question(d, config):
+    """处理排序题：找所有可点击句子，依次点击，直到下一题出现"""
+    print(f"    📋 识别到排序题，处理中...")
+    clicked = set()
+    max_attempts = 30
 
-    # 3. 执行入口前操作（entry_actions）
-    for _ in range(3):
-        dismiss_global_popups(d)
-    ea = config.get("entry_actions", [])
-    if ea:
-        print(f"  [2] 执行 {len(ea)} 个入口操作")
-        execute_actions(d, ea, module_name)
+    for _ in range(max_attempts):
+        # 每次循环找新出现的可点击句子
+        found_new = False
+        for elem in (d.xpath('//*[@clickable="true"]').all() or []):
+            t = (elem.text or "").strip()
+            # 跳过已点、空文字、标准按钮
+            if not t or t in clicked:
+                continue
+            if t in ("下一题", "继续", "检查", "提交", "完成", "退出", "A", "B", "C", "T", "F"):
+                continue
+            try:
+                elem.click()
+                clicked.add(t)
+                print(f"      → 点击: {t}")
+                time.sleep(0.5)
+                found_new = True
+            except Exception:
+                pass
+
+        # 检查下一题是否出现
+        if d(text="下一题").exists(timeout=1):
+            print(f"    ✅ 排序完成，下一题已出现")
+            return True
+
+        if not found_new:
+            break
+
+    return d(text="下一题").exists(timeout=2)
+
+
+def _handle_match_question(d, config):
+    """处理匹配题：依次点击人物方框 → 选字母配对，直到全部配完"""
+    print(f"    📋 识别到匹配题，处理中...")
+    # 收集字母选项 A-E（按键序）
+    letters = []
+    for ch in ("A", "B", "C", "D", "E"):
+        try:
+            if d(text=ch).exists(timeout=0.5):
+                letters.append(ch)
+        except Exception:
+            pass
+    if not letters:
+        print(f"    ⚠ 未找到字母选项"); return False
+
+    # 收集人物（可点击、非标准按钮、非字母）
+    persons = []
+    for elem in (d.xpath('//*[@clickable="true"]').all() or []):
+        t = (elem.text or "").strip()
+        if not t or t in letters:
+            continue
+        if t in ("下一题", "继续", "检查", "提交", "完成", "退出", "A", "B", "C", "T", "F"):
+            continue
+        persons.append(elem)
+
+    print(f"    人物{len(persons)}个, 字母{len(letters)}个")
+    used_letters = set()
+
+    for person in persons:
+        # 点人物
+        try:
+            person.click()
+            print(f"      → 选中: {(person.text or '').strip()[:10]}")
+            time.sleep(0.4)
+        except Exception:
+            continue
+
+        # 选一个未用字母
+        found = False
+        for ch in letters:
+            if ch in used_letters:
+                continue
+            try:
+                if d(text=ch).exists(timeout=1):
+                    d(text=ch).click()
+                    used_letters.add(ch)
+                    print(f"      → 配对: {ch}")
+                    time.sleep(0.4)
+                    found = True
+                    break
+            except Exception:
+                pass
+        if not found:
+            print(f"    ⚠ 无可配字母，跳过")
+
+    # 全部配对后等下一题
+    for _ in range(8):
+        if d(text="下一题").exists(timeout=1.5):
+            print(f"    ✅ 匹配完成，下一题已出现")
+            return True
         time.sleep(1)
+    return d(text="下一题").exists(timeout=2)
 
-    # 4. 执行入口后操作（post_entry_actions）
-    pa = config.get("post_entry_actions", [])
-    if pa:
-        print(f"  [3] 执行 {len(pa)} 个后置操作")
-        execute_actions(d, pa, module_name)
-        time.sleep(1)
 
-    # 5. 答题循环
-    print(f"  [4] 开始答题...")
-    while questions < 50:
+def _answer_loop(d, config, module_name):
+    """答题循环（内部复用），返回题目数"""
+    q = 0
+    while q < 50:
         dismiss_global_popups(d)
+        # 中途弹窗"完成X%,要不要继续?"（同时有"继续练习"和"先走一步"）→ 关掉继续答题
+        if d(text="继续练习").exists(timeout=0.5) and d(text="先走一步").exists(timeout=0.3):
+            d(text="继续练习").click()
+            print("      → 关弹窗，继续答题")
+            time.sleep(2)
+            continue
+
+        # ── 题型识别：如果是排序题/匹配题，走专用处理 ──
+        qtype = _detect_question_type(d, config)
+        if qtype == "sort_questions":
+            _handle_sort_question(d, config)
+            found = False
+            for kw in config.get("next_button_texts", ["下一题"]):
+                try:
+                    if d(text=kw).exists(timeout=5):
+                        d(text=kw).click(); time.sleep(2)
+                        q += 1; found = True; break
+                except Exception: pass
+            if found: continue
+            else:
+                print(f"    ⏹ 排序后无下一题")
+                return q
+        elif qtype == "match_questions":
+            _handle_match_question(d, config)
+            found = False
+            for kw in config.get("next_button_texts", ["下一题"]):
+                try:
+                    if d(text=kw).exists(timeout=5):
+                        d(text=kw).click(); time.sleep(2)
+                        q += 1; found = True; break
+                except Exception: pass
+            if found: continue
+            else:
+                print(f"    ⏹ 匹配后无下一题")
+                return q
 
         # 完成判定
         for kw in config.get("finish_texts", []):
@@ -341,47 +528,213 @@ def run_single_module(d, module_name, config):
                 if d(text=kw).exists(timeout=0.5):
                     d(text=kw).click()
                     print(f"    ⏹ {kw}")
-                    return questions
-            except Exception:
-                pass
+                    return q
+            except Exception: pass
 
-        # 截图
+        # ── 截图当前题目 ──
         d.screenshot("test.png")
-        questions += 1
-        print(f"    📸 第{questions}题")
+        q += 1
+        print(f"    📸 第{q}题")
 
-        # 选答案 + 检查
-        for opt in ("A", "B", "C", "T", "F"):
-            try:
-                if d(text=opt).exists(timeout=0.3):
-                    d(text=opt).click(); time.sleep(0.3)
-                    break
-            except Exception:
-                pass
-        for kw in ("检查", "提交"):
-            try:
-                if d(text=kw).exists(timeout=1):
-                    d(text=kw).click(); time.sleep(0.8)
-                    break
-            except Exception:
-                pass
+        # ── 等待题目渲染，选答案 ──
+        answered = False
+        for opt in ("A","B","C","T","F"):
+            for _ in range(12):                     # 0.5s x 12 = 最多6秒等渲染
+                try:
+                    if d(text=opt).exists(timeout=0.5):
+                        d(text=opt).click()
+                        print(f"      → 选 {opt}")
+                        time.sleep(0.5)
+                        answered = True
+                        break
+                except Exception: pass
+                time.sleep(0.4)
+            if answered:
+                break
 
-        # 下一题
+        # 检查/提交（轮询等出现）
+        for kw in ("检查","提交"):
+            for _ in range(10):
+                try:
+                    if d(text=kw).exists(timeout=0.5):
+                        d(text=kw).click()
+                        print(f"      → {kw}")
+                        time.sleep(1.5)             # 等反馈动画
+                        break
+                except Exception: pass
+                time.sleep(0.4)
+
+        # 下一题（wait() 原生方法，等元素出现，最长 6s）
         found = False
         for kw in config.get("next_button_texts", ["下一题"]):
             try:
-                if d(text=kw).exists(timeout=2):
+                if d(text=kw).wait(timeout=6):       # wait 比 exists 更可靠
                     d(text=kw).click()
+                    print(f"      → {kw}")
                     time.sleep(2)
                     found = True
                     break
-            except Exception:
-                pass
-        if not found:
-            print(f"    ⏹ 无下一题")
-            return questions
+            except Exception: pass
 
-    return questions
+        # 最后一题：找不到下一题 → 找「练习报告」
+        if not found:
+            for _ in range(10):
+                if d(text="练习报告").exists(timeout=0.5):
+                    d(text="练习报告").click()
+                    print(f"      → 练习报告（最后一题）")
+                    time.sleep(2)
+                    found = True
+                    break
+                time.sleep(0.5)
+
+        if not found:
+            print(f"    ⏹ 无下一题 (第{q}题)")
+            return q
+    return q
+
+
+def _handle_report(d, config, sub_name="", is_last=False):
+    """处理报告页按钮：
+    - 非最后子模块: 点 after_report（如"继续练习"）→ 回单元内小模块列表
+    - 最后子模块:   点"先走一步"/左上角返回 → 回单元列表
+    """
+    ra = config.get("report_action")
+    if not ra:
+        return
+
+    # 报告页出现的按钮候选
+    if is_last:
+        # 最后子模块：退出到单元列表（back 或 先走一步）
+        if d(text="先走一步").exists(timeout=2):
+            d(text="先走一步").click()
+            print(f"    👋 先走一步 → 回单元列表")
+            time.sleep(2)
+        for _ in range(4):
+            if d(text="去练习").exists(timeout=1.5):
+                return
+            d.press("back"); time.sleep(1.5)
+        return
+    else:
+        # 非最后：报告页 → 点"继续练习" → 回到单元内 → 左滑下一关
+        after = ra.get("after_report", [])
+        # 等报告页完全加载（成绩动画）
+        for _ in range(8):
+            if d(text="继续练习").exists(timeout=1.5):
+                break
+            time.sleep(1)
+        # 点继续练习
+        execute_actions(d, after, sub_name)
+        # 等回到单元内（出现"开始答题"或"重新答题"）
+        for _ in range(8):
+            if d(text="重新答题").exists(timeout=1) or d(text="开始答题").exists(timeout=1):
+                return
+            time.sleep(1)
+        print(f"    ⚠ 继续练习后未回单元内")
+
+
+def run_single_module(d, module_name, config):
+    print(f"\n{'='*45}")
+    print(f"🔍 检测模块：{module_name}")
+    print(f"{'='*45}")
+
+    questions = 0
+    entry = config["entry_text"]
+    sub_modules = config.get("sub_modules")     # 子模块列表（None=无子模块）
+
+    # 1. 找模块入口
+    print(f"  [1] 查找「{entry}」...")
+    if not scroll_and_find(d, entry):
+        print(f"  ❌ 未找到模块: {entry}"); return 0
+    d(text=entry).click()
+    print(f"  ✅ 已进入 {module_name}")
+    time.sleep(2)
+
+    # 2. 空态检测
+    for kw in config.get("empty_text", []):
+        if d(text=kw).exists(timeout=2):
+            print(f"  ⚠ {module_name} [{kw}]，跳过"); return 0
+
+    # 3. 入口操作
+    for _ in range(3):
+        dismiss_global_popups(d)
+    ea = config.get("entry_actions", [])
+    if ea:
+        print(f"  [2] 入口操作 ({len(ea)}个)")
+        execute_actions(d, ea, module_name)
+        time.sleep(1)
+
+    # ── 4. 单元遍历 + 子模块 ──
+    units = config.get("units")  # 如有单元号列表，逐个遍历
+    if units:
+        print(f"  [3] 单元遍历({len(units)}个)：U{units[0]}-U{units[-1]}")
+
+    # 子模块内部运行（被单元循环或单独调用）
+    def run_sub_modules():
+        nonlocal questions
+        sm = config.get("sub_modules")
+        if not sm: return
+        print(f"  [子模块] {[s['name'] for s in sm]}")
+        for i, sub in enumerate(sm):
+            name = f"{module_name}/{sub['name']}"
+            print(f"  --- [{i+1}/{len(sm)}] {sub['name']} ---")
+            # 子模块切换
+            act = sub.get("enter_action")
+            if act in ("swipe_left", "swipe_left_sub"):
+                d.swipe_ext("left", scale=0.5)
+                time.sleep(1.5)
+                print(f"    👈 左滑 → {sub['name']}")
+            # 答题入口
+            pa = config.get("post_entry_actions", [])
+            if pa: execute_actions(d, pa, name)
+            # 答题
+            q = _answer_loop(d, config, name)
+            questions += q
+            # 报告：最后子模块退出单元，前面的继续练习回单元内
+            is_last = (i == len(sm) - 1)
+            _handle_report(d, config, sub["name"], is_last=is_last)
+            time.sleep(1.5)
+
+    # 单元遍历
+    if units:
+        for ui, unit_num in enumerate(units):
+            print(f"\n  {'='*40}")
+            print(f"  🎯 Unit {unit_num} [{ui+1}/{len(units)}]")
+            print(f"  {'='*40}")
+            # 在模块列表里找该单元的"去练习"并点击
+            clicked = False
+            for _ in range(20):  # 滚动+查找
+                # 找目标 Unit 按钮
+                btns = [(e, e.bounds[1]) for e in (d.xpath('//*[@text="去练习"]').all() or [])]
+                unit_rows = [(e, e.text, e.bounds[1]) for e in (d.xpath('//*[@text!=""]').all() or [])
+                            if (e.text or "").startswith(f"Unit {unit_num}")]
+                if unit_rows:
+                    ue, uname, uy = unit_rows[0]
+                    # 最近"去练习"匹配该单元行
+                    for be, by in btns:
+                        if abs(by - uy) < 120:
+                            be.click(); time.sleep(4); clicked = True
+                            break
+                if clicked: break
+                d.swipe(500, 1800, 500, 600, 0.3); time.sleep(1)
+            if not clicked:
+                print(f"  ❌ U{unit_num} 找不到去练习"); continue
+            print(f"  ✅ U{unit_num} 去练习")
+            # 跑子模块
+            run_sub_modules()
+            # 回单元列表
+            print(f"  ↩ 回单元列表...")
+            for _ in range(5):
+                if d(text="去练习").exists(timeout=1): break
+                d.press("back"); time.sleep(1.5)
+            time.sleep(1)
+        # 所有单元完成后回主页
+        print(f"  ↩ 回主页...")
+        back_to_home(d, GRADE_LEVEL)
+    else:
+        # 无单元列表，直接跑 entry_actions + 子模块（或直接答题）
+        run_sub_modules()
+
+    return questions if (units or sub_modules) else 0
 
 # ==================== ⑧ 入口（批量调度） ====================
 if __name__ == "__main__":
@@ -395,6 +748,11 @@ if __name__ == "__main__":
     for _ in range(5):
         d.press("back"); time.sleep(1)
     d.app_start(APP_PACKAGE); time.sleep(5)
+    # ═══ 立即关广告（app_start 后广告先弹出，不等人） ═══
+    for _ in range(3):
+        dismiss_global_popups(d)
+    close_ad(d)
+    # ═════════════════════════════════════════════════
 
     if not ensure_grade(d, GRADE_LEVEL, BOOK_VERSION):
         print("❌ 年级切换失败"); exit(1)
