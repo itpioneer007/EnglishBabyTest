@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """
-英语宝 · 自动化控制台 v3（对接 step7_complete.py 引擎）
-======================================================
+英语宝 · 自动化控制台 v4（对接拆分后的 config.py + engine.py + main.py）
+=====================================================================
 前端一键点击 → 后端线程内调用最新引擎函数 → 实时日志 + 汇总结果
 """
 
@@ -13,7 +13,8 @@ sys.path.insert(0, SCRIPTS_DIR)
 
 from flask import Flask, Response, request, jsonify, stream_with_context
 
-import step7_complete as engine   # 最新自动化引擎
+from config import MODULE_CONFIG, GRADE_LEVEL, BOOK_VERSION, APP_PACKAGE, TARGET_MODULES
+from engine import u2, close_ad, dismiss_global_popups, ensure_grade, run_single_module, back_to_home
 
 app = Flask(__name__)
 task_logs = {}
@@ -49,27 +50,27 @@ def _run_detect(task_id, modules, grade, version):
         log.append("=== 启动自动化引擎 v3 ===")
         log.append(f"📋 目标模块: {modules}")
         log.append(f"📚 年级: {version} {grade}")
-        d = engine.u2.connect()
+        d = u2.connect()
         log.append("✅ 设备已连接")
-        d.app_stop(engine.APP_PACKAGE); time.sleep(1)
-        d.app_start(engine.APP_PACKAGE); time.sleep(5)
+        d.app_stop(APP_PACKAGE); time.sleep(1)
+        d.app_start(APP_PACKAGE); time.sleep(5)
 
         # 关广告 + 切年级
-        engine.dismiss_global_popups(d)
-        engine.close_ad(d)
-        if not engine.ensure_grade(d, grade, version):
+        dismiss_global_popups(d)
+        close_ad(d)
+        if not ensure_grade(d, grade, version):
             log.append("❌ 年级切换失败")
             task_status[task_id] = "error"
             return
 
         # 逐个模块检测
         for i, mod in enumerate(modules, 1):
-            cfg = engine.MODULE_CONFIG.get(mod)
+            cfg = MODULE_CONFIG.get(mod)
             if not cfg:
                 log.append(f"❌ 未知模块: {mod}，跳过")
                 continue
             log.append(f"\n  [{i}/{len(modules)}]")
-            q = engine.run_single_module(d, mod, cfg)
+            q = run_single_module(d, mod, cfg)
             entry = {"module": mod, "questions": q,
                      "status": "成功" if q > 0 else "跳过/无数据"}
             result["modules"].append(entry)
@@ -80,7 +81,7 @@ def _run_detect(task_id, modules, grade, version):
             # 回主页（最后一个模块后不用回，直接展示状态）
             if i < len(modules):
                 log.append(f"↩ 返回主页...")
-                engine.back_to_home(d, grade)
+                back_to_home(d, grade)
                 time.sleep(2)
 
         result["elapsed"] = round(time.time() - t0, 1)
@@ -157,9 +158,9 @@ def api_detect():
 @app.route("/api/modules")
 def api_modules():
     """返回引擎里已配置的模块列表"""
-    return jsonify({"modules": list(engine.MODULE_CONFIG.keys()),
-                    "grade": engine.GRADE_LEVEL,
-                    "version": engine.BOOK_VERSION})
+    return jsonify({"modules": list(MODULE_CONFIG.keys()),
+                    "grade": GRADE_LEVEL,
+                    "version": BOOK_VERSION})
 
 @app.route("/api/result/<task_id>")
 def api_result(task_id):

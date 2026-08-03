@@ -26,7 +26,12 @@ PROJECT_ROOT = Path(__file__).parent.absolute()
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from flask import Flask, jsonify, request, send_from_directory, render_template, Response
-from adb_controller import ADBController
+try:
+    from adb_controller import ADBController
+except ImportError:
+    # 依赖缺失时占位，保证服务可启动（听力专项新引擎不依赖 ADBController）
+    class ADBController:
+        def __init__(self, *a, **kw): pass
 from config_loader import load_config
 
 app = Flask(__name__)
@@ -2329,6 +2334,68 @@ body{{font-family:"Microsoft YaHei","PingFang SC",sans-serif;background:#f0f2f5;
 </body></html>'''
 
     return Response(html, mimetype="text/html")
+
+
+# ============================================================
+# 听力专项 · 练习+测试 全流程自动化（新引擎）
+# ============================================================
+
+_AUDIO_RUNNER = None  # 后台线程
+
+
+@app.route("/api/audio/run", methods=["POST"])
+def api_audio_run():
+    """启动听力专项自动化（练习+测试）
+    请求: {"mode": "all"|"practice"|"test", "units": [1], "test_units": [1]}
+    """
+    global _AUDIO_RUNNER
+    if task_status["running"]:
+        return jsonify({"error": "已有任务在运行"}), 409
+
+    data = request.get_json() or {}
+    mode = data.get("mode", "all")
+    units = data.get("units", [1])
+    test_units = data.get("test_units", units)
+
+    def _run():
+        try:
+            set_running(f"听力专项[{mode}]")
+            log_msg(f"启动听力专项 {mode} 模式: 练习单元{units} 测试单元{test_units}")
+            sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+            from modules.听力专项 import run_module, run_test_module
+            from common.tools import dismiss_global_popups, close_ad, ensure_grade
+            import uiautomator2 as u2
+
+            d = u2.connect()
+            log_msg("设备已连接")
+
+            # 关广告 + 确认年级
+            for _ in range(3):
+                dismiss_global_popups(d)
+            close_ad(d)
+            ok = ensure_grade(d, "五年级上册", "湘少版")
+            log_msg("年级确认: 湘少版 五年级上册" if ok else "⚠ 年级切换失败，继续尝试")
+
+            q1 = q2 = 0
+            if mode in ("all", "practice"):
+                log_msg("▶ 开始练习部分...")
+                q1 = run_module(d)
+                log_msg(f"练习部分完成: {q1} 题")
+            if mode in ("all", "test"):
+                log_msg("▶ 开始测试部分...")
+                q2 = run_test_module(d)
+                log_msg(f"测试部分完成: {q2} 题")
+
+            log_msg(f"✅ 听力专项全部完成: 练习{q1} + 测试{q2} = {q1+q2} 题")
+            set_done()
+        except Exception as e:
+            log_msg(f"❌ 任务异常: {e}", "error")
+            set_done()
+
+    _AUDIO_RUNNER = threading.Thread(target=_run, daemon=True)
+    _AUDIO_RUNNER.start()
+    return jsonify({"status": "started", "mode": mode,
+                    "units": units, "test_units": test_units})
 
 
 # ============================================================

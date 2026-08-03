@@ -148,6 +148,9 @@ select:focus,input:focus{border-color:#4a6cf7;box-shadow:0 0 0 3px rgba(74,108,2
           <button class="btn btn-primary" id="btnStart" onclick="startBatch()">
             ▶ 开始批量检查
           </button>
+          <button class="btn" style="background:#7c3aed;color:#fff" id="btnAudio" onclick="startAudio()">
+            🎧 听力专项(练习+测试)
+          </button>
           <button class="btn btn-danger btn-sm" id="btnCancel" onclick="cancelBatch()" style="display:none">
             ⏹ 停止
           </button>
@@ -333,6 +336,19 @@ async function parseNL(){
     // 自动开始跑
     setTimeout(()=>startBatch(),500)
   }catch(e){$('nlResult').textContent='解析失败: '+e}
+}
+
+// ====== 听力专项（练习+测试）新引擎 ======
+async function startAudio(){
+  const units=[1]
+  if(!confirm('启动听力专项自动化？\n练习: U1 (基础巩固→综合进阶→难点突破)\n测试: U1 测试卷\n(当前配置仅U1，打通后可改脚本扩展)')) return
+  try{
+    const r=await fetch('/api/audio/run',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({mode:'all',units,test_units:units})})
+    const j=await r.json()
+    if(j.error){alert(j.error);return}
+    addLog('info',`▶ 听力专项已启动: ${j.mode} 模式`)
+  }catch(e){alert('启动失败: '+e.message)}
 }
 
 // ====== 批量操作 ======
