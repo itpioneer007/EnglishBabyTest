@@ -244,6 +244,9 @@ select:focus,input:focus{border-color:#4a6cf7;box-shadow:0 0 0 3px rgba(74,108,2
           <button class="btn" style="background:#0d9488;color:#fff" id="btnOral" onclick="startOral()">
             🗣 口语训练
           </button>
+          <button class="btn" style="background:#b45309;color:#fff" id="btnUnit" onclick="startUnit()">
+            📋 单元自检
+          </button>
           <button class="btn btn-danger btn-sm" id="btnCancel" onclick="cancelBatch()" style="display:none">
             ⏹ 停止
           </button>
@@ -672,6 +675,19 @@ async function startOral(){
     const j=await r.json()
     if(j.error){alert(j.error);return}
     addLog('info',`▶ 口语训练已启动: 单元${j.units}`)
+  }catch(e){alert('启动失败: '+e.message)}
+}
+
+// ====== 单元自检 新引擎 ======
+async function startUnit(){
+  const units=[1]
+  if(!confirm('启动单元自检自动化？\nU1 (36题：选择/判断/匹配/排序/填空/阅读)\n(当前配置仅U1，打通后可改脚本扩展)')) return
+  try{
+    const r=await fetch('/api/unit/run',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({units})})
+    const j=await r.json()
+    if(j.error){alert(j.error);return}
+    addLog('info',`▶ 单元自检已启动: 单元${j.units}`)
   }catch(e){alert('启动失败: '+e.message)}
 }
 

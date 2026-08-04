@@ -350,13 +350,16 @@ def _handle_sort_question(d, config):
     #    ★ 检查按钮在更底部 y~2334（不参与检测）
     def _find_num_btns():
         """检测底部序号按钮位置。
-        序号按钮特征：y 1680-2260、宽 200-300 的无文字图片按钮
-        检查按钮特征：y > 2260（更靠底部）→ 排除！
+        序号按钮特征：y 1680-2100、宽 200-300、x 起点为 0 或 242 的倍数（不是 58）
+        ★ 关键：x 起点 58 是句子方框，必须排除！
+        检查按钮特征：y > 2100 或宽 > 800 → 排除
         """
         btns = []
         for e in (d.xpath('//*[@clickable="true"]').all() or []):
             b = e.bounds
-            if 1680 < b[1] < 2260 and 200 < b[2] - b[0] < 300:
+            w = b[2] - b[0]
+            # x 起点 58 是句子方框，跳过
+            if 1680 < b[1] < 2100 and 200 < w < 300 and b[0] != 58:
                 cx = (b[0] + b[2]) // 2
                 cy = (b[1] + b[3]) // 2
                 btns.append((cx, cy, b[0], b[1]))
@@ -753,5 +756,99 @@ def run_single_module(d, module_name, config):
         run_sub_modules()
 
     return questions if (units or sub_modules) else 0
+
+
+# ==================== ⑨ 填空题处理（新题型） ====================
+
+# 键盘字母固定坐标（基于 1080×2400 屏幕截图实测）
+# 键盘布局（4行）：
+#   qwertyuiop (y=875)
+#   asdfghjkl  (y=990)
+#   小写/ zxcvbnm /删除 (y=1110)
+#   123 / \' / 空格 / - / 英文 (y=1215)
+_KEYBOARD_LETTERS = {
+    'q': (60, 875), 'w': (170, 875), 'e': (280, 875), 'r': (390, 875),
+    't': (500, 875), 'y': (610, 875), 'u': (720, 875), 'i': (830, 875),
+    'o': (940, 875), 'p': (1020, 875),
+    'a': (115, 990), 's': (225, 990), 'd': (335, 990), 'f': (445, 990),
+    'g': (555, 990), 'h': (665, 990), 'j': (775, 990), 'k': (885, 990),
+    'l': (995, 990),
+    'z': (150, 1110), 'x': (265, 1110), 'c': (380, 1110), 'v': (495, 1110),
+    'b': (610, 1110), 'n': (725, 1110), 'm': (840, 1110),
+    ' ': (450, 1215),
+}
+
+
+def _handle_fill_blank(d, config):
+    """处理填空题（方案一：FastInputIME 输入法注入，用户确认最稳定）：
+    1. 找所有 EditText 输入框（自定义 view，只能通过 dump 找 EditText class）
+    2. 每个方框：点方框获得焦点 → d.set_fastinput_ime(True) 切专用输入法
+       → d.send_keys(word) 直接注入文本 → back 收起 → 下一个方框
+    3. 全部填完 → 点检查
+    关键：不点击系统键盘（uiautomator2 无法定位键盘），用 IME 注入绕过搜狗输入法
+    """
+    import re as _re
+    print(f"    填空题，处理中...")
+
+    def _find_inputs():
+        xml = d.dump_hierarchy()
+        inputs = []
+        for m in _re.finditer(
+            r'class="android\.widget\.EditText"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
+            xml
+        ):
+            x1, y1, x2, y2 = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+            cx, cy = (x1+x2)//2, (y1+y2)//2
+            inputs.append((cx, cy, y1))
+        inputs.sort(key=lambda t: t[2])
+        return inputs
+
+    import random
+    words = ['a', 'b', 'cat', 'dog', 'sun', 'ok', 'hi', 'go']
+    filled = set()  # 已填的方框 y1 集合
+
+    for round_i in range(8):
+        inputs = _find_inputs()
+        new_inputs = [i for i in inputs if i[2] not in filled]
+        if not new_inputs:
+            if round_i < 4:
+                # 下滑找新方框
+                d.swipe(540, 1800, 540, 800, 0.4)
+                time.sleep(1.5)
+                continue
+            else:
+                break
+
+        # 填一个方框：点方框 → FastInputIME 注入 → back
+        cx, cy, y1 = new_inputs[0]
+        d.click(cx, cy)
+        time.sleep(1.5)
+        word = random.choice(words)
+        try:
+            # 方案一：切换 FastInputIME 输入法注入文本（绕过搜狗键盘）
+            d.set_fastinput_ime(True)
+            time.sleep(0.5)
+            d.send_keys(word)
+            time.sleep(0.5)
+        except Exception:
+            # 兜底：ADB input text（之前验证过第1个方框有效）
+            d.shell(f"input text {word}")
+            time.sleep(0.5)
+        # 收起键盘
+        d.press("back")
+        time.sleep(1.5)
+        filled.add(y1)
+        print(f"    填 (y={y1}) 字={word}")
+
+    time.sleep(1.5)
+    if d(text="检查").exists(timeout=2):
+        d(text="检查").click()
+        print(f"    填空完成，点击检查")
+        time.sleep(1.5)
+        return True
+    return False
+
+
+
 
 # ==================== ⑧ 入口（批量调度） ====================
