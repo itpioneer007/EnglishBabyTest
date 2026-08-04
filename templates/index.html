@@ -241,6 +241,9 @@ select:focus,input:focus{border-color:#4a6cf7;box-shadow:0 0 0 3px rgba(74,108,2
           <button class="btn" style="background:#7c3aed;color:#fff" id="btnAudio" onclick="startAudio()">
             🎧 听力专项(练习+测试)
           </button>
+          <button class="btn" style="background:#0d9488;color:#fff" id="btnOral" onclick="startOral()">
+            🗣 口语训练
+          </button>
           <button class="btn btn-danger btn-sm" id="btnCancel" onclick="cancelBatch()" style="display:none">
             ⏹ 停止
           </button>
@@ -656,6 +659,19 @@ async function startAudio(){
     const j=await r.json()
     if(j.error){alert(j.error);return}
     addLog('info',`▶ 听力专项已启动: ${j.mode} 模式`)
+  }catch(e){alert('启动失败: '+e.message)}
+}
+
+// ====== 口语训练 新引擎 ======
+async function startOral(){
+  const units=[1]
+  if(!confirm('启动口语训练自动化？\nU1 (4大题×5小题，含录音/小喇叭题型)\n(当前配置仅U1，打通后可改脚本扩展)')) return
+  try{
+    const r=await fetch('/api/oral/run',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({units})})
+    const j=await r.json()
+    if(j.error){alert(j.error);return}
+    addLog('info',`▶ 口语训练已启动: 单元${j.units}`)
   }catch(e){alert('启动失败: '+e.message)}
 }
 

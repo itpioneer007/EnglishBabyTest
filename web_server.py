@@ -2403,6 +2403,56 @@ def api_audio_run():
 
 
 # ============================================================
+# 口语训练 自动化（新引擎）
+# ============================================================
+
+_ORAL_RUNNER = None  # 后台线程
+
+
+@app.route("/api/oral/run", methods=["POST"])
+def api_oral_run():
+    """启动口语训练自动化
+    请求: {"units": [1,2,3,4]}
+    """
+    global _ORAL_RUNNER
+    if task_status["running"]:
+        return jsonify({"error": "已有任务在运行"}), 409
+
+    data = request.get_json() or {}
+    units = data.get("units", [1])
+
+    def _run():
+        try:
+            set_running(f"口语训练")
+            log_msg(f"启动口语训练: 单元{units}")
+            sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+            from modules.口语训练 import run_module
+            from common.tools import dismiss_global_popups, close_ad, ensure_grade
+            import uiautomator2 as u2
+
+            d = u2.connect()
+            log_msg("设备已连接")
+
+            # 关广告 + 确认年级
+            for _ in range(3):
+                dismiss_global_popups(d)
+            close_ad(d)
+            ok = ensure_grade(d, "五年级上册", "湘少版")
+            log_msg("年级确认: 湘少版 五年级上册" if ok else "⚠ 年级切换失败，继续尝试")
+
+            q = run_module(d)
+            log_msg(f"✅ 口语训练完成: {q} 题")
+            set_done()
+        except Exception as e:
+            log_msg(f"❌ 任务异常: {e}", "error")
+            set_done()
+
+    _ORAL_RUNNER = threading.Thread(target=_run, daemon=True)
+    _ORAL_RUNNER.start()
+    return jsonify({"status": "started", "units": units})
+
+
+# ============================================================
 # 启动
 # ============================================================
 

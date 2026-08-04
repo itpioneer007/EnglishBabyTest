@@ -263,115 +263,148 @@ def _detect_question_type(d, config):
 
 
 def _handle_sort_question(d, config):
-    """处理排序题（两种模式，用户约定）：
-
-    模式A（图片排序，练习+测试都有）：
-      依次点击所有图片/句子 → 序号自动按点击顺序填充 → 出现"检查"
-    模式B（句子排序，测试模块）：
+    """处理排序题（两种子题型，用户约定）：
+    
+    模式A（图片排序：图片大卡片，宽>300）：
+      ★ 直接依次点击图片 → 序号自动按点击顺序填充 → 出现"检查"
+      ★ 不需要激活输入框！也不要点底部序号按钮
+    模式B（人物/句子排序：句子方框宽~228）：
       点第一个方框激活输入框 → 依次点击底部序号按钮(1,2,3...) → 出现"检查"
 
     之后点"检查"，答对自动进下一题 / 答错点"下一题"。
     """
     print(f"    📋 识别到排序题，处理中...")
 
-    # ── 模式B：检测底部有序号按钮（无文字的图片按钮，两行 8 个位置）──
-    has_num_btns = False
-    # 检查底部序号按钮是否存在（可点击、无文字、y>1870 且 <2270）
+    # ── 先区分两种子题型 ──
+    # 图片排序特征：y 700-1900 有宽度 300-700 的图片卡片
+    # （排除全屏大容器 宽>800，那是句子排序的整块布局）
+    has_big_image = False
+    big_images = []
     for e in (d.xpath('//*[@clickable="true"]').all() or []):
         b = e.bounds
-        if b[1] > 1870 and b[1] < 2270 and (b[2] - b[0]) > 100:
-            has_num_btns = True
-            break
+        w = b[2] - b[0]
+        if 700 < b[1] < 1900 and 300 < w < 700:
+            has_big_image = True
+            big_images.append(e)
 
-    if has_num_btns:
-        # 模式B：点第一个方框激活 → 依次点底部序号
-        print(f"    🔢 检测到序号按钮（模式B）")
-        # 1. 点第一个方框（y 700-1900、宽度100-500的可点击元素，排除序号按钮）
-        clicked_box = False
-        for e in (d.xpath('//*[@clickable="true"]').all() or []):
-            b = e.bounds
-            if 700 < b[1] < 1900 and 100 < b[2] - b[0] < 500:
+    if has_big_image:
+        # ── 模式A：图片排序 ── 直接点图片，序号自动填充
+        print(f"    🖼 图片排序（模式A）：直接点图片，序号自动填充")
+        clicked_keys = set()
+        # 依次点击所有大图片（每张点一次）
+        for _ in range(len(big_images) + 2):
+            progress = False
+            for elem in big_images:
+                b = elem.bounds
+                key = f"{b[0]}_{b[1]}"
+                if key in clicked_keys:
+                    continue
                 try:
-                    e.click()
-                    print(f"      → 点第一个方框激活")
-                    time.sleep(1.5)
-                    clicked_box = True
-                    break
+                    elem.click()
+                    clicked_keys.add(key)
+                    print(f"      → 点图片 ({b[0]},{b[1]})")
+                    time.sleep(1)
+                    progress = True
                 except Exception:
                     pass
-        # 2. 依次点底部序号（句子排序5-7句 → 点 1-5 序号按钮）
-        num_btns = [
-            (121, 1974), (363, 1974), (605, 1974), (847, 1974),
-            (121, 2169), (363, 2169), (605, 2169), (847, 2169),
-        ]
-        for i in range(5):
-            try:
-                d.click(num_btns[i][0], num_btns[i][1])
-                print(f"      → 点序号{i+1}")
-                time.sleep(1)
-            except Exception:
-                pass
-        # 3. 出现检查 → 点它
+            if not progress:
+                break
+        # 点完所有图片 → 出现"检查" → 点它
         for _ in range(8):
             if d(text="检查").exists(timeout=1):
                 d(text="检查").click()
-                print(f"    ✅ 排序完成，点击检查")
+                print(f"    ✅ 图片排序完成，点击检查")
                 time.sleep(0.8)
                 return True
-            if d(text="下一题").exists(timeout=1):
-                print(f"    ✅ 排序完成，下一题已出现")
-                return True
             time.sleep(0.5)
-        return True
+        # 兜底：直接出"下一题"
+        if d(text="下一题").exists(timeout=1):
+            d(text="下一题").click()
+            print(f"    ✅ 图片排序完成，点击下一题")
+            time.sleep(0.8)
+            return True
+        return False
 
-    # ── 模式A：依次点击所有图片/句子（序号自动填充）──
-    print(f"    🖼 无序号按钮，按图片/句子模式（模式A）")
-    clicked = set()
-    max_attempts = 15
-
-    for _ in range(max_attempts):
-        # 每次循环找新出现的可点击图片/句子
-        found_new = False
-        for elem in (d.xpath('//*[@clickable="true"]').all() or []):
-            b = elem.bounds
-            t = (elem.text or "").strip()
-            # 排序项特征：y 700-1900、宽度 > 300（大块图片/句子卡片，排除小序号按钮）
-            if not (700 < b[1] < 1900 and b[2] - b[0] > 300):
-                continue
-            key = f"{b[0]}_{b[1]}"
-            if key in clicked:
-                continue
+    # ── 模式B：人物/句子排序 ── 点方框激活 + 点底部序号
+    print(f"    🔢 人物/句子排序（模式B）：点方框激活 → 点序号")
+    # 1. 点第一个方框（y 700-1900、宽度100-300的可点击元素，即句子方框）
+    clicked_box = False
+    for e in (d.xpath('//*[@clickable="true"]').all() or []):
+        b = e.bounds
+        if 700 < b[1] < 1900 and 100 < b[2] - b[0] < 300:
             try:
-                elem.click()
-                clicked.add(key)
-                print(f"      → 点图片/句子: {(t or '')[:12] or key}")
-                time.sleep(1)
-                found_new = True
+                e.click()
+                print(f"      → 点第一个方框激活")
+                time.sleep(1.5)
+                clicked_box = True
+                break
             except Exception:
                 pass
+    if not clicked_box:
+        print(f"    ⚠ 未找到方框，仍尝试点序号")
 
-        # 点完 → 出现"检查"
-        if not found_new and d(text="检查").exists(timeout=1):
-            d(text="检查").click()
-            print(f"    ✅ 排序题点完，点击检查")
-            time.sleep(0.8)
-            return True
-        # 兼容：直接出"下一题"
-        if d(text="下一题").exists(timeout=0.8):
-            print(f"    ✅ 排序完成，下一题已出现")
-            return True
+    # 2. 动态检测底部序号按钮，依次点 1,2,3,4,5
+    #    ★ 关键：点序号1后"检查"按钮会出现导致坐标变化！
+    #    ★ 点完序号1后序号栏会整体上移（y~1877 → y~1786）
+    #    ★ 必须每次点完序号后重新检测序号栏位置
+    #    ★ 检查按钮在更底部 y~2334（不参与检测）
+    def _find_num_btns():
+        """检测底部序号按钮位置。
+        序号按钮特征：y 1680-2260、宽 200-300 的无文字图片按钮
+        检查按钮特征：y > 2260（更靠底部）→ 排除！
+        """
+        btns = []
+        for e in (d.xpath('//*[@clickable="true"]').all() or []):
+            b = e.bounds
+            if 1680 < b[1] < 2260 and 200 < b[2] - b[0] < 300:
+                cx = (b[0] + b[2]) // 2
+                cy = (b[1] + b[3]) // 2
+                btns.append((cx, cy, b[0], b[1]))
+        # 按 y 然后 x 排序（左上优先）
+        btns.sort(key=lambda t: (t[1], t[0]))
+        return btns
 
-    # 兜底
-    try:
+    # 点 1-5 序号（每次动态检测按钮位置；点完1个重检一次，避开新出现的检查按钮）
+    for target in range(1, 6):
+        # 每次重新检测序号栏（点完序号后检查按钮可能出现、布局上移）
+        btns = _find_num_btns()
+        if not btns:
+            print(f"      ⚠ 找不到序号按钮（第{target}次），等待重试")
+            time.sleep(0.5)
+            continue
+        try:
+            d.click(btns[0][0], btns[0][1])
+            print(f"      → 点序号{target} @({btns[0][0]},{btns[0][1]})")
+            time.sleep(1.2)
+        except Exception:
+            pass
+
+    # 3. 出现检查 → 点它
+    for _ in range(8):
         if d(text="检查").exists(timeout=1):
             d(text="检查").click()
-            print(f"    ✅ 兜底点击检查")
+            print(f"    ✅ 排序完成，点击检查")
             time.sleep(0.8)
             return True
+        if d(text="下一题").exists(timeout=1):
+            print(f"    ✅ 排序完成，下一题已出现")
+            return True
+        time.sleep(0.5)
+    return True
+
+
+def _get_qno(d):
+    """从页面提取当前题号，如 '3/5' → (3,5)；无则返回 (0,0)"""
+    try:
+        for e in d.xpath('//*[@text!=""]').all():
+            t = (e.text or "").strip()
+            import re as _re
+            m = _re.match(r'^(\d+)\s*/\s*(\d+)$', t)
+            if m:
+                return int(m.group(1)), int(m.group(2))
     except Exception:
         pass
-    print(f"    ⚠ 排序题处理异常")
-    return False
+    return 0, 0
 
 
 def _handle_match_question(d, config):
@@ -425,28 +458,41 @@ def _handle_match_question(d, config):
         print(f"    ⚠ 未找到字母选项"); return False
 
     # 3. 把字母全部点完（每个点一次；点字母自动配对并切换下一个人物）
-    for ch in letters:
-        try:
-            if d(text=ch).exists(timeout=0.8):
-                d(text=ch).click()
-                print(f"      → 点字母: {ch}")
-                time.sleep(0.5)
-        except Exception:
-            pass
-    print(f"    ✅ 字母选项已全部点完: {letters}")
+    #    关键：即使"检查"提前出现，也要把 A-E 全部点完再检查！
+    clicked_letters = set()
+    for _ in range(len(letters) + 2):   # 最多轮转 letters数+2 次
+        # 每轮尝试点所有未点过的字母
+        for ch in letters:
+            if ch in clicked_letters:
+                continue
+            try:
+                if d(text=ch).exists(timeout=0.6):
+                    d(text=ch).click()
+                    clicked_letters.add(ch)
+                    print(f"      → 点字母: {ch}")
+                    time.sleep(0.6)
+            except Exception:
+                pass
+        if len(clicked_letters) >= len(letters):
+            break
+    print(f"    ✅ 字母选项已全部点完: {sorted(clicked_letters)}")
 
-    # 4. 出现"检查"→ 点它；或直接出"下一题"
+    # 4. 全部点完后，出现"检查"→ 点它
     for _ in range(8):
         if d(text="检查").exists(timeout=1):
             d(text="检查").click()
             print(f"    ✅ 匹配题点完，点击检查")
             time.sleep(0.8)
             return True
-        if d(text="下一题").exists(timeout=1):
-            print(f"    ✅ 匹配完成，下一题已出现")
-            return True
         time.sleep(0.5)
-    return d(text="下一题").exists(timeout=2)
+
+    # 5. 若检查后答错出现"下一题"→ 点它进入下一题
+    if d(text="下一题").exists(timeout=1):
+        d(text="下一题").click()
+        print(f"    ✅ 匹配完成，点击下一题")
+        time.sleep(0.8)
+        return True
+    return False
 
 
 def _get_qno(d):
