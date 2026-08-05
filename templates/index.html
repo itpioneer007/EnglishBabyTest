@@ -39,6 +39,50 @@ body{font-family:"Microsoft YaHei","PingFang SC","Helvetica Neue",sans-serif;bac
 .chip.on .c-dot{background:#22c55e}
 
 /* ====== 模块网格 ====== */
+/* ====== 前提设置 ====== */
+.prereq{padding:16px 26px;border-bottom:1px solid #eef2f7;background:#f8fafc}
+.prereq-hdr{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+.prereq-title{font-size:13px;font-weight:700;color:#1f2937}
+.prereq-hint{font-size:12px;color:#94a3b8}
+.prereq-row{display:flex;align-items:end;gap:12px;flex-wrap:wrap}
+.prereq-field{display:flex;flex-direction:column;gap:5px;min-width:160px}
+.prereq-field label{font-size:12px;font-weight:600;color:#475569}
+.prereq-field select{padding:8px 12px;border:1px solid #d7dde6;border-radius:8px;font-size:14px;background:#fff;color:#1f2937;outline:none}
+.prereq-field select:focus{border-color:#0d9488;box-shadow:0 0 0 3px rgba(13,148,136,.1)}
+.prereq-btn{padding:9px 20px;border:none;border-radius:8px;background:#0f172a;color:#fff;font-size:14px;font-weight:600;cursor:pointer;transition:all .15s}
+.prereq-btn:hover{background:#1e293b}
+.prereq-btn:active{transform:scale(.97)}
+.prereq-btn:disabled{background:#94a3b8;cursor:not-allowed}
+.prereq-modules{margin-top:14px;padding-top:14px;border-top:1px dashed #d7dde6}
+.prereq-modules-head{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+.prereq-modules-label{font-size:13px;font-weight:700;color:#1f2937}
+.prereq-count{font-size:12px;color:#94a3b8;font-weight:500}
+.prereq-checks{display:flex;gap:14px;flex-wrap:wrap}
+.mod-check{display:flex;align-items:center;gap:6px;font-size:13px;color:#475569;cursor:pointer;padding:5px 12px;border:1px solid #d7dde6;border-radius:8px;background:#fff;transition:all .15s;user-select:none}
+.mod-check:hover{border-color:#0d9488}
+.mod-check input{accent-color:#0d9488;cursor:pointer}
+.mod-check.checked{border-color:#0d9488;background:#f0fdfa;color:#0f766e;font-weight:600}
+.prereq-actions{margin-top:14px;display:flex;align-items:center;gap:12px}
+.start-btn{padding:10px 34px;border:none;border-radius:9px;background:#0d9488;color:#fff;font-size:15px;font-weight:700;cursor:pointer;transition:all .15s;letter-spacing:1px}
+.start-btn:hover{background:#0f766e}
+.start-btn:active{transform:scale(.97)}
+.start-btn:disabled{background:#94a3b8;cursor:not-allowed}
+/* 汇总卡片 */
+.summary-meta{font-size:12px;color:#94a3b8;font-weight:400}
+.sm-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+@media(max-width:1100px){.sm-grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:720px){.sm-grid{grid-template-columns:1fr}}
+.sm-card{border:1px solid #e5eaf1;border-radius:11px;padding:14px 16px;background:#fafbfd;display:flex;align-items:center;gap:14px}
+.sm-card .sm-status{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.sm-card.ok .sm-status{background:#22c55e;box-shadow:0 0 0 3px rgba(34,197,94,.12)}
+.sm-card.fail .sm-status{background:#ef4444;box-shadow:0 0 0 3px rgba(239,68,68,.12)}
+.sm-card .sm-body{flex:1;min-width:0}
+.sm-card .sm-name{font-size:14px;font-weight:700;color:#1f2937}
+.sm-card .sm-detail{font-size:12px;color:#64748b;margin-top:3px}
+.sm-card .sm-q{font-size:22px;font-weight:800;color:#0f172a;text-align:right}
+.sm-card .sm-q small{font-size:11px;font-weight:500;color:#94a3b8}
+
+/* ====== 模块网格 ====== */
 .module-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;padding:22px 26px}
 @media(max-width:1100px){.module-grid{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:720px){.module-grid{grid-template-columns:1fr}}
@@ -213,6 +257,55 @@ textarea{font-family:inherit}
       </div>
     </div>
 
+    <div class="prereq">
+      <div class="prereq-hdr">
+        <span class="prereq-title">检测设置</span>
+        <span class="prereq-hint">选择版本、年级与多个模块，一键开始检测</span>
+      </div>
+      <div class="prereq-row">
+        <div class="prereq-field">
+          <label>教材版本</label>
+          <select id="setupVersion">
+            <option value="湘少版">湘少版</option>
+            <option value="湘鲁版">湘鲁版</option>
+            <option value="人教版(PEP)">人教版(PEP)</option>
+            <option value="教科版">教科版</option>
+          </select>
+        </div>
+        <div class="prereq-field">
+          <label>年级</label>
+          <select id="setupGrade">
+            <option>三年级上册</option>
+            <option>三年级下册</option>
+            <option>四年级上册</option>
+            <option>四年级下册</option>
+            <option selected>五年级上册</option>
+            <option>五年级下册</option>
+            <option>六年级上册</option>
+            <option>六年级下册</option>
+          </select>
+        </div>
+        <button class="prereq-btn" onclick="applySetup()">仅切换版本</button>
+      </div>
+      <div class="prereq-modules">
+        <div class="prereq-modules-head">
+          <span class="prereq-modules-label">选择模块（可多选）</span>
+          <span id="moduleSelCount" class="prereq-count">已选 6 个</span>
+        </div>
+        <div class="prereq-checks">
+          <label class="mod-check"><input type="checkbox" class="mod-sel" value="听力专项" checked> 听力专项</label>
+          <label class="mod-check"><input type="checkbox" class="mod-sel" value="口语训练" checked> 口语训练</label>
+          <label class="mod-check"><input type="checkbox" class="mod-sel" value="单元自检" checked> 单元自检</label>
+          <label class="mod-check"><input type="checkbox" class="mod-sel" value="知识过关" checked> 知识过关</label>
+          <label class="mod-check"><input type="checkbox" class="mod-sel" value="语音评测" checked> 语音评测</label>
+          <label class="mod-check"><input type="checkbox" class="mod-sel" value="巧记单词" checked> 巧记单词</label>
+        </div>
+        <div class="prereq-actions">
+          <button class="start-btn" id="btnModulesRun" onclick="startModules()">开始检测</button>
+        </div>
+      </div>
+    </div>
+
     <div class="module-grid">
       <!-- 听力专项 -->
       <div class="mod-card" style="--ac:#0d9488">
@@ -301,6 +394,15 @@ textarea{font-family:inherit}
       <div class="log-box" id="logBox">
         <span style="color:#94a3b8">等待任务启动...</span>
       </div>
+    </div>
+
+    <!-- 多模块检测汇总 -->
+    <div class="log-wrap" id="summaryWrap" style="display:none">
+      <div class="log-hdr">
+        <span>检测汇总</span>
+        <span class="summary-meta" id="summaryMeta"></span>
+      </div>
+      <div id="summaryBox"></div>
     </div>
   </section>
 
@@ -799,6 +901,101 @@ function addLog(level,msg){
 }
 
 // 启动日志轮询
+// ====== 前提设置：切换版本/年级 ======
+async function applySetup(){
+  const version=$('setupVersion').value
+  const grade=$('setupGrade').value
+  const btn=document.querySelector('.prereq-btn')
+  btn.disabled=true; btn.textContent='切换中...'
+  try{
+    const r=await fetch('/api/setup',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({version,grade})})
+    const j=await r.json()
+    if(j.error){alert(j.error);return}
+    addLog('info',`前提设置已启动: ${version} ${grade}`)
+  }catch(e){alert('设置失败: '+e.message)}
+  finally{btn.disabled=false; btn.textContent='仅切换版本'}
+}
+
+// ====== 模块多选状态同步 ======
+function refreshModuleSel(){
+  const boxes=[...document.querySelectorAll('.mod-sel')]
+  const n=boxes.filter(b=>b.checked).length
+  $('moduleSelCount').textContent='已选 '+n+' 个'
+  boxes.forEach(b=>{
+    const lb=b.closest('.mod-check')
+    if(lb) lb.classList.toggle('checked',b.checked)
+  })
+}
+document.querySelectorAll('.mod-sel').forEach(b=>{
+  b.addEventListener('change',refreshModuleSel)
+})
+refreshModuleSel()
+
+// ====== 多模块检测：开始检测 ======
+async function startModules(){
+  const version=$('setupVersion').value
+  const grade=$('setupGrade').value
+  const modules=[...document.querySelectorAll('.mod-sel')].filter(b=>b.checked).map(b=>b.value)
+  if(!modules.length){alert('请至少选择一个模块');return}
+  const btn=$('btnModulesRun')
+  btn.disabled=true; btn.textContent='检测中...'
+  try{
+    const r=await fetch('/api/modules/run',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({version,grade,modules})})
+    const j=await r.json()
+    if(j.error){alert(j.error);return}
+    addLog('info',`多模块检测已启动: ${version} ${grade} → ${modules.join('、')}`)
+    // 启动结果轮询
+    pollModulesResult(modules)
+  }catch(e){alert('启动失败: '+e.message)}
+  finally{btn.disabled=false; btn.textContent='开始检测'}
+}
+
+// ====== 多模块检测：结果轮询与汇总展示 ======
+function pollModulesResult(modules){
+  let tried=0
+  const timer=setInterval(async()=>{
+    tried++
+    try{
+      const r=await(await fetch('/api/modules/result')).json()
+      if(r.done&&r.results){
+        clearInterval(timer)
+        renderSummary(r)
+      }else if(tried>600){ // 10分钟超时
+        clearInterval(timer)
+      }
+    }catch(e){}
+  },2000)
+}
+
+function renderSummary(data){
+  const rs=data.results||{}
+  const names=Object.keys(rs)
+  $('summaryMeta').textContent=`${data.version} ${data.grade}`
+  const totalQ=names.reduce((s,n)=>s+(rs[n].q||0),0)
+  const okN=names.filter(n=>rs[n].ok).length
+  $('summaryBox').innerHTML=`
+    <div class="sm-grid">
+      ${names.map(n=>{
+        const r=rs[n]
+        const ok=r.ok
+        return `<div class="sm-card ${ok?'ok':'fail'}">
+          <div class="sm-status"></div>
+          <div class="sm-body">
+            <div class="sm-name">${n}</div>
+            <div class="sm-detail">${ok?'完成':'失败'} · 耗时 ${r.t||0}s${r.error?' · '+r.error:''}</div>
+          </div>
+          <div class="sm-q">${r.q||0}<small> 题</small></div>
+        </div>`
+      }).join('')}
+    </div>
+    <div style="margin-top:12px;font-size:13px;color:#64748b">
+      共 ${names.length} 个模块，成功 ${okN} 个，累计答题 ${totalQ} 题
+    </div>`
+  $('summaryWrap').style.display=''
+}
+
 setInterval(pollLog,2000)
 </script>
 </body>

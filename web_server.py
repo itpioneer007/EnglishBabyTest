@@ -2646,6 +2646,119 @@ def api_qiaoji_run():
 
 
 # ============================================================
+# 前提设置：切换版本 / 年级
+# ============================================================
+import importlib
+_setup_mod = None
+
+def _get_setup():
+    global _setup_mod
+    if _setup_mod is None:
+        sys.path.insert(0, str(Path(__file__).parent / "scripts"))
+        _setup_mod = importlib.import_module("common.setup")
+    return _setup_mod
+
+
+@app.route("/api/setup", methods=["POST"])
+def api_setup():
+    """切换教材版本 + 年级（前提功能，模块运行前先设置）
+
+    请求: {"version": "湘少版", "grade": "五年级上册"}
+    """
+    global _SETUP_RUNNER
+    if task_status["running"]:
+        return jsonify({"error": "已有任务在运行，请等待"}), 409
+
+    data = request.get_json() or {}
+    version = (data.get("version") or "").strip()
+    grade = (data.get("grade") or "").strip()
+    if not version or not grade:
+        return jsonify({"error": "请填写版本和年级"}), 400
+
+    def _run():
+        try:
+            log_msg(f"前提设置: 切换到 {version} {grade}")
+            setup = _get_setup()
+            import uiautomator2 as u2
+            d = u2.connect()
+            ok = setup.switch_version_grade(d, version, grade)
+            if ok:
+                log_msg(f"切换成功: 当前 {version} {grade}", "success")
+            else:
+                log_msg("切换失败，请重试", "error")
+        except Exception as e:
+            log_msg(f"切换异常: {e}", "error")
+
+    _SETUP_RUNNER = threading.Thread(target=_run, daemon=True)
+    _SETUP_RUNNER.start()
+    return jsonify({"status": "started", "version": version, "grade": grade})
+
+
+# ============================================================
+# 多模块检测：版本/年级 + 多个模块依次执行
+# ============================================================
+_LAST_MODULES_RESULT = None
+
+
+@app.route("/api/modules/run", methods=["POST"])
+def api_modules_run():
+    """多模块检测：切换版本/年级后依次执行多个模块
+
+    请求: {"version": "湘少版", "grade": "五年级上册", "modules": ["听力专项", "口语训练"]}
+    返回: {"status": "started", "modules": [...]}
+    """
+    global _MODULES_RUNNER
+    if task_status["running"]:
+        return jsonify({"error": "已有任务在运行"}), 409
+
+    data = request.get_json() or {}
+    version = (data.get("version") or "湘少版").strip()
+    grade = (data.get("grade") or "五年级上册").strip()
+    modules = data.get("modules") or []
+    if not modules:
+        return jsonify({"error": "请至少选择一个模块"}), 400
+
+    def _run():
+        try:
+            set_running("多模块检测")
+            log_msg(f"多模块检测启动: {version} {grade} → {'、'.join(modules)}")
+            import importlib
+            sys.path.insert(0, str(Path(__file__).parent / "scripts"))
+            sched = importlib.import_module("scheduler")
+            import uiautomator2 as u2
+            d = u2.connect()
+            results = sched.run_all(modules, d, version=version, grade=grade)
+            # 保存结果供前端查询
+            global _LAST_MODULES_RESULT
+            _LAST_MODULES_RESULT = {
+                "done": True,
+                "version": version,
+                "grade": grade,
+                "results": results,
+            }
+            # 逐模块汇总日志
+            for name, r in results.items():
+                status = "成功" if r.get("ok") else "失败"
+                lv = "success" if r.get("ok") else "error"
+                log_msg(f"  [{status}] {name}: {r['q']}题 {r['t']}s", lv)
+            log_msg(f"多模块检测完成: {len(results)} 个模块", "success")
+        except Exception as e:
+            log_msg(f"多模块检测异常: {e}", "error")
+        finally:
+            set_done()
+
+    _MODULES_RUNNER = threading.Thread(target=_run, daemon=True)
+    _MODULES_RUNNER.start()
+    return jsonify({"status": "started", "version": version, "grade": grade, "modules": modules})
+
+
+@app.route("/api/modules/result", methods=["GET"])
+def api_modules_result():
+    """获取最近一次多模块检测的汇总结果"""
+    return jsonify(_LAST_MODULES_RESULT or {"done": False})
+
+
+# ============================================================
 # 启动
 # ============================================================
 
