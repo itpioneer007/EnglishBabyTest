@@ -95,6 +95,16 @@ def _test_answer_loop(d, max_q=30):
             print("      → 继续答题弹窗")
             time.sleep(1.5)
             continue
+        # 练习子模块完成 → 练习报告（防卡：测试循环误入练习部分时）
+        if d(text="练习报告").exists(timeout=0.8):
+            d(text="练习报告").click()
+            print("      → 练习报告（本轮结束）")
+            time.sleep(2)
+            # 报告页 → 继续练习/back 退出
+            if d(textContains="继续练习").exists(timeout=1.5):
+                d(textContains="继续练习").click()
+                time.sleep(2)
+            return q
         # 最后一题 → 查看报告
         if d(text="查看报告").exists(timeout=0.8):
             d(text="查看报告").click()
@@ -143,16 +153,16 @@ def _test_answer_loop(d, max_q=30):
             q += 1
             continue
         # 排序题：先判断类型
-        #   句子圆圈排序题（听录音给句子排序）：句子前是圆圈，底部序号一进就在，
-        #     直接按顺序点句子（序号自动填入）→ _handle_sentence_sort
-        #   空方框排序题：点方框激活 → 底部序号按钮才出现 → 点序号 → _handle_sort_question
+        #   句子圆圈排序题（听录音给句子排序）：句子前是圆圈，**没有底部序号按钮**，
+        #     直接按顺序点句子（序号自动填入 1,2,3...）→ _handle_sentence_sort
+        #   空方框排序题：句子是空方框（宽~228），需点方框激活 → 底部序号按钮才出现
+        #     → 点序号 → _handle_sort_question
         if any(kw in texts for kw in ("排序", "给图片排序", "给句子排序", "听录音，给句子排序")):
-            # 检测是否句子圆圈型：有整行句子（宽>800）+ 底部序号小按钮（y>1900 一直存在）
             from engine import _handle_sentence_sort, _handle_sort_question
             xml = d.dump_hierarchy()
             import re as _re
-            _wide = 0  # 整行句子数
-            _num_btns = 0  # 底部序号小按钮数
+            _wide = 0   # 整行句子数（宽>800 → 句子圆圈排序题特征）
+            _boxes = 0  # 空方框数（宽 100-300 → 空方框排序题特征）
             for m in _re.finditer(
                 r'class="android\.widget\.LinearLayout"[^>]*clickable="true"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
                 xml
@@ -161,13 +171,13 @@ def _test_answer_loop(d, max_q=30):
                 w, h = x2 - x1, y2 - y1
                 if w > 800 and 700 < y1 < 1900:
                     _wide += 1
-                if 100 < w < 130 and 100 < h < 140 and y1 > 1900:
-                    _num_btns += 1
-            if _wide >= 3 and _num_btns >= 3:
-                print(f"    🎯 句子圆圈排序题（整行{_wide}句 + 底部序号{_num_btns}个）→ 直接点句子")
+                elif 100 < w < 300 and 100 < h < 140 and 700 < y1 < 1500:
+                    _boxes += 1
+            if _wide >= 3:
+                print(f"    🎯 句子圆圈排序题（整行{_wide}句）→ 直接点句子（序号自动填）")
                 _handle_sentence_sort(d, {})
             else:
-                print(f"    🎯 空方框排序题 → 点方框激活+点序号")
+                print(f"    🎯 空方框排序题（方框{_boxes}个）→ 点方框激活+点序号")
                 _handle_sort_question(d, {})
             q += 1
             # 排序题完成后（最后一题）：查看报告出现 → 点击并完成

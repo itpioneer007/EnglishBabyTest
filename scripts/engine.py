@@ -456,14 +456,14 @@ def _handle_sentence_sort(d, config):
     """处理「句子圆圈排序题」（听录音，给句子排序）
 
     ★ 与空方框排序题的区别（防混淆）：
-      - 句子圆圈排序题：句子前面是「圆圈」（待填序号），底部序号按钮一进题目就在，
+      - 句子圆圈排序题：句子前面是「圆圈」（待填序号），**没有底部序号按钮**，
         **不需要激活**——直接按顺序把句子全部点击掉，序号自动按 1,2,3... 依次填入
         （点击句子 → 自动分配当前最小序号；全部句子点完 → 出现「检查」）
       - 空方框排序题：句子是空方框，需要「点方框激活输入框 → 底部序号按钮才出现 →
         点序号填入」——那个用 _handle_sort_question
 
-    识别特征：句子是整行 LinearLayout（宽 > 800，y 700-1900），
-    底部有 5 个小序号按钮（114x126 左右，y > 1900）——不点句子也一直在。
+    识别特征：有 ≥3 个整行句子 LinearLayout（宽 > 800，y 700-1900）。
+    注意：**没有底部序号按钮**（点击句子自动填），这是与空方框题的最大区别。
     """
     import time
     print(f"    📝 句子圆圈排序题：直接按顺序点击句子（序号自动填入）")
@@ -484,22 +484,32 @@ def _handle_sentence_sort(d, config):
         sents.sort(key=lambda t: t[2])
         return sents
 
-    sentences = _find_sentences()
-    if not sentences:
-        print(f"    ⚠ 未找到整行句子，可能不是句子圆圈排序题")
-        return False
-
-    # 依次点击每个句子（序号自动 1,2,3... 填入）
-    for i, (cx, cy, y1) in enumerate(sentences, 1):
+    # 依次点击句子（每次重检位置，防布局变化）；填到「检查」出现为止
+    clicked = 0
+    for target in range(1, 6):
+        # 每次重新检测句子位置（点完一个后布局可能微调）
+        sentences = _find_sentences()
+        if not sentences:
+            print(f"      ⚠ 找不到句子（第{target}次）")
+            break
+        # 取第一个未填的句子点击（序号自动分配）
+        cx, cy, y1 = sentences[0]
         try:
             d.click(cx, cy)
         except Exception:
             pass
-        time.sleep(0.8)
-        print(f"    {i}. 点句子 @({cx},{cy})")
+        clicked += 1
+        print(f"      {target}. 点句子 @({cx},{cy})")
+        time.sleep(1)
+        # 填完后检查/检测/查看报告出现 → 完成
+        if (d(text="检查").exists(timeout=0.8)
+                or d(text="检测").exists(timeout=0.8)
+                or d(text="查看报告").exists(timeout=0.8)):
+            print(f"      → 点完第{target}个后出现按钮，停止")
+            break
 
     time.sleep(1)
-    # 全部点完 → 出现检查/检测 → 点击
+    # 出现检查/检测 → 点击
     for kw in ("检查", "检测"):
         if d(text=kw).exists(timeout=2):
             try:
@@ -509,7 +519,7 @@ def _handle_sentence_sort(d, config):
             print(f"    ✅ 句子排序完成，点击{kw}")
             time.sleep(1.5)
             return True
-    print(f"    ⚠ 句子点完但未出现检查按钮")
+    print(f"    ⚠ 句子点完{clicked}个但未出现检查按钮")
     return True
 
 
