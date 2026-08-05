@@ -1,0 +1,53 @@
+{
+  "config": {
+    "docx": "C:\\Users\\19507\\WorkBuddy\\安全处理空间\\英语宝模块检测\\uploads\\260717新湘鲁六上听力专项(已二校).docx",
+    "unit": 6,
+    "stage": "基础巩固"
+  },
+  "summary": {
+    "total": 0,
+    "passed": 0,
+    "avg_score": 0
+  },
+  "results": [],
+  "feedback_stats": {
+    "total": 137,
+    "good_samples": 137,
+    "bad_samples": 0,
+    "accuracy": "100.0%",
+    "dimension_accuracy": {
+      "stem": {
+        "total": 3,
+        "correct": 3,
+        "wrong": 0,
+        "accuracy": "100.0%"
+      },
+      "image": {
+        "total": 14,
+        "correct": 14,
+        "wrong": 0,
+        "accuracy": "100.0%"
+      },
+      "answer": {
+        "total": 2,
+        "correct": 2,
+        "wrong": 0,
+        "accuracy": "100.0%"
+      },
+      "content": {
+        "total": 1,
+        "correct": 1,
+        "wrong": 0,
+        "accuracy": "100.0%"
+      },
+      "all": {
+        "total": 117,
+        "correct": 117,
+        "wrong": 0,
+        "accuracy": "100.0%"
+      }
+    },
+    "last_updated": "2026-07-27T14:17:28.684412"
+  },
+  "timestamp": "2026-07-27T14:17:52.307545"
+}

@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>错误溯源 — 英语宝模块审查</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:"Microsoft YaHei","PingFang SC",sans-serif;background:#f1f5f9;color:#1e293b;font-size:15px}
+
+.nav{background:#fff;border-bottom:1px solid #e2e8f0;padding:0 24px;display:flex;align-items:center;height:56px;gap:32px}
+.nav .logo{font-size:18px;font-weight:700;color:#1e40af}
+.nav a{color:#64748b;text-decoration:none;font-size:14px;padding:6px 14px;border-radius:6px}
+.nav a:hover,.nav a.active{background:#eff6ff;color:#1e40af}
+
+.main{max-width:1200px;margin:0 auto;padding:24px}
+
+.card{background:#fff;border-radius:12px;border:1px solid #eef0f5;margin-bottom:20px}
+.card-hdr{padding:14px 20px;background:#fafbfc;border-bottom:1px solid #f0f2f6;font-weight:600;display:flex;align-items:center;gap:10px}
+.card-body{padding:20px}
+
+/* 统计 */
+.stats{display:flex;gap:16px;margin-bottom:20px;flex-wrap:wrap}
+.stat-card{flex:1;min-width:120px;background:#fff;border-radius:10px;padding:16px;text-align:center;border:1px solid #eef0f5}
+.stat-card .num{font-size:28px;font-weight:700}
+.stat-card .label{font-size:13px;color:#64748b;margin-top:4px}
+
+/* 错误列表 */
+.error-item{border:1px solid #fecaca;border-radius:10px;padding:16px;margin:12px 0;background:#fef2f2}
+.error-item .hdr{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+.error-item .hdr .qid{font-size:16px;font-weight:700;color:#991b1b}
+.error-item .hdr .score{font-size:20px;font-weight:700}
+.error-item .dims{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+.dim-tag{padding:3px 10px;border-radius:6px;font-size:12px;font-weight:600}
+.dim-tag.fail{background:#fee2e2;color:#991b1b}
+.dim-tag.pass{background:#dcfce7;color:#166534}
+.dim-tag.skip{background:#f1f5f9;color:#94a3b8}
+
+.error-item .reason{font-size:13px;color:#7f1d1d;line-height:1.6;margin-top:6px}
+.error-item .suggestion{font-size:13px;color:#166534;background:#dcfce7;padding:8px 12px;border-radius:6px;margin-top:8px}
+
+.compare{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:12px}
+.compare img{width:100%;border-radius:8px;border:1px solid #eef0f5}
+.compare .label{font-size:12px;color:#64748b;margin-bottom:4px}
+
+.filter-bar{display:flex;gap:10px;align-items:center;margin-bottom:16px}
+.filter-bar select{padding:6px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px}
+
+.no-errors{text-align:center;padding:60px 20px;color:#16a34a}
+.no-errors .icon{font-size:64px;margin-bottom:12px}
+</style>
+</head>
+<body>
+
+<div class="nav">
+  <div class="logo">🔍 英语宝模块审查</div>
+  <a href="/">📋 批量检查</a>
+  <a href="/trace" class="active">🔎 错误溯源</a>
+  <a href="/export">📤 报告导出</a>
+</div>
+
+<div class="main">
+  <h2 style="margin-bottom:16px">🔎 错误题目溯源</h2>
+  <p style="color:#64748b;margin-bottom:20px">每道错题展示：APP截图、脚本内容、出错维度、具体理由、修改建议</p>
+
+  <!-- 统计 -->
+  <div class="stats" id="statsBar"></div>
+
+  <!-- 过滤 -->
+  <div class="filter-bar">
+    <span style="font-size:13px;color:#64748b">筛选维度:</span>
+    <select id="dimFilter" onchange="renderErrors()">
+      <option value="all">全部维度</option>
+      <option value="stem">题干</option>
+      <option value="content">内容</option>
+      <option value="image">配图</option>
+      <option value="answer">作答</option>
+      <option value="post_error">答错后检查</option>
+      <option value="audio">音频</option>
+      <option value="report">报告</option>
+    </select>
+  </div>
+
+  <!-- 错误列表 -->
+  <div id="errorList">
+    <div style="text-align:center;padding:40px;color:#94a3b8">加载中...</div>
+  </div>
+</div>
+
+<script>
+function $(id){return document.getElementById(id)}
+
+let allErrors=[]
+
+async function init(){
+  const d=await(await fetch('/api/trace/list')).json()
+  allErrors=d.items||[]
+  renderStats()
+  renderErrors()
+}
+init()
+
+function renderStats(){
+  const total=allErrors.length
+  const dims={}
+  allErrors.forEach(e=>{(e.failed_dims||[]).forEach(d=>dims[d]=(dims[d]||0)+1)})
+
+  $('statsBar').innerHTML=`
+    <div class="stat-card"><div class="num" style="color:#dc2626">${total}</div><div class="label">错题数</div></div>
+    `+Object.entries(dims).map(([d,c])=>`<div class="stat-card"><div class="num" style="color:#991b1b">${c}</div><div class="label">${{stem:'题干',content:'内容',image:'配图',answer:'作答',post_error:'答错后',audio:'音频',report:'报告'}[d]||d}</div></div>`).join('')
+}
+
+async function renderErrors(){
+  const f=$('dimFilter').value
+  const filtered=f==='all'?allErrors:allErrors.filter(e=>(e.failed_dims||[]).includes(f))
+
+  if(!filtered.length){
+    $('errorList').innerHTML='<div class="no-errors"><div class="icon">🎉</div><div>没有符合筛选条件的错题</div></div>'
+    return
+  }
+
+  let html=''
+  for(const e of filtered){
+    const dims=['stem','content','image','answer','post_error','audio','report']
+    const dimTags=dims.map(d=>{
+      const failed=(e.failed_dims||[]).includes(d)
+      const cls=failed?'fail':'pass'
+      const name={stem:'题干',content:'内容',image:'配图',answer:'作答',post_error:'答错后',audio:'音频',report:'报告'}[d]
+      return `<span class="dim-tag ${cls}">${failed?'❌':'✅'} ${name}</span>`
+    }).join('')
+
+    html+=`
+    <div class="error-item">
+      <div class="hdr">
+        <span class="qid">${e.qid}</span>
+        <span style="font-size:13px;color:#64748b">${e.question_type||''}</span>
+        <span class="score" style="color:${e.overall_score>=0.7?'#16a34a':'#dc2626'}">${(e.overall_score||0).toFixed(2)}</span>
+        <a href="/api/trace/${e.qid}" target="_blank" style="margin-left:auto;font-size:13px;color:#4a6cf7;text-decoration:none">📋 查看详情 →</a>
+      </div>
+      <div class="dims">${dimTags}</div>
+    </div>`
+  }
+  $('errorList').innerHTML=html
+}
+</script>
+</body>
+</html>
