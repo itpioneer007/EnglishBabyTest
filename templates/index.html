@@ -247,6 +247,9 @@ select:focus,input:focus{border-color:#4a6cf7;box-shadow:0 0 0 3px rgba(74,108,2
           <button class="btn" style="background:#b45309;color:#fff" id="btnUnit" onclick="startUnit()">
             📋 单元自检
           </button>
+          <button class="btn" style="background:#059669;color:#fff" id="btnKnowledge" onclick="startKnowledge()">
+            ✅ 知识过关
+          </button>
           <button class="btn btn-danger btn-sm" id="btnCancel" onclick="cancelBatch()" style="display:none">
             ⏹ 停止
           </button>
@@ -688,6 +691,19 @@ async function startUnit(){
     const j=await r.json()
     if(j.error){alert(j.error);return}
     addLog('info',`▶ 单元自检已启动: 单元${j.units}`)
+  }catch(e){alert('启动失败: '+e.message)}
+}
+
+// ====== 知识过关 新引擎 ======
+async function startKnowledge(){
+  const units=[1]
+  if(!confirm('启动知识过关自动化？\nU1 (重点词汇108题 + 重点句型8题)\n题型：选择/判断/录音/填字母/连词成句/系统键盘填空\n(当前配置仅U1，打通后可改脚本扩展)')) return
+  try{
+    const r=await fetch('/api/knowledge/run',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({units})})
+    const j=await r.json()
+    if(j.error){alert(j.error);return}
+    addLog('info',`▶ 知识过关已启动: 单元${j.units}`)
   }catch(e){alert('启动失败: '+e.message)}
 }
 

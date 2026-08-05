@@ -359,7 +359,8 @@ def _handle_sort_question(d, config):
             b = e.bounds
             w = b[2] - b[0]
             # x 起点 58 是句子方框，跳过
-            if 1680 < b[1] < 2100 and 200 < w < 300 and b[0] != 58:
+            # y 上限放宽到 2200（兼容知识过关连词成句的单词按钮 y~2044-2141）
+            if 1680 < b[1] < 2200 and 200 < w < 300 and b[0] != 58:
                 cx = (b[0] + b[2]) // 2
                 cy = (b[1] + b[3]) // 2
                 btns.append((cx, cy, b[0], b[1]))
@@ -382,11 +383,16 @@ def _handle_sort_question(d, config):
         except Exception:
             pass
 
-    # 3. 出现检查 → 点它
+    # 3. 出现检查 → 点它（兼容"检测"按钮文字，知识过关/单元自检用"检测"）
     for _ in range(8):
-        if d(text="检查").exists(timeout=1):
+        if d(text="检查").exists(timeout=0.8):
             d(text="检查").click()
             print(f"    ✅ 排序完成，点击检查")
+            time.sleep(0.8)
+            return True
+        if d(text="检测").exists(timeout=0.8):
+            d(text="检测").click()
+            print(f"    ✅ 排序完成，点击检测")
             time.sleep(0.8)
             return True
         if d(text="下一题").exists(timeout=1):
