@@ -127,6 +127,58 @@ def detect_module_from_filename(filename: str):
 # 工具函数
 # ============================================================
 
+
+# ============================================================
+# 自动坐标缩放 — 适配不同分辨率手机
+# ============================================================
+REFERENCE_RES = (1080, 2400)
+_detected_res = None
+_scale_x = 1.0
+_scale_y = 1.0
+
+def detect_screen_resolution(adb_serial: str = ""):
+    """通过 ADB 检测手机实际分辨率，更新缩放比"""
+    global _detected_res, _scale_x, _scale_y
+    try:
+        adb_path = r"C:\Users\bunana\AppData\Local\Microsoft\WinGet\Packages\Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe\platform-tools\adb.exe"
+        cmd = [adb_path]
+        if adb_serial:
+            cmd.extend(["-s", adb_serial])
+        cmd.extend(["shell", "wm", "size"])
+        r = sp.run(cmd, capture_output=True, text=True, timeout=5,
+                   encoding="utf-8", errors="replace")
+        m = re.search(r"(\d+)x(\d+)", r.stdout)
+        if m:
+            w, h = int(m.group(1)), int(m.group(2))
+            _detected_res = (w, h)
+            _scale_x = w / REFERENCE_RES[0]
+            _scale_y = h / REFERENCE_RES[1]
+            print(f"  [坐标缩放] 检测到分辨率 {w}x{h}, 缩放比 X={_scale_x:.3f} Y={_scale_y:.3f}")
+        else:
+            print(f"  [坐标缩放] 无法解析分辨率: {r.stdout}")
+    except Exception as e:
+        print(f"  [坐标缩放] 检测失败: {e}, 使用默认1:1")
+
+def sc(x: int, y: int) -> tuple:
+    """缩放单个坐标点"""
+    return (int(x * _scale_x + 0.5), int(y * _scale_y + 0.5))
+
+def sc_xy(xy: tuple) -> tuple:
+    """缩放一个 (x, y) 元组"""
+    return sc(xy[0], xy[1])
+
+def scale_all_coords():
+    """原地缩放所有坐标字典，使之适配当前手机分辨率"""
+    global MODULE_COORDS, TABS, SETTINGS_ICON, AD_CLOSE
+    if _scale_x == 1.0 and _scale_y == 1.0:
+        return
+    MODULE_COORDS = {k: sc_xy(v) for k, v in MODULE_COORDS.items()}
+    TABS = {k: sc_xy(v) for k, v in TABS.items()}
+    SETTINGS_ICON = sc_xy(SETTINGS_ICON)
+    AD_CLOSE = sc_xy(AD_CLOSE)
+    print(f"  [坐标缩放] 所有坐标已缩放 ({REFERENCE_RES[0]}x{REFERENCE_RES[1]} -> {_detected_res})")
+
+
 def get_adb():
     """获取 ADBController 实例"""
     config = load_config()
@@ -732,6 +784,219 @@ def run_inspect_loop():
         set_done()
 
 
+
+def run_quick_inspect_task(docx_file: str = "", unit: int = 0):
+    """⚡ 快速检查：从手机当前页面直接开始逐题巡检（跳过启动/关广告/登录/导航）
+
+    前提: 用户已手动将手机调到题目页 (如 听力专项-基础巩固-第1题)
+    流程: 截图 → AI六维审查(若提供脚本) → 写入巡检状态 → 点选项 → 点底部按钮x2 → 循环
+    坐标自动缩放 (适配不同分辨率手机)
+    """
+    try:
+        set_running("quick_inspect")
+        config = load_config()
+        adb = get_adb()
+
+        # 清空旧巡检状态
+        _inspection_state["questions"] = {}
+        _inspection_state["workflow_steps"] = []
+        _inspection_state["current_question_idx"] = 0
+        _save_inspection_state()
+
+        # 加载脚本 + AI审查agent (可选)
+        agent = None
+        if docx_file:
+            docx_path = str(UPLOAD_DIR / docx_file)
+            if Path(docx_path).exists():
+                try:
+                    from src.review_agent import ReviewAgent, ReviewConfig
+                    cfg = ReviewConfig(docx_path=docx_path, unit=int(unit or 0),
+                                       screenshot_dir=str(PROJECT_ROOT / "screenshots"),
+                                       verbose=False)
+                    agent = ReviewAgent(cfg)
+                    log_msg(f"📄 脚本已加载: {docx_file} (共{len(agent.script_questions)}题) → AI六维审查开启", "success")
+                except Exception as e:
+                    log_msg(f"⚠ 脚本加载失败: {e}，降级为仅截图", "warning")
+            else:
+                log_msg(f"⚠ 脚本不存在: {docx_path}，降级为仅截图", "warning")
+        else:
+            log_msg("⚡ 未指定脚本，仅截图+推进（选脚本可开启AI六维审查）", "info")
+
+        log_msg("⚡ 快速检查启动（从当前页面开始，跳过导航）", "success")
+        time.sleep(1)
+
+        # 1. 尝试检测当前题目进度 (如 1/40)
+        elements = adb.dump_ui(retries=2)
+        cur = None
+        total_q = 0
+        for e in elements:
+            m = re.match(r'^(\d+)/(\d+)$', (e.text or "").strip())
+            if m:
+                cur = int(m.group(1))
+                total_q = int(m.group(2))
+                break
+
+        if cur:
+            log_msg(f"✅ 检测到题目进度 {cur}/{total_q or 40}，开始逐题检查", "success")
+        else:
+            log_msg("⚠ 未检测到题目进度(如 1/40)。若您已在题目页将正常检查，", "warning")
+            log_msg("   否则请先手动进入题目页再点「快速检查」", "warning")
+            time.sleep(2)
+
+        # 2. 逐题巡检
+        last = 0
+        q_count = 0
+        for step in range(80):
+            if not task_status["running"]:
+                break
+
+            idx = cur if cur else (last + 1)
+
+            # 截图 (保存到 outputs/web, 前端可预览)
+            shot = f"q{idx:02d}.png"
+            adb.screenshot(shot)
+            log_msg(f"📸 Q{idx} 已截图", "success")
+            update_progress(idx, total_q or 40, f"Q{idx}")
+            q_count += 1
+
+            # ====== AI 六维审查 (若有脚本) ======
+            ai = {
+                "ai_stem": None, "ai_content": None, "ai_image": None,
+                "ai_answer": None, "ai_audio": None, "ai_post_error": None,
+                "overall_passed": None, "overall_score": None,
+                "stem_reason": "", "content_reason": "", "image_reason": "",
+                "answer_reason": "", "audio_reason": "", "post_error_reason": "",
+                "question_type": "快速检查",
+                "script_answer": "", "stem": "",
+            }
+            if agent:
+                try:
+                    # 匹配脚本题目
+                    shot_path = str(PROJECT_ROOT / "outputs" / "web" / shot)
+                    matching = [q for q in agent.script_questions if q.global_idx == idx]
+                    if matching:
+                        script_q = matching[0]
+                        r = agent._review_one(script_q, shot_path)
+                        ai = {
+                            "ai_stem": r.stem_check.passed,
+                            "ai_content": r.content_check.passed,
+                            "ai_image": r.image_check.passed,
+                            "ai_answer": r.answer_check.passed,
+                            "ai_audio": r.audio_check.passed if r.audio_check is not None else None,
+                            "ai_post_error": r.post_error_check.passed if r.post_error_check is not None else None,
+                            "overall_passed": r.overall_passed,
+                            "overall_score": round(r.overall_score, 2),
+                            "stem_reason": r.stem_check.details[0][:100] if r.stem_check.details else "",
+                            "content_reason": r.content_check.details[0][:100] if r.content_check.details else "",
+                            "image_reason": r.image_check.details[0][:100] if r.image_check.details else "",
+                            "answer_reason": r.answer_check.details[0][:100] if r.answer_check.details else "",
+                            "audio_reason": r.audio_check.details[0][:100] if r.audio_check and r.audio_check.details else "",
+                            "post_error_reason": r.post_error_check.details[0][:100] if r.post_error_check and r.post_error_check.details else "",
+                            "question_type": script_q.type_2 or "快速检查",
+                            "script_answer": script_q.answer or "",
+                            "stem": script_q.stem[:60] if script_q.stem else "",
+                        }
+                        log_msg(f"  AI: 题干{ai['ai_stem']} 内容{ai['ai_content']} 配图{ai['ai_image']} 作答{ai['ai_answer']} 音频{ai['ai_audio']} 答错后{ai['ai_post_error']} 得分{ai['overall_score']}")
+                    else:
+                        log_msg(f"  ⚠ 脚本中无 Q{idx}，跳过AI审查", "warning")
+                except Exception as e:
+                    log_msg(f"  ⚠ AI审查失败 Q{idx}: {e}", "warning")
+
+            # ====== 写入巡检状态 → 前端中栏显示 ======
+            qid = f"quick-Q{idx:02d}"
+            _inspection_state["questions"][qid] = {
+                "idx": idx,
+                "total": total_q or 40,
+                "question_type": ai["question_type"],
+                "screenshot": shot,
+                "progress": f"{idx}/{total_q or 40}",
+                "ai_stem": ai["ai_stem"], "ai_content": ai["ai_content"],
+                "ai_image": ai["ai_image"], "ai_answer": ai["ai_answer"],
+                "ai_audio": ai["ai_audio"], "ai_post_error": ai["ai_post_error"],
+                "overall_passed": ai["overall_passed"],
+                "overall_score": ai["overall_score"],
+                "stem_reason": ai["stem_reason"], "content_reason": ai["content_reason"],
+                "image_reason": ai["image_reason"], "answer_reason": ai["answer_reason"],
+                "audio_reason": ai["audio_reason"], "post_error_reason": ai["post_error_reason"],
+                "script_answer": ai["script_answer"],
+                "stem": ai["stem"],
+                "note": "",
+                "human_label": None,
+                "human_note": "",
+                "timestamp": datetime.now().isoformat(),
+            }
+            _inspection_state["current_question_idx"] = idx
+            _save_inspection_state()
+
+            # 点选项: 优先找UI元素，找不到则点默认右侧选项区(缩放)
+            elements = adb.dump_ui(retries=2)
+            clicked_option = False
+            for e in elements:
+                if e.clickable and 700 < e.bounds[1] < 1700:
+                    if e.center[0] > 450:
+                        adb.tap(e.center[0], e.bounds[1] + 30)
+                    else:
+                        adb.tap((e.bounds[0] + e.bounds[2]) // 2,
+                                (e.bounds[1] + e.bounds[3]) // 2)
+                    clicked_option = True
+                    break
+            if not clicked_option:
+                tx, ty = sc(970, 1500)   # 默认点右侧选项区
+                adb.tap(tx, ty)
+            time.sleep(1)
+
+            # 点底部按钮 x2 (检查答案 → 下一题)
+            bx, by = sc(540, 2174)
+            adb.tap(bx, by)
+            time.sleep(1.5)
+            adb.tap(bx, by)
+            time.sleep(1.5)
+
+            # 检测进度变化
+            elements_after = adb.dump_ui(retries=2)
+            new_cur = None
+            new_total = 0
+            for e in elements_after:
+                m = re.match(r'^(\d+)/(\d+)$', (e.text or "").strip())
+                if m:
+                    new_cur = int(m.group(1))
+                    new_total = int(m.group(2))
+                    break
+
+            if new_cur and new_cur == last and cur:
+                log_msg(f"  ⚠ Q{new_cur} 进度未变，重试一次", "warning")
+                time.sleep(2)
+                adb.tap(bx, by)
+                time.sleep(1.5)
+                continue
+
+            if new_cur:
+                last = new_cur
+                cur = new_cur
+                total_q = new_total or total_q
+                if new_cur >= (total_q or 40):
+                    log_msg(f"✅ {new_cur}题完成!", "success")
+                    break
+            else:
+                last += 1
+                log_msg(f"  未检测到进度文字, 继续下一题 (Q{last})", "info")
+
+        # 3. 保存报告
+        out = PROJECT_ROOT / "outputs" / "questions" / "quick_report.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with open(out, "w", encoding="utf-8") as f:
+            json.dump({"questions": list(_inspection_state["questions"].values())},
+                      f, ensure_ascii=False, indent=2)
+        log_msg(f"✅ 快速检查完成: 共 {q_count} 题", "success")
+
+    except Exception as e:
+        log_msg(f"❌ 异常: {e}", "error")
+        import traceback
+        traceback.print_exc()
+    finally:
+        set_done()
+
+
 def run_inspect_questions_task():
     """自动化巡检 AI检测 题目：
     1. 启动APP, 关广告, 进英语tab
@@ -919,6 +1184,27 @@ def api_login():
     t = threading.Thread(target=run_login_task, daemon=True)
     t.start()
     return jsonify({"status": "started", "task": "login"})
+
+
+
+@app.route("/api/versions/available")
+def api_versions_available():
+    """可用版本列表 = 预设湘鲁版本 + 知识库中的版本（含湘少版等），去重"""
+    preset = ["新湘鲁五上", "新湘鲁五下", "新湘鲁六上", "新湘鲁六下"]
+    versions = list(preset)
+    try:
+        from src.knowledge_base import KnowledgeBase
+        kb = KnowledgeBase()
+        summary = kb.summary()
+        for s in summary:
+            key = s.get("key", "")
+            # 知识库key形如 "湘少版:五上" / "湘鲁版:六上" → 转成 "湘少版五上"
+            label = key.replace(":", "") if ":" in key else key
+            if label and label not in versions:
+                versions.append(label)
+    except Exception:
+        pass
+    return jsonify({"versions": versions, "preset": preset})
 
 
 @app.route("/api/versions", methods=["GET", "POST"])
@@ -1656,6 +1942,25 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
         set_done()
 
 
+
+@app.route("/api/inspect/quick-run", methods=["POST"])
+def api_inspect_quick_run():
+    """⚡ 快速检查：从当前页面直接开始逐题巡检 (跳过导航)
+
+    可选参数: docx(脚本文件名), unit(单元号) — 提供后逐题做 AI 六维审查
+    """
+    if task_status["running"]:
+        return jsonify({"error": "已有任务在运行"}), 409
+    data = request.get_json() or {}
+    docx_file = data.get("docx", "")
+    unit = data.get("unit", 0)
+    t = threading.Thread(target=run_quick_inspect_task,
+                         args=(docx_file, unit), daemon=True)
+    t.start()
+    return jsonify({"status": "started", "task": "quick_inspect",
+                    "docx": docx_file, "unit": unit})
+
+
 @app.route("/api/inspect/run", methods=["POST"])
 def api_inspect_run():
     """启动逐题巡检 (任务版)"""
@@ -2095,4 +2400,9 @@ if __name__ == "__main__":
     print(f"  项目路径: {PROJECT_ROOT}")
     print(f"  启动: http://localhost:5000")
     print("=" * 50)
+        # 自动检测屏幕分辨率并缩放坐标
+    config = load_config()
+    detect_screen_resolution(config.device.serial)
+    scale_all_coords()
+    
     app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)

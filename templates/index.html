@@ -303,8 +303,10 @@ body { font-family:-apple-system,"Microsoft YaHei","PingFang SC",sans-serif; bac
 
       <div class="btn-row">
         <button class="btn btn-primary" id="runBtn" onclick="startInsp()">▶ 开始检查</button>
+        <button class="btn btn-success" id="quickBtn" onclick="quickInsp()" title="跳过导航，直接从手机当前页面开始逐题检查">⚡ 快速检查</button>
         <button class="btn btn-danger" id="stopBtn" onclick="stopInsp()">⏹ 停止</button>
       </div>
+      <div class="form-hint" style="margin-top:6px">💡 <b>快速检查</b>：先在手机上手动进入题目页（如 听力专项→基础巩固→第1题），再点此按钮，直接从当前页开始截图检查。</div>
     </div>
 
   </div>
@@ -521,13 +523,13 @@ function updQ(f) {
   if(!t) return;
 
   $('questionList').innerHTML=ids.map(qid=>{
-    const q=qs[qid],pa=q.overall_passed;
+    const q=qs[qid],pa=q.overall_passed,unrev=(q.overall_passed===null||q.overall_passed===undefined);
     return `<div class="q-card">
       <div class="q-head">
         <div class="qnum">Q${String(q.idx).padStart(2,'0')}</div>
         <span class="qtype">${q.question_type||'?'}</span>
         <div class="qstatus">
-          <span class="tag ${pa?'pass':'fail'}">AI:${pa?'通过':'不通过'}</span>
+          <span class="tag ${unrev?'pending':(pa?'pass':'fail')}">AI:${unrev?'未审查':(pa?'通过':'不通过')}</span>
           ${q.human_label
             ?`<span class="tag ${q.human_label==='通过'?'human-pass':'human-fail'}">人:${q.human_label}</span>`
             :`<span class="tag pending-label">待标注</span>`}
@@ -535,12 +537,12 @@ function updQ(f) {
       </div>
       <div class="q-body">
         <div class="q-dims">
-          <div class="q-dim ${q.ai_stem?'pass':'fail'}"><div class="icon">${q.ai_stem?'✅':'❌'}</div><div class="label">题干</div></div>
-          <div class="q-dim ${q.ai_content?'pass':'fail'}"><div class="icon">${q.ai_content?'✅':'❌'}</div><div class="label">内容</div></div>
+          <div class="q-dim ${q.ai_stem===true?'pass':(q.ai_stem===false?'fail':'skip')}"><div class="icon">${q.ai_stem===true?'✅':(q.ai_stem===false?'❌':'⏭')}</div><div class="label">题干</div></div>
+          <div class="q-dim ${q.ai_content===true?'pass':(q.ai_content===false?'fail':'skip')}"><div class="icon">${q.ai_content===true?'✅':(q.ai_content===false?'❌':'⏭')}</div><div class="label">内容</div></div>
           <div class="q-dim ${q.ai_image?'pass':(q.question_type&&q.question_type.includes('图片')?'fail':'skip')}">
             <div class="icon">${q.ai_image?'✅':(q.question_type&&q.question_type.includes('图片')?'❌':'⏭')}</div>
             <div class="label">配图</div></div>
-          <div class="q-dim ${q.ai_answer?'pass':'fail'}"><div class="icon">${q.ai_answer?'✅':'❌'}</div><div class="label">作答</div></div>
+          <div class="q-dim ${q.ai_answer===true?'pass':(q.ai_answer===false?'fail':'skip')}"><div class="icon">${q.ai_answer===true?'✅':(q.ai_answer===false?'❌':'⏭')}</div><div class="label">作答</div></div>
           <div class="q-dim ${q.ai_audio===true?'pass':(q.ai_audio===false?'fail':'skip')}">
             <div class="icon">${q.ai_audio===true?'✅':(q.ai_audio===false?'❌':'⏭')}</div>
             <div class="label">音频</div></div>
@@ -627,6 +629,23 @@ async function stopInsp() {
   try{await fetch('/api/inspect/stop',{method:'POST'});addLog('warning','⏹ 停止信号已发送');}catch(e){}
 }
 
+async function quickInsp() {
+  $('quickBtn').disabled=true;
+  $('logBox').innerHTML=''; LOG_LAST=0;
+  const docx=$('reviewDocx')?$('reviewDocx').value:'';
+  const unit=$('reviewUnit')?$('reviewUnit').value:'';
+  const withAI=docx&&docx!=='— 尚未上传 —'&&docx!=='';
+  $('questionList').innerHTML=`<div style="text-align:center;padding:60px 20px;color:#94a3b8"><div style="font-size:48px;margin-bottom:14px">⚡</div><div style="font-size:17px;font-weight:500;color:#64748b">快速检查启动中...</div><div style="font-size:14px;margin-top:8px">${withAI?'已携带脚本 <b>'+docx+'</b>，将逐题做 AI 六维审查':'未选脚本，仅截图推进（可在右栏"审查智能体"选脚本后重试）'}</div></div>`;
+  addLog('info',`⚡ 快速检查: 从当前页面开始${withAI?' (AI审查: '+docx+')':''}`);
+  try{
+    const r=await(await fetch('/api/inspect/quick-run',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({docx:withAI?docx:'',unit:unit?parseInt(unit):0})})).json();
+    if(r.error){alert(r.error);$('quickBtn').disabled=false;return;}
+    addLog('success','✅ 快速检查任务已启动');
+  }catch(e){alert('失败:'+e);$('quickBtn').disabled=false;}
+}
+
 async function humanLabel(qid,label) {
   const n=$('nt_'+qid);const note=n?n.value:'';
   try{
@@ -682,6 +701,20 @@ async function loadUL() {
   }
 }
 
+
+async function loadVersions() {
+  try{
+    const d=await(await fetch('/api/versions/available')).json();
+    const sel=$('inspectVersion');
+    const cur=sel.value;
+    const vs=d.versions||[];
+    if(vs.length){
+      sel.innerHTML=vs.map(v=>`<option${v===cur?' selected':''}>${v}</option>`).join('');
+      if(cur&&vs.includes(cur)) sel.value=cur;
+    }
+  }catch(e){}
+}
+
 async function loadKB() {
   try{
     const d=await(await fetch('/api/knowledge/status')).json();
@@ -697,7 +730,7 @@ async function loadKB() {
 // ============================================================
 // INIT
 // ============================================================
-renderSteps();loadUL();loadKB();poll();
+renderSteps();loadUL();loadKB();loadVersions();poll();
 </script>
 </body>
 </html>
