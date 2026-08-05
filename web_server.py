@@ -905,25 +905,54 @@ def index():
 def api_status():
     """设备状态 + 任务状态"""
     config = load_config()
+    # 优先用动态选择的设备序列号，未选择则用配置文件兜底
+    cur_serial = os.environ.get("ANDROID_SERIAL") or config.device.serial
     device_ok = False
     try:
-        # 预启动 ADB 守护进程，避免首次调用超时
-        sp.run(["C:/Users/bunana/AppData/Local/Microsoft/WinGet/Packages/Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe/platform-tools/adb.exe", "start-server"],
-               capture_output=True, text=True, timeout=10,
-               encoding="utf-8", errors="replace")
-        r = sp.run(["C:/Users/bunana/AppData/Local/Microsoft/WinGet/Packages/Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe/platform-tools/adb.exe", "-s", config.device.serial, "get-state"],
-                   capture_output=True, text=True, timeout=10,
-                   encoding="utf-8", errors="replace")
-        device_ok = r.returncode == 0 and "device" in r.stdout.lower()
+        sys.path.insert(0, str(Path(__file__).parent / "scripts"))
+        from common.device import device_ok as _check_ok
+        device_ok = _check_ok(cur_serial)
     except Exception:
         pass
 
     return jsonify({
         "device_connected": device_ok,
-        "device_serial": config.device.serial,
+        "device_serial": cur_serial,
+        "devices": _device_list(),
         "current_version": _get_current_version_from_config(),
         "task_status": task_status,
     })
+
+
+def _device_list():
+    """列出所有已连接设备（供前端下拉选择）"""
+    try:
+        sys.path.insert(0, str(Path(__file__).parent / "scripts"))
+        from common.device import list_devices
+        return list_devices()
+    except Exception:
+        return []
+
+
+@app.route("/api/devices", methods=["GET"])
+def api_devices():
+    """获取所有已连接的 adb 设备列表"""
+    return jsonify({"devices": _device_list()})
+
+
+@app.route("/api/device/select", methods=["POST"])
+def api_device_select():
+    """选择当前设备序列号（写 ANDROID_SERIAL，全局生效）"""
+    data = request.get_json() or {}
+    serial = (data.get("serial") or "").strip()
+    try:
+        sys.path.insert(0, str(Path(__file__).parent / "scripts"))
+        from common.device import set_device, device_ok
+        set_device(serial or None)
+        ok = device_ok()
+        return jsonify({"status": "ok", "serial": serial or "", "connected": ok})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/login", methods=["POST"])

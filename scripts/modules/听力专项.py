@@ -11,6 +11,12 @@
     → 去答题 → 好的我知道啦 → 开始答题 → 答题循环(17题) → 查看报告 → back
 
 批量调用：from modules.听力专项 import run_module; run_module(d)
+
+★ 排序题两种类型（防混淆）：
+  1. 句子圆圈排序题（听录音，给句子排序）：句子前是圆圈，底部序号一进就在，
+     不需要激活 → 直接按顺序点句子，序号自动 1,2,3... 填入 → _handle_sentence_sort
+  2. 空方框排序题：句子是空方框，需点方框激活 → 底部序号按钮才出现 → 点序号
+     → _handle_sort_question
 """
 import sys, os, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -136,11 +142,40 @@ def _test_answer_loop(d, max_q=30):
             _handle_match_question(d, {})
             q += 1
             continue
-        # 排序题：点第一个方框 → 依次点序号
-        if any(kw in texts for kw in ("排序", "给图片排序", "给句子排序")):
-            from engine import _handle_sort_question
-            _handle_sort_question(d, {})
+        # 排序题：先判断类型
+        #   句子圆圈排序题（听录音给句子排序）：句子前是圆圈，底部序号一进就在，
+        #     直接按顺序点句子（序号自动填入）→ _handle_sentence_sort
+        #   空方框排序题：点方框激活 → 底部序号按钮才出现 → 点序号 → _handle_sort_question
+        if any(kw in texts for kw in ("排序", "给图片排序", "给句子排序", "听录音，给句子排序")):
+            # 检测是否句子圆圈型：有整行句子（宽>800）+ 底部序号小按钮（y>1900 一直存在）
+            from engine import _handle_sentence_sort, _handle_sort_question
+            xml = d.dump_hierarchy()
+            import re as _re
+            _wide = 0  # 整行句子数
+            _num_btns = 0  # 底部序号小按钮数
+            for m in _re.finditer(
+                r'class="android\.widget\.LinearLayout"[^>]*clickable="true"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
+                xml
+            ):
+                x1, y1, x2, y2 = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+                w, h = x2 - x1, y2 - y1
+                if w > 800 and 700 < y1 < 1900:
+                    _wide += 1
+                if 100 < w < 130 and 100 < h < 140 and y1 > 1900:
+                    _num_btns += 1
+            if _wide >= 3 and _num_btns >= 3:
+                print(f"    🎯 句子圆圈排序题（整行{_wide}句 + 底部序号{_num_btns}个）→ 直接点句子")
+                _handle_sentence_sort(d, {})
+            else:
+                print(f"    🎯 空方框排序题 → 点方框激活+点序号")
+                _handle_sort_question(d, {})
             q += 1
+            # 排序题完成后（最后一题）：查看报告出现 → 点击并完成
+            if d(text="查看报告").exists(timeout=1.5):
+                d(text="查看报告").click()
+                print("      → 查看报告！测试完成")
+                time.sleep(2)
+                return q
             continue
         # 无选项无按钮 → 检查页面
         texts2 = [e.text for e in (d.xpath('//*[@text!=""]').all() or []) if e.text]

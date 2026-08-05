@@ -351,9 +351,10 @@ def _handle_sort_question(d, config):
     #    ★ 检查按钮在更底部 y~2334（不参与检测）
     def _find_num_btns():
         """检测底部序号按钮位置。
-        序号按钮特征：y 1680-2100、宽 200-300、x 起点为 0 或 242 的倍数（不是 58）
+        序号按钮特征：y 1680-2200、宽 200-300、x 起点为 0 或 242 的倍数（不是 58）
         ★ 关键：x 起点 58 是句子方框，必须排除！
-        检查按钮特征：y > 2100 或宽 > 800 → 排除
+        ★ dump 找不到时（图片绘制的序号按钮）→ 坐标兜底：
+          在底部大区域（y>1700 宽>800）5 等分估算序号按钮位置
         """
         btns = []
         for e in (d.xpath('//*[@clickable="true"]').all() or []):
@@ -367,9 +368,33 @@ def _handle_sort_question(d, config):
                 btns.append((cx, cy, b[0], b[1]))
         # 按 y 然后 x 排序（左上优先）
         btns.sort(key=lambda t: (t[1], t[0]))
+
+        # ★ 坐标兜底：dump 找不到 → 图片绘制序号按钮
+        if not btns:
+            try:
+                for e in (d.xpath('//*[@clickable="true"]').all() or []):
+                    b = e.bounds
+                    w = b[2] - b[0]
+                    if b[1] > S_h(d, 1650) and w > 800 and (b[3] - b[1]) < 350:
+                        # 底部大区域（听力内容区/按钮区）5 等分
+                        area_x1, area_x2 = b[0], b[2]
+                        area_y = (b[1] + b[3]) // 2 + 30
+                        step = (area_x2 - area_x1) // 10
+                        for i in range(5):
+                            btns.append((area_x1 + step * (2 * i + 1), area_y, 0, 0))
+                        break
+            except Exception:
+                pass
+            if not btns:
+                # 终极兜底：屏幕底部 5 等分
+                h = d.window_size()[1]
+                w = d.window_size()[0]
+                step = w // 10
+                for i in range(5):
+                    btns.append((step * (2 * i + 1), int(h * 0.85), 0, 0))
         return btns
 
-    # 点 1-5 序号（每次动态检测按钮位置；点完1个重检一次，避开新出现的检查按钮）
+    # 点 1-5 序号（每次动态检测按钮位置；填一个后若出现"检查/查看报告"则填完停止）
     for target in range(1, 6):
         # 每次重新检测序号栏（点完序号后检查按钮可能出现、布局上移）
         btns = _find_num_btns()
@@ -383,18 +408,28 @@ def _handle_sort_question(d, config):
             time.sleep(1.2)
         except Exception:
             pass
+        # 填完一个后：检查/检测/查看报告出现 → 说明填完了，停止
+        if (d(text="检查").exists(timeout=0.8)
+                or d(text="检测").exists(timeout=0.8)
+                or d(text="查看报告").exists(timeout=0.8)):
+            print(f"      → 填完第{target}个后出现按钮，停止填序号")
+            break
 
-    # 3. 出现检查 → 点它（兼容"检测"按钮文字，知识过关/单元自检用"检测"）
-    for _ in range(8):
+    # 3. 出现检查 → 点它（兼容"检测"；最后一题检查后出"查看报告"也点）
+    for _ in range(10):
         if d(text="检查").exists(timeout=0.8):
             d(text="检查").click()
             print(f"    ✅ 排序完成，点击检查")
-            time.sleep(0.8)
-            return True
+            time.sleep(1.2)
+            continue  # 检查后可能出查看报告/下一题
         if d(text="检测").exists(timeout=0.8):
             d(text="检测").click()
             print(f"    ✅ 排序完成，点击检测")
-            time.sleep(0.8)
+            time.sleep(1.2)
+            continue
+        if d(text="查看报告").exists(timeout=0.8):
+            # 最后一题：查看报告已出现，交给外层答题循环统一点击（避免重复处理）
+            print(f"    ✅ 排序完成，查看报告已出现")
             return True
         if d(text="下一题").exists(timeout=1):
             print(f"    ✅ 排序完成，下一题已出现")
@@ -415,6 +450,67 @@ def _get_qno(d):
     except Exception:
         pass
     return 0, 0
+
+
+def _handle_sentence_sort(d, config):
+    """处理「句子圆圈排序题」（听录音，给句子排序）
+
+    ★ 与空方框排序题的区别（防混淆）：
+      - 句子圆圈排序题：句子前面是「圆圈」（待填序号），底部序号按钮一进题目就在，
+        **不需要激活**——直接按顺序把句子全部点击掉，序号自动按 1,2,3... 依次填入
+        （点击句子 → 自动分配当前最小序号；全部句子点完 → 出现「检查」）
+      - 空方框排序题：句子是空方框，需要「点方框激活输入框 → 底部序号按钮才出现 →
+        点序号填入」——那个用 _handle_sort_question
+
+    识别特征：句子是整行 LinearLayout（宽 > 800，y 700-1900），
+    底部有 5 个小序号按钮（114x126 左右，y > 1900）——不点句子也一直在。
+    """
+    import time
+    print(f"    📝 句子圆圈排序题：直接按顺序点击句子（序号自动填入）")
+
+    def _find_sentences():
+        """找整行句子（宽 > 800 的 clickable LinearLayout，y 700-1900）"""
+        import re
+        sents = []
+        xml = d.dump_hierarchy()
+        for m in re.finditer(
+            r'class="android\.widget\.LinearLayout"[^>]*clickable="true"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
+            xml
+        ):
+            x1, y1, x2, y2 = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+            w, h = x2 - x1, y2 - y1
+            if w > 800 and 700 < y1 < 1900:
+                sents.append(((x1 + x2) // 2, (y1 + y2) // 2, y1))
+        sents.sort(key=lambda t: t[2])
+        return sents
+
+    sentences = _find_sentences()
+    if not sentences:
+        print(f"    ⚠ 未找到整行句子，可能不是句子圆圈排序题")
+        return False
+
+    # 依次点击每个句子（序号自动 1,2,3... 填入）
+    for i, (cx, cy, y1) in enumerate(sentences, 1):
+        try:
+            d.click(cx, cy)
+        except Exception:
+            pass
+        time.sleep(0.8)
+        print(f"    {i}. 点句子 @({cx},{cy})")
+
+    time.sleep(1)
+    # 全部点完 → 出现检查/检测 → 点击
+    for kw in ("检查", "检测"):
+        if d(text=kw).exists(timeout=2):
+            try:
+                d(text=kw).click()
+            except Exception:
+                pass
+            print(f"    ✅ 句子排序完成，点击{kw}")
+            time.sleep(1.5)
+            return True
+    print(f"    ⚠ 句子点完但未出现检查按钮")
+    return True
 
 
 def _handle_match_question(d, config):

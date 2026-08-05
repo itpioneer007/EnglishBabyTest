@@ -22,6 +22,8 @@ body{font-family:"Microsoft YaHei","PingFang SC","Helvetica Neue",sans-serif;bac
 .topbar .dev .dot.on{background:#22c55e;box-shadow:0 0 0 3px rgba(34,197,94,.15)}
 .topbar .dev .dot.off{background:#ef4444}
 .topbar .dev b{color:#e2e8f0;font-weight:600}
+.topbar .dev select{background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:7px;padding:5px 10px;font-size:12px;outline:none;max-width:220px}
+.topbar .dev select:focus{border-color:#0d9488}
 
 /* ====== 主容器 ====== */
 .wrap{max-width:1440px;margin:0 auto;padding:24px 28px 48px}
@@ -237,6 +239,9 @@ textarea{font-family:inherit}
     <a href="/export">报告导出</a>
   </div>
   <div class="dev">
+    <select id="devSelect" onchange="selectDevice(this.value)">
+      <option value="">选择设备...</option>
+    </select>
     <span class="dot" id="devDot"></span>
     设备: <b id="devStatus">检测中...</b>
   </div>
@@ -642,6 +647,7 @@ async function init(){
 init()
 
 // ====== 设备状态轮询 ======
+let _devListTs=0  // 设备列表刷新时间戳（避免每 2s 刷下拉）
 async function pollStatus(){
   while(true){
     try{
@@ -653,6 +659,14 @@ async function pollStatus(){
       $('devChip').className='chip '+(on?'on':'idle')
       $('devChip').innerHTML='<span class="c-dot"></span>设备: '+(on?'已连接':'离线')
 
+      // 刷新设备下拉列表（每 8s 一次，避免频繁打断选择）
+      const now=Date.now()
+      if(now-_devListTs>8000){
+        _devListTs=now
+        const dl=await(await fetch('/api/devices')).json()
+        refreshDevSelect(dl.devices||[], s.device_serial||'')
+      }
+
       // 批量状态
       const bs=await(await fetch('/api/batch/status')).json()
       updateBatchUI(bs)
@@ -660,6 +674,26 @@ async function pollStatus(){
     }catch(e){}
     await new Promise(r=>setTimeout(r,2000))
   }
+}
+
+// ====== 设备下拉刷新 ======
+function refreshDevSelect(devices, curSerial){
+  const sel=$('devSelect')
+  const focus=curSerial||sel.value
+  sel.innerHTML='<option value="">选择设备...</option>'+
+    devices.map(d=>`<option value="${d.serial}" ${d.serial===focus?'selected':''}>${d.serial}</option>`).join('')
+}
+
+// ====== 选择设备 ======
+async function selectDevice(serial){
+  try{
+    const r=await fetch('/api/device/select',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({serial})})
+    const j=await r.json()
+    if(j.error){alert('选择失败: '+j.error);return}
+    if(j.serial) addLog('info',`设备已切换: ${j.serial}${j.connected?' (已连接)':' (离线)'}`)
+    else addLog('info',`已恢复默认设备连接`)
+  }catch(e){alert('选择失败: '+e.message)}
 }
 
 // ====== 自动化任务状态 chip ======
