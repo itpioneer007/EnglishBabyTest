@@ -83,18 +83,26 @@ def close_ad(d):
     except Exception:
         pass
 
-    # 方式4：className=ImageView，右上角
+    # 方式4：className=ImageView，右上角 —— 仅当页面有广告特征文字时才尝试
+    # （避免误点主页右上角的正常功能按钮，如二维码/扫码入口）
     try:
-        for elem in d(className="android.widget.ImageView"):
-            info = elem.info
-            if not info.get("clickable"):
-                continue
-            b = info.get("bounds", {})
-            if b.get("right", 0) > d.window_size()[0] * 0.7 and b.get("top", 0) < 200:
-                elem.click()
-                print("    🔔 通过右上角 ImageView 关闭广告")
-                time.sleep(0.8)
-                return True
+        has_ad = False
+        for e in (d.xpath('//*[@text!=""]').all() or []):
+            t = e.text or ""
+            if any(kw in t for kw in ("老师伴学", "打卡服务", "点击参与", "广告", "推广")):
+                has_ad = True
+                break
+        if has_ad:
+            for elem in d(className="android.widget.ImageView"):
+                info = elem.info
+                if not info.get("clickable"):
+                    continue
+                b = info.get("bounds", {})
+                if b.get("right", 0) > d.window_size()[0] * 0.7 and b.get("top", 0) < 200:
+                    elem.click()
+                    print("    🔔 通过右上角 ImageView 关闭广告（检测到广告特征）")
+                    time.sleep(0.8)
+                    return True
     except Exception:
         pass
 
@@ -201,7 +209,7 @@ def dismiss_global_popups(d):
             pass
     return False
 
-def scroll_and_find(d, text, max_swipes=8) -> bool:
+def scroll_and_find(d, text, max_swipes=5) -> bool:
     """查找文字：先直接找，然后向上滑（内容下移）找下方，再向下滑（内容上移）找上方"""
     if d(text=text).exists(timeout=2): return True
     # 第一轮：向上滑（内容下移）
@@ -220,9 +228,15 @@ def scroll_and_find(d, text, max_swipes=8) -> bool:
 def ensure_grade(d, grade_level, book_version=""):
     """
     确保当前年级匹配。不匹配则自动切换。
-    流程：检测主页版本文字 → 不匹配则点版本号 → 选年级 → 确认
+    流程：先回主页 → 检测主页版本文字 → 不匹配则点版本号 → 选年级 → 确认
     """
-    # 主页版本号如 "湘少版（2024审定）五年级上册"
+    # ① 先确保在主页（避免在别的页面误判年级不匹配 → 误点版本号/乱滑动）
+    for _ in range(4):
+        if d(text="教材精学").exists(timeout=1) or d(text="专项突破").exists(timeout=1):
+            break
+        d.press("back"); time.sleep(1.5)
+
+    # ② 主页版本号如 "湘少版（2024审定）五年级上册"
     if d(textContains=grade_level).exists(timeout=3):
         if d(text="教材精学").exists(timeout=1):
             print(f"✅ 已确认 {book_version} {grade_level}")

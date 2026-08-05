@@ -307,7 +307,12 @@ def _answer_loop(d, max_q=20):
             retry_count = 0
             continue
         # 未知题型：截图保存，稍等
-        d.screenshot(f"unknown_qiaoji_{q}.png")
+        try:
+            _shot_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "screenshots")
+            os.makedirs(_shot_dir, exist_ok=True)
+            d.screenshot(os.path.join(_shot_dir, f"unknown_qiaoji_{q}.png"))
+        except Exception:
+            pass
         print(f"    ⚠ 未知: {[e.text for e in (d.xpath('//*[@text!=\"\"]').all() or []) if e.text][:4]}")
         time.sleep(2)
     return q

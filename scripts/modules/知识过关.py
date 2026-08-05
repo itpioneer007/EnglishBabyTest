@@ -361,7 +361,12 @@ def _answer_loop(d, max_q=120):
         # (已经在 letter_btns 块处理)
 
         # 未知
-        d.screenshot(f"unknown_kp_{q}.png")
+        try:
+            _shot_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "screenshots")
+            os.makedirs(_shot_dir, exist_ok=True)
+            d.screenshot(os.path.join(_shot_dir, f"unknown_kp_{q}.png"))
+        except Exception:
+            pass
         print(f"    ⚠ 未知: {texts[:5]}")
         time.sleep(2)
     return q

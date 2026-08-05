@@ -469,20 +469,63 @@ def _handle_sentence_sort(d, config):
     print(f"    📝 句子圆圈排序题：直接按顺序点击句子（序号自动填入）")
 
     def _find_sentences():
-        """找整行句子（宽 > 800 的 clickable LinearLayout，y 700-1900）"""
+        """找未填的整行句子（宽 > 800，y 700-1900）。
+        两种控件形态都要支持：
+        - LinearLayout clickable=true（旧版句子）
+        - CheckBox / option_cb（圆圈排序题：checkable=true 但 clickable=false，
+          只能通过 dump 正则匹配 class="android.widget.CheckBox"，text 是句子内容）
+        ★ 圆圈排序题判断"已填"的关键：句子旁的小圆圈 CheckBox（86x86，text 空）
+          点击句子后小圆圈 checked=true 且 text 变成序号数字；未填则 checked=false,text=''
+          句子本身的 checked 永远 false，不能用于判断！
+        """
         import re
-        sents = []
         xml = d.dump_hierarchy()
+        # 收集两类 CheckBox：句子（宽>800 带文本）和小圆圈（宽60-120 text 空）
+        sentences = []   # (cx, cy, y1)
+        circles = []     # (cx, cy, y1, checked)
+        for m in re.finditer(r'<node[^>]*class="android\.widget\.CheckBox"[^>]*/?>', xml):
+            tag = m.group(0)
+            tm = re.search(r'text="([^"]*)"', tag)
+            cm = re.search(r'checked="(true|false)"', tag)
+            bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+            if not (tm and cm and bm):
+                continue
+            txt = tm.group(1)
+            x1, y1, x2, y2 = int(bm.group(1)), int(bm.group(2)), int(bm.group(3)), int(bm.group(4))
+            w = x2 - x1
+            cy = (y1 + y2) // 2
+            cx = (x1 + x2) // 2
+            if len(txt) >= 6 and w > 800 and 700 < y1 < 1900:
+                sentences.append((cx, cy, y1))
+            elif w <= 130 and 700 < y1 < 1900:  # 小圆圈
+                circles.append((cx, cy, y1, cm.group(1)))
+        # LinearLayout 形态（旧版，无小圆圈，直接算未填）
+        sents_ll = []
         for m in re.finditer(
-            r'class="android\.widget\.LinearLayout"[^>]*clickable="true"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
+            r'<node[^>]*class="android\.widget\.LinearLayout"[^>]*clickable="true"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
             xml
         ):
             x1, y1, x2, y2 = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
-            w, h = x2 - x1, y2 - y1
+            w = x2 - x1
             if w > 800 and 700 < y1 < 1900:
-                sents.append(((x1 + x2) // 2, (y1 + y2) // 2, y1))
-        sents.sort(key=lambda t: t[2])
-        return sents
+                sents_ll.append(((x1 + x2) // 2, (y1 + y2) // 2, y1))
+        if not sentences and sents_ll:
+            return sorted(sents_ll, key=lambda t: t[2])
+
+        # 圆圈排序题：句子按 y 匹配最近的小圆圈，小圆圈 checked=false 才算未填
+        result = []
+        for cx, cy, y1 in sentences:
+            # 找 y 最接近的小圆圈
+            best = None
+            for ccx, ccy, cy1, cchk in circles:
+                if abs(ccy - cy) < 100:
+                    if best is None or abs(ccy - cy) < abs(best[1] - cy):
+                        best = (ccx, ccy, cy1, cchk)
+            if best and best[3] == "true":
+                continue  # 小圆圈已填序号 → 跳过
+            result.append((cx, cy, y1))
+        result.sort(key=lambda t: t[2])
+        return result
 
     # 依次点击句子（每次重检位置，防布局变化）；填到「检查」出现为止
     clicked = 0
@@ -678,10 +721,8 @@ def _answer_loop(d, config, module_name):
             time.sleep(1)
             continue
 
-        # 新题：截图 + 计数
+        # 新题：计数
         q += 1
-        if q % 3 == 1:
-            d.screenshot("test.png")
         print(f"    📸 第{q}题")
 
         # 等渲染 + 选答案
@@ -894,72 +935,109 @@ _KEYBOARD_LETTERS = {
 
 def _handle_fill_blank(d, config):
     """处理填空题（方案一：FastInputIME 输入法注入，用户确认最稳定）：
-    1. 找所有 EditText 输入框（自定义 view，只能通过 dump 找 EditText class）
+    1. 循环找空 EditText（text='' 即未填；不能用坐标去重——填一个框后布局会变化）
     2. 每个方框：点方框获得焦点 → d.set_fastinput_ime(True) 切专用输入法
-       → d.send_keys(word) 直接注入文本 → back 收起 → 下一个方框
-    3. 全部填完 → 点检查
+       → d.send_keys(word) 直接注入文本 → back 收起 → 重新 dump 找下一个空框
+    3. 当前屏幕没有空框 → 下滑找新方框（补全短文题文字多，空框分布多屏）
+    4. 全部填完 → 下滑找"检查"按钮 → 点击 → 点"下一题"
     关键：不点击系统键盘（uiautomator2 无法定位键盘），用 IME 注入绕过搜狗输入法
     """
-    import re as _re
+    import random
     print(f"    填空题，处理中...")
 
-    def _find_inputs():
-        xml = d.dump_hierarchy()
-        inputs = []
-        for m in _re.finditer(
-            r'class="android\.widget\.EditText"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
-            xml
-        ):
-            x1, y1, x2, y2 = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
-            cx, cy = (x1+x2)//2, (y1+y2)//2
-            inputs.append((cx, cy, y1))
-        inputs.sort(key=lambda t: t[2])
-        return inputs
-
-    import random
-    words = ['a', 'b', 'cat', 'dog', 'sun', 'ok', 'hi', 'go']
-    filled = set()  # 已填的方框 y1 集合
-
-    for round_i in range(8):
-        inputs = _find_inputs()
-        new_inputs = [i for i in inputs if i[2] not in filled]
-        if not new_inputs:
-            if round_i < 4:
-                # 下滑找新方框
-                S_swipe(d, 540, 1800, 540, 800, 0.4)
-                time.sleep(1.5)
-                continue
-            else:
-                break
-
-        # 填一个方框：点方框 → FastInputIME 注入 → back
-        cx, cy, y1 = new_inputs[0]
-        d.click(cx, cy)
-        time.sleep(1.5)
-        word = random.choice(words)
+    # 开场：确保 EditText 可见（首次进入"补全短文"题时 App 会自动激活系统键盘
+    #   把方框挡住，dump 里看不到 EditText 节点；先按 back 收起键盘）
+    for _ in range(3):
         try:
-            # 方案一：切换 FastInputIME 输入法注入文本（绕过搜狗键盘）
-            d.set_fastinput_ime(True)
-            time.sleep(0.5)
-            d.send_keys(word)
-            time.sleep(0.5)
+            _xml_probe = d.dump_hierarchy()
+            if 'class="android.widget.EditText"' in _xml_probe:
+                break  # EditText 可见，可开始填方框
         except Exception:
-            # 兜底：ADB input text（之前验证过第1个方框有效）
-            d.shell(f"input text {word}")
-            time.sleep(0.5)
-        # 收起键盘
+            pass
         d.press("back")
         time.sleep(1.5)
-        filled.add(y1)
-        print(f"    填 (y={y1}) 字={word}")
 
-    time.sleep(1.5)
-    if d(text="检查").exists(timeout=2):
-        d(text="检查").click()
-        print(f"    填空完成，点击检查")
+    def _find_empty_inputs():
+        """找所有 text='' 的 EditText（未填的空框），按 y 排序。
+        关键：dump 节点属性顺序是 text 在 class 之前（NAF=true 节点），
+        不能用 'class=...[^>]*text=...' 顺序正则，要整节点匹配后分别提取。
+        """
+        xml = d.dump_hierarchy()
+        inputs = []
+        for m in re.finditer(r'<node[^>]*class="android\.widget\.EditText"[^>]*>', xml):
+            tag = m.group(0)
+            tm = re.search(r'text="([^"]*)"', tag)
+            val = tm.group(1) if tm else ''
+            bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+            if not bm:
+                continue
+            x1, y1, x2, y2 = int(bm.group(1)), int(bm.group(2)), int(bm.group(3)), int(bm.group(4))
+            cx, cy = (x1+x2)//2, (y1+y2)//2
+            inputs.append((cx, cy, val, y1))
+        inputs.sort(key=lambda t: t[3])
+        return inputs
+
+    words = ['apple', 'book', 'cat', 'dog', 'sun', 'tree', 'fish', 'bird', 'nice', 'good']
+    no_new_swipes = 0  # 连续下滑无新空框次数
+
+    # 阶段1：填所有空框（当前可见的填完 → 下滑找新的）
+    for round_i in range(40):
+        inputs = _find_empty_inputs()
+        empty = [i for i in inputs if i[2] == '']  # text='' 即未填
+        if empty:
+            cx, cy = empty[0][0], empty[0][1]
+            d.click(cx, cy)
+            time.sleep(1.5)
+            word = random.choice(words)
+            try:
+                # 方案一：切换 FastInputIME 输入法注入文本（绕过搜狗键盘）
+                d.set_fastinput_ime(True)
+                time.sleep(0.5)
+                d.send_keys(word)
+                time.sleep(0.5)
+            except Exception:
+                # 兜底：ADB input text（之前验证过第1个方框有效）
+                try:
+                    d.shell(f"input text {word}")
+                    time.sleep(0.5)
+                except Exception:
+                    pass
+            # 收起键盘
+            d.press("back")
+            time.sleep(1.5)
+            print(f"    填一空 ({cx},{cy}) 字={word}")
+            no_new_swipes = 0
+            continue
+
+        # 当前屏幕没有空框 → 下滑找新的（短文长，空框分布多屏）
+        if no_new_swipes >= 3:
+            break
+        S_swipe(d, 540, 1800, 540, 800, 0.4)
         time.sleep(1.5)
-        return True
-    return False
+        no_new_swipes += 1
+
+    # 阶段2：下滑找"检查"按钮并点击（检查按钮在短文最底部，需下滑才能看到）
+    #   兼容两种按钮文字：单元自检用"检查"，知识过关用"检测"
+    for _ in range(6):
+        btn = None
+        if d(text="检查").exists(timeout=1.2):
+            btn = "检查"
+        elif d(text="检测").exists(timeout=0.8):
+            btn = "检测"
+        if btn:
+            d(text=btn).click()
+            print(f"    填空完成，点击{btn}")
+            time.sleep(2)
+            break
+        S_swipe(d, 540, 1800, 540, 600, 0.4)
+        time.sleep(1.5)
+
+    # 阶段3：点"下一题"（答对自动跳转，答错出现"下一题"按钮）
+    if d(text="下一题").exists(timeout=2):
+        d(text="下一题").click()
+        print(f"    点击下一题")
+        time.sleep(2)
+    return True
 
 
 

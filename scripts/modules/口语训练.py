@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import uiautomator2 as u2
 from common.tools import (
     S, S_swipe, S_h, S_w,
-    close_ad, dismiss_global_popups, ensure_grade, scroll_and_find,
+    close_ad, dismiss_global_popups, ensure_grade,
 )
 
 APP_PACKAGE = "com.dinoenglish.yyb"
@@ -278,11 +278,18 @@ def run_module(d):
     total = 0
     print(f"\n📋 口语训练 · 单元 {UNITS[0]}-{UNITS[-1]} · {len(UNITS)}个单元")
 
-    # 确认在口语训练页
-    if not d(text="口语训练").exists(timeout=3):
-        if not scroll_and_find(d, "口语训练"):
-            print("  ❌ 找不到口语训练入口"); return 0
+    # ① 先确保在主页（口语训练入口在主页专项突破区，直接可见，不需要滑动）
+    for _ in range(4):
+        if d(text="教材精学").exists(timeout=1) or d(text="专项突破").exists(timeout=1):
+            break
+        d.press("back"); time.sleep(1.5)
+
+    # ② 主页直接找口语训练入口（可见，无需滑动；找不到直接失败）
+    if d(text="口语训练").exists(timeout=3):
         d(text="口语训练").click(); time.sleep(4)
+        print("  ✅ 主页点口语训练入口")
+    else:
+        print("  ❌ 主页找不到口语训练入口"); return 0
 
     # 关底部广告
     _close_bottom_ad(d)

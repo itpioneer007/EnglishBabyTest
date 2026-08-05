@@ -173,6 +173,19 @@ def _test_answer_loop(d, max_q=30):
                     _wide += 1
                 elif 100 < w < 300 and 100 < h < 140 and 700 < y1 < 1500:
                     _boxes += 1
+            # ★ CheckBox 整行句子（圆圈排序题：option_cb CheckBox，宽>800 带文本）
+            #   这也是句子圆圈排序题，必须计入 _wide，否则会被误判成方框题
+            #   ★ dump 属性顺序 text 在 class 前面，必须整节点匹配
+            for m in _re.finditer(r'<node[^>]*class="android\.widget\.CheckBox"[^>]*/?>', xml):
+                tag = m.group(0)
+                tm = _re.search(r'text="([^"]{6,})"', tag)
+                bm = _re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+                if not (tm and bm):
+                    continue
+                x1, y1, x2, y2 = int(bm.group(1)), int(bm.group(2)), int(bm.group(3)), int(bm.group(4))
+                w = x2 - x1
+                if w > 800 and 700 < y1 < 1900:
+                    _wide += 1
             if _wide >= 3:
                 print(f"    🎯 句子圆圈排序题（整行{_wide}句）→ 直接点句子（序号自动填）")
                 _handle_sentence_sort(d, {})

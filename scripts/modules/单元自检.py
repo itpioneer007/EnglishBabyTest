@@ -95,8 +95,17 @@ def _answer_loop(d, max_q=60):
             _handle_sort_question(d, {})
             q += 1
             continue
-        # 填空题检测：题干含"完成小短文"+"每空"
-        if any(kw in texts for kw in ("完成小短文", "完成短文", "每空", "填空", "完成句子")):
+        # 填空题检测：核心判断 = 界面存在 EditText 输入框（不依赖题干文字！
+        #   补全短文/补全对话题题干文字是图片渲染，uiautomator dump 不到关键词）
+        #   只要存在 EditText 就一定是需要输入的填空/补全题
+        import re as _re
+        has_edittext = False
+        try:
+            _xml = d.dump_hierarchy()
+            has_edittext = bool(_re.search(r'class="android\.widget\.EditText"', _xml))
+        except Exception:
+            pass
+        if has_edittext or any(kw in texts for kw in ("完成小短文", "完成短文", "每空", "填空", "完成句子")):
             from engine import _handle_fill_blank
             if _handle_fill_blank(d, {}):
                 q += 1
@@ -105,7 +114,12 @@ def _answer_loop(d, max_q=60):
         # 未知题型 → 提示用户
         texts2 = [e.text for e in (d.xpath('//*[@text!=""]').all() or []) if e.text]
         print(f"    ⚠ 未知题型，请告知处理方法: {texts2[:6]}")
-        d.screenshot(f"unknown_type_{q}.png")
+        try:
+            _shot_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "screenshots")
+            os.makedirs(_shot_dir, exist_ok=True)
+            d.screenshot(os.path.join(_shot_dir, f"unknown_type_{q}.png"))
+        except Exception:
+            pass
         time.sleep(5)
     return q
 
