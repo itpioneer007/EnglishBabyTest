@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import uiautomator2 as u2
 from common.setup import switch_version_grade
+from common.tools import close_ad, dismiss_global_popups
 
 # ═══════════ 模块注册表：新增模块只需在此加一行 ═══════════
 MODULE_MAP = {
@@ -64,6 +65,15 @@ def run_all(module_names=None, d=None, version=None, grade=None):
         d.app_start(APP_PACKAGE); time.sleep(8)
     except Exception as e:
         print(f"  ⚠ App 重启异常: {e}")
+
+    # 0.5 关广告（与单模块 main() 一致：先清全局弹窗 + 关广告，再操作界面，
+    #     否则重启 App 后主页广告/弹窗未关，后续点坐标会点到广告上！）
+    try:
+        for _ in range(3):
+            dismiss_global_popups(d)
+        close_ad(d)
+    except Exception as e:
+        print(f"  ⚠ 关广告异常: {e}")
 
     # 1. 前提：切换版本+年级（全部模块共用一次）
     print(f"前提设置: {version} {grade}")

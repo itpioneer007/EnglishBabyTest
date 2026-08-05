@@ -192,7 +192,7 @@ def _answer_big_question(d, big_idx=0):
                 print(f"    🔊 点小喇叭 ({pos[0]},{pos[1]})")
                 time.sleep(1.5)
 
-        # 作答小题
+        # 作答小题（用户约定流程：每道小题点"点击录音"→点"点击结束"，找不到就下滑）
         if _speak_question(d):
             q += 1
         else:
@@ -216,26 +216,34 @@ def _answer_big_question(d, big_idx=0):
 def _run_one_unit(d, unit_num, is_retry):
     """跑一个单元的口语训练"""
     print(f"\n  🎯 口语训练 Unit {unit_num}")
-    # 找该单元的答题按钮（U1 可能是'重新答题'，其他是'开始答题'）
-    btn_text = "重新答题" if is_retry else "开始答题"
+    # 找该单元的答题按钮：3 种状态
+    #   - 未训练过："开始答题"
+    #   - 已训练过（完成）："重新答题"
+    #   - 答题中退出（未完成）："继续答题"
+    # 优先"重新答题"（从头开始，每道题都有麦克风），其次"继续答题"，最后"开始答题"
+    btn_candidates = ["重新答题", "继续答题", "开始答题"]
     # 需要定位到该单元的按钮（按顺序：U1 第一个，U2 第二个...）
     # 等待+滚动重试（页面加载可能慢）
     btns = []
     idx = unit_num - 1
+    chosen_btn = None
     for attempt in range(5):
-        btns = [e for e in (d.xpath('//*[@text!=""]').all() or [])
-                if (e.text or "").strip() == btn_text]
-        # 按 y 排序取第 idx 个
-        btns.sort(key=lambda e: e.bounds[1])
-        if idx < len(btns):
+        for txt in btn_candidates:
+            btns = [e for e in (d.xpath('//*[@text!=""]').all() or [])
+                    if (e.text or "").strip() == txt]
+            btns.sort(key=lambda e: e.bounds[1])
+            if idx < len(btns):
+                chosen_btn = txt
+                break
+        if chosen_btn:
             break
         # 可能需下滑
         S_swipe(d, 540, 1800, 540, 600, 0.3); time.sleep(1)
-    if idx >= len(btns):
-        print(f"    ❌ 找不到 U{unit_num} 的{btn_text}")
+    if not chosen_btn:
+        print(f"    ❌ 找不到 U{unit_num} 的答题按钮（已找：{'/'.join(btn_candidates)}）")
         return 0
     btns[idx].click()
-    print(f"    ✅ 点击 {btn_text} (U{unit_num})")
+    print(f"    ✅ 点击 {chosen_btn} (U{unit_num})")
     time.sleep(3)
 
     # 弹窗"好的，我知道啦~"

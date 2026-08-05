@@ -160,6 +160,11 @@ def log_msg(msg: str, level: str = "info"):
     task_status["log"].append(entry)
     print(f"[{entry['time']}] [{level}] {msg}")
 
+# 注入共享日志通道：让 scheduler 和模块内部的流程日志也能送到前端
+sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+from common.logger import set_log_callback
+set_log_callback(log_msg)
+
 
 def clear_status():
     """清空状态"""

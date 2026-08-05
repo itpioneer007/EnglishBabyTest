@@ -642,6 +642,12 @@ def _handle_match_question(d, config):
             d(text="检查").click()
             print(f"    ✅ 匹配题点完，点击检查")
             time.sleep(0.8)
+            # 检查后：最后一题可能出现"练习报告"（答完反馈页）
+            #   ★ 必须先处理"练习报告"，否则反馈页残留"匹配"文字会被误判成匹配题死循环
+            if d(text="练习报告").exists(timeout=1.5):
+                d(text="练习报告").click()
+                print(f"    ✅ 匹配题完成，点击练习报告")
+                time.sleep(1.5)
             return True
         time.sleep(0.5)
 
@@ -687,18 +693,9 @@ def _answer_loop(d, config, module_name):
             time.sleep(1)
             continue
 
-        # 题型识别：排序/匹配走专用处理
-        qtype = _detect_question_type(d, config)
-        if qtype == "sort_questions":
-            _handle_sort_question(d, config)
-            time.sleep(1)
-            continue
-        elif qtype == "match_questions":
-            _handle_match_question(d, config)
-            time.sleep(1)
-            continue
-
-        # 最后一题完成判定：练习报告
+        # ★ 完成判定优先：练习报告 / 下一题 必须先于题型识别！
+        #   否则最后一题（如匹配题）答完后的反馈页残留题干文字（"匹配"等），
+        #   会被 _detect_question_type 误判成同题型 → 在反馈页死循环
         if d(text="练习报告").exists(timeout=0.5):
             d(text="练习报告").click()
             print(f"      → 练习报告（最后一题）")
@@ -713,11 +710,41 @@ def _answer_loop(d, config, module_name):
                     time.sleep(0.5)
             print(f"      → 本子模块完成，返回")
             return q
-
         # 答错后出现"下一题"按钮 → 点击进入真正下一题
         if d(text="下一题").exists(timeout=0.5):
             d(text="下一题").click()
             print(f"      → 下一题（答错）")
+            time.sleep(1)
+            continue
+
+        # 题型识别：排序/匹配走专用处理
+        qtype = _detect_question_type(d, config)
+        if qtype == "sort_questions":
+            # ★ 排序题分流（与听力专项测试部分 _test_answer_loop 保持统一）：
+            #   CheckBox 整行句子（宽>800 带文本，圆圈排序题特征）≥3 → 句子圆圈排序
+            #   （直接点句子，序号自动填）；否则 → 方框排序（点方框激活+点序号）
+            _has_circle = 0
+            try:
+                _xml = d.dump_hierarchy()
+                for _m in re.finditer(r'<node[^>]*class="android\.widget\.CheckBox"[^>]*/?>', _xml):
+                    _tag = _m.group(0)
+                    _tm = re.search(r'text="([^"]{6,})"', _tag)
+                    _bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', _tag)
+                    if not (_tm and _bm):
+                        continue
+                    _x1, _y1, _x2, _y2 = int(_bm.group(1)), int(_bm.group(2)), int(_bm.group(3)), int(_bm.group(4))
+                    if (_x2 - _x1) > 800 and 700 < _y1 < 1900:
+                        _has_circle += 1
+            except Exception:
+                pass
+            if _has_circle >= 3:
+                _handle_sentence_sort(d, config)
+            else:
+                _handle_sort_question(d, config)
+            time.sleep(1)
+            continue
+        elif qtype == "match_questions":
+            _handle_match_question(d, config)
             time.sleep(1)
             continue
 

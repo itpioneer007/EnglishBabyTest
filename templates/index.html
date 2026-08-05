@@ -1,993 +1,347 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-cn">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>英语宝自动化控制台</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>英语宝自动化检测 - 餐馆经营系统</title>
 <style>
-/* ====== 基础 ====== */
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:"Microsoft YaHei","PingFang SC","Helvetica Neue",sans-serif;background:#eef1f6;color:#1f2937;font-size:15px}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#faf7f2;color:#3d3226;min-height:100vh}
+:root{--green:#2d6a4f;--green-light:#40916c;--beige:#fefae0;--cream:#faf7f2;--warm:#e9c46a;--warn-light:#fef3c7;--red:#bc4742;--red-light:#fce4e4;--gray:#6b7280;--border:#e5ded5;--white:#fff;--blue:#eff6ff}
 
-/* ====== 顶部导航 ====== */
-.topbar{background:#0f172a;color:#e2e8f0;display:flex;align-items:center;padding:0 28px;height:60px;gap:28px;position:sticky;top:0;z-index:100}
-.topbar .brand{font-size:17px;font-weight:700;letter-spacing:.5px;color:#fff}
-.topbar .brand small{display:block;font-size:11px;font-weight:400;color:#64748b;letter-spacing:1px;margin-top:1px}
-.topbar .nav-links{display:flex;gap:4px;margin-left:12px}
-.topbar .nav-links a{color:#94a3b8;text-decoration:none;font-size:13px;padding:7px 14px;border-radius:7px;transition:all .15s}
-.topbar .nav-links a:hover{color:#fff;background:#1e293b}
-.topbar .nav-links a.active{color:#fff;background:#334155}
-.topbar .dev{margin-left:auto;font-size:13px;color:#94a3b8;display:flex;align-items:center;gap:8px}
-.topbar .dev .dot{width:8px;height:8px;border-radius:50%;background:#94a3b8}
-.topbar .dev .dot.on{background:#22c55e;box-shadow:0 0 0 3px rgba(34,197,94,.15)}
-.topbar .dev .dot.off{background:#ef4444}
-.topbar .dev b{color:#e2e8f0;font-weight:600}
-.topbar .dev select{background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:7px;padding:5px 10px;font-size:12px;outline:none;max-width:220px}
-.topbar .dev select:focus{border-color:#0d9488}
+/* ===== 顶部 ===== */
+.topbar{background:linear-gradient(135deg,var(--green),var(--green-light));color:#fff;padding:12px 24px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 2px 12px rgba(45,106,79,.25)}
+.topbar .brand{font-size:20px;font-weight:700;display:flex;align-items:center;gap:8px}
+.topbar .brand span{font-size:12px;opacity:.75;font-weight:400;margin-left:12px}
+.topbar .dev-row{display:flex;align-items:center;gap:10px;font-size:13px}
+.topbar select{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.3);color:#fff;padding:6px 10px;border-radius:6px;font-size:13px}
+.topbar select option{background:var(--green);color:#fff}
+.topbar .dot{width:8px;height:8px;border-radius:50%;background:#fbbf24}
+.topbar .dot.on{background:#86efac}
+.topbar .task-tag{font-size:12px;padding:3px 10px;border-radius:10px;background:rgba(255,255,255,.2)}
 
-/* ====== 主容器 ====== */
-.wrap{max-width:1440px;margin:0 auto;padding:24px 28px 48px}
+/* ===== 主布局：左右两栏 ===== */
+.main{display:grid;grid-template-columns:420px 1fr;gap:0;min-height:calc(100vh - 58px)}
+@media(max-width:960px){.main{grid-template-columns:1fr}}
 
-/* ====== 自动化控制台（主导航区） ====== */
-.console{background:#fff;border:1px solid #e2e8f0;border-radius:16px;box-shadow:0 1px 3px rgba(15,23,42,.06);overflow:hidden;margin-bottom:28px}
-.console-head{display:flex;align-items:center;gap:16px;padding:22px 26px 18px;border-bottom:1px solid #eef2f7;flex-wrap:wrap}
-.console-head h1{font-size:20px;font-weight:700;color:#0f172a}
-.console-head .sub{font-size:13px;color:#64748b;margin-top:4px}
-.console-head .meta{margin-left:auto;display:flex;gap:10px;flex-wrap:wrap}
-.chip{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:600;padding:6px 14px;border-radius:999px;background:#f1f5f9;color:#475569;border:1px solid #e2e8f0}
-.chip .c-dot{width:7px;height:7px;border-radius:50%}
-.chip.run .c-dot{background:#22c55e;box-shadow:0 0 0 3px rgba(34,197,94,.15)}
-.chip.idle .c-dot{background:#94a3b8}
-.chip.on .c-dot{background:#22c55e}
+/* ===== 左栏 — 点菜区 ===== */
+.order{background:var(--white);padding:24px;overflow-y:auto;border-right:1px solid var(--border)}
 
-/* ====== 模块网格 ====== */
-/* ====== 前提设置 ====== */
-.prereq{padding:16px 26px;border-bottom:1px solid #eef2f7;background:#f8fafc}
-.prereq-hdr{display:flex;align-items:center;gap:12px;margin-bottom:10px}
-.prereq-title{font-size:13px;font-weight:700;color:#1f2937}
-.prereq-hint{font-size:12px;color:#94a3b8}
-.prereq-row{display:flex;align-items:end;gap:12px;flex-wrap:wrap}
-.prereq-field{display:flex;flex-direction:column;gap:5px;min-width:160px}
-.prereq-field label{font-size:12px;font-weight:600;color:#475569}
-.prereq-field select{padding:8px 12px;border:1px solid #d7dde6;border-radius:8px;font-size:14px;background:#fff;color:#1f2937;outline:none}
-.prereq-field select:focus{border-color:#0d9488;box-shadow:0 0 0 3px rgba(13,148,136,.1)}
-.prereq-btn{padding:9px 20px;border:none;border-radius:8px;background:#0f172a;color:#fff;font-size:14px;font-weight:600;cursor:pointer;transition:all .15s}
-.prereq-btn:hover{background:#1e293b}
-.prereq-btn:active{transform:scale(.97)}
-.prereq-btn:disabled{background:#94a3b8;cursor:not-allowed}
-.prereq-modules{margin-top:14px;padding-top:14px;border-top:1px dashed #d7dde6}
-.prereq-modules-head{display:flex;align-items:center;gap:12px;margin-bottom:10px}
-.prereq-modules-label{font-size:13px;font-weight:700;color:#1f2937}
-.prereq-count{font-size:12px;color:#94a3b8;font-weight:500}
-.prereq-checks{display:flex;gap:14px;flex-wrap:wrap}
-.mod-check{display:flex;align-items:center;gap:6px;font-size:13px;color:#475569;cursor:pointer;padding:5px 12px;border:1px solid #d7dde6;border-radius:8px;background:#fff;transition:all .15s;user-select:none}
-.mod-check:hover{border-color:#0d9488}
-.mod-check input{accent-color:#0d9488;cursor:pointer}
-.mod-check.checked{border-color:#0d9488;background:#f0fdfa;color:#0f766e;font-weight:600}
-.prereq-actions{margin-top:14px;display:flex;align-items:center;gap:12px}
-.start-btn{padding:10px 34px;border:none;border-radius:9px;background:#0d9488;color:#fff;font-size:15px;font-weight:700;cursor:pointer;transition:all .15s;letter-spacing:1px}
-.start-btn:hover{background:#0f766e}
-.start-btn:active{transform:scale(.97)}
-.start-btn:disabled{background:#94a3b8;cursor:not-allowed}
-/* 汇总卡片 */
-.summary-meta{font-size:12px;color:#94a3b8;font-weight:400}
-.sm-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
-@media(max-width:1100px){.sm-grid{grid-template-columns:repeat(2,1fr)}}
-@media(max-width:720px){.sm-grid{grid-template-columns:1fr}}
-.sm-card{border:1px solid #e5eaf1;border-radius:11px;padding:14px 16px;background:#fafbfd;display:flex;align-items:center;gap:14px}
-.sm-card .sm-status{width:10px;height:10px;border-radius:50%;flex-shrink:0}
-.sm-card.ok .sm-status{background:#22c55e;box-shadow:0 0 0 3px rgba(34,197,94,.12)}
-.sm-card.fail .sm-status{background:#ef4444;box-shadow:0 0 0 3px rgba(239,68,68,.12)}
-.sm-card .sm-body{flex:1;min-width:0}
-.sm-card .sm-name{font-size:14px;font-weight:700;color:#1f2937}
-.sm-card .sm-detail{font-size:12px;color:#64748b;margin-top:3px}
-.sm-card .sm-q{font-size:22px;font-weight:800;color:#0f172a;text-align:right}
-.sm-card .sm-q small{font-size:11px;font-weight:500;color:#94a3b8}
+/* 清单输入 */
+.order-box{background:var(--cream);border:2px dashed var(--border);border-radius:14px;padding:20px;margin-bottom:20px;transition:border-color .3s}
+.order-box:focus-within{border-color:var(--green-light)}
+.order-box .order-label{font-size:15px;font-weight:700;color:var(--green);margin-bottom:8px;display:flex;align-items:center;gap:6px}
+.order-box .order-hint{font-size:12px;color:var(--gray);margin-bottom:10px;line-height:1.5}
+.order-box textarea{width:100%;min-height:120px;border:none;background:transparent;font-size:14px;resize:vertical;font-family:inherit;line-height:1.6;color:#3d3226}
+.order-box textarea:focus{outline:none}
+.order-box textarea::placeholder{color:#c4b5a5}
 
-/* ====== 模块网格 ====== */
-.module-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;padding:22px 26px}
-@media(max-width:1100px){.module-grid{grid-template-columns:repeat(2,1fr)}}
-@media(max-width:720px){.module-grid{grid-template-columns:1fr}}
-.mod-card{position:relative;border:1px solid #e5eaf1;border-radius:13px;padding:18px 18px 16px;background:#fafbfd;transition:all .18s;overflow:hidden}
-.mod-card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--ac)}
-.mod-card:hover{transform:translateY(-2px);box-shadow:0 6px 18px rgba(15,23,42,.08);border-color:var(--ac)}
-.mod-top{display:flex;align-items:center;gap:10px;margin-bottom:8px}
-.mod-name{font-size:16px;font-weight:700;color:#0f172a}
-.mod-tag{font-size:11px;font-weight:600;color:#fff;background:var(--ac);padding:3px 9px;border-radius:6px;opacity:.92}
-.mod-desc{font-size:13px;color:#64748b;line-height:1.65;min-height:44px;margin-bottom:14px}
-.mod-meta{display:flex;align-items:center;justify-content:space-between}
-.mod-btn{border:none;border-radius:8px;background:var(--ac);color:#fff;font-size:14px;font-weight:600;padding:9px 22px;cursor:pointer;transition:filter .15s,transform .1s}
-.mod-btn:hover{filter:brightness(1.08)}
-.mod-btn:active{transform:scale(.97)}
-.mod-state{font-size:12px;color:#94a3b8}
+/* 快捷配置 */
+.config-toggle{cursor:pointer;display:flex;align-items:center;gap:6px;font-size:13px;color:var(--gray);margin-bottom:12px;user-select:none}
+.config-toggle:hover{color:var(--green)}
+.config-toggle .arrow{transition:transform .2s;font-size:10px}
+.config-toggle.open .arrow{transform:rotate(90deg)}
+.config-body{overflow:hidden;max-height:0;transition:max-height .3s ease}
+.config-body.open{max-height:500px}
 
-/* ====== 日志 ====== */
-.log-wrap{padding:0 26px 24px}
-.log-hdr{display:flex;align-items:center;justify-content:space-between;font-size:14px;font-weight:700;color:#334155;margin-bottom:10px}
-.log-hdr .log-clear{font-size:12px;font-weight:400;color:#94a3b8;cursor:pointer;text-decoration:underline}
-.log-box{background:#0f172a;color:#94a3b8;font-family:"Consolas","Courier New",monospace;font-size:12px;padding:14px 16px;border-radius:10px;max-height:260px;overflow-y:auto;line-height:1.8}
-.log-box .level-success{color:#4ade80}
-.log-box .level-warning{color:#fbbf24}
-.log-box .level-error{color:#f87171}
-.log-box .level-info{color:#7dd3fc}
+.config-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px}
+.config-grid .field{}
+.config-grid .field label{display:block;font-size:12px;color:var(--gray);margin-bottom:3px}
+.config-grid .field select{width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;background:var(--cream);cursor:pointer}
+.config-grid .field select:focus{outline:none;border-color:var(--green-light)}
 
-/* ====== 下方功能区（批量检查 / 题目审查 / 上传） ====== */
-.grid{display:grid;grid-template-columns:1.1fr 1.2fr 1fr;gap:20px;align-items:start}
-@media(max-width:1200px){.grid{grid-template-columns:1fr 1fr}}
-@media(max-width:860px){.grid{grid-template-columns:1fr}}
-.card{background:#fff;border:1px solid #e2e8f0;border-radius:14px;box-shadow:0 1px 3px rgba(15,23,42,.05);overflow:hidden;margin-bottom:20px}
-.card-hdr{padding:14px 18px;background:#f8fafc;border-bottom:1px solid #eef2f7;display:flex;align-items:center;gap:10px;font-weight:700;font-size:14px;color:#1e293b}
-.card-hdr .badge{margin-left:auto}
-.card-body{padding:18px}
+/* 模块标签 */
+.module-tags{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px}
+.mod-tag{padding:7px 13px;border:1.5px solid var(--border);border-radius:20px;font-size:13px;cursor:pointer;transition:all .15s;user-select:none;background:var(--cream)}
+.mod-tag:hover{border-color:var(--green-light)}
+.mod-tag.on{border-color:var(--green);background:#f0fdf4;color:var(--green);font-weight:600}
+.mod-tag input{display:none}
 
-/* ====== 表单 ====== */
-.form-row{margin-bottom:14px}
-.form-label{font-size:13px;font-weight:600;color:#475569;margin-bottom:5px;display:block}
-select,input[type=text],input[type=email],input[type=number]{width:100%;padding:8px 12px;border:1px solid #d7dde6;border-radius:8px;font-size:14px;outline:none;background:#fff;color:#1f2937}
-select:focus,input:focus{border-color:#0d9488;box-shadow:0 0 0 3px rgba(13,148,136,.1)}
-.form-hint{font-size:12px;color:#94a3b8;margin-top:3px;display:block}
-textarea{font-family:inherit}
-.checks{display:flex;gap:14px;flex-wrap:wrap}
-.checks label{font-size:13px;cursor:pointer;color:#475569;display:flex;align-items:center;gap:6px}
-.checks input{accent-color:#0d9488}
+/* 解析并开始按钮 */
+.btn-cook{width:100%;padding:16px;background:linear-gradient(135deg,var(--green),var(--green-light));color:#fff;border:none;border-radius:12px;font-size:17px;font-weight:700;cursor:pointer;transition:all .2s;box-shadow:0 4px 16px rgba(45,106,79,.25)}
+.btn-cook:hover{box-shadow:0 6px 24px rgba(45,106,79,.35);transform:translateY(-1px)}
+.btn-cook:active{transform:scale(.98)}
+.btn-cook:disabled{opacity:.6;cursor:not-allowed;transform:none}
+.btn-cook .emoji{font-size:20px}
 
-/* ====== 按钮 ====== */
-.btn{padding:10px 20px;border:none;border-radius:8px;font-size:14px;cursor:pointer;font-weight:600;transition:all .15s}
-.btn-primary{background:#0f172a;color:#fff}
-.btn-primary:hover{background:#1e293b}
-.btn-primary:disabled{background:#94a3b8;cursor:not-allowed}
-.btn-danger{background:#dc2626;color:#fff}
-.btn-danger:hover{background:#b91c1c}
-.btn-success{background:#059669;color:#fff}
-.btn-sm{padding:6px 14px;font-size:13px}
-.btn-row{display:flex;gap:10px;margin-top:16px;flex-wrap:wrap}
-.btn-outline{background:#fff;color:#475569;border:1.5px solid #d7dde6}
-.btn-outline:hover{border-color:#0d9488;color:#0d9488}
+/* ===== 右栏 — 后厨 + 上菜 ===== */
+.kitchen{display:flex;flex-direction:column;background:var(--cream)}
 
-/* ====== 进度 ====== */
-.progress-bar{background:#e8ecf2;border-radius:6px;height:8px;margin:12px 0;overflow:hidden}
-.progress-fill{height:100%;background:#0d9488;border-radius:6px;transition:width .3s}
-.progress-stats{display:flex;gap:20px;font-size:13px;color:#64748b;flex-wrap:wrap}
-.progress-stats b{color:#1e293b}
+/* 后厨状态条 */
+.kitchen-bar{padding:16px 24px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border);background:var(--white)}
+.kitchen-bar .pulse{width:10px;height:10px;border-radius:50%;background:var(--gray)}
+.kitchen-bar .pulse.running{background:var(--red);animation:pulse .8s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(1.3)}}
+.kitchen-bar .msg{font-size:14px;font-weight:600}
+.kitchen-bar .sub{font-size:12px;color:var(--gray);margin-left:auto}
 
-/* ====== 模块列表 ====== */
-.module-list{max-height:300px;overflow-y:auto}
-.module-item{display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid #f1f5f9;font-size:14px}
-.module-item:last-child{border:none}
-.module-item .idx{width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0}
-.module-item .idx.pending{background:#f1f5f9;color:#64748b}
-.module-item .idx.running{background:#ccfbf1;color:#0f766e}
-.module-item .idx.done{background:#d1fae5;color:#065f46}
-.module-item .idx.failed{background:#fee2e2;color:#991b1b}
-.module-item .name{flex:1}
-.module-item .stat{font-size:12px;color:#94a3b8}
+/* 日志区 */
+.log-wrap{flex:1;overflow-y:auto;padding:16px 24px}
+.log-empty{text-align:center;color:var(--gray);padding:60px 0;font-size:14px;line-height:2}
+.log-empty .emoji{font-size:48px;display:block;margin-bottom:12px}
 
-/* ====== 徽标 ====== */
-.badge{font-size:12px;padding:3px 11px;border-radius:999px;font-weight:600;background:#f1f5f9;color:#64748b}
-.badge-running{background:#ccfbf1;color:#0f766e}
-.badge-idle{background:#f1f5f9;color:#64748b}
+.log-item{font-family:"SF Mono","Cascadia Code",Consolas,monospace;font-size:13px;line-height:1.6;padding:4px 10px;border-radius:4px;margin:1px 0;display:flex;gap:10px;white-space:pre-wrap;word-break:break-all}
+.log-item .t{color:var(--gray);min-width:52px;font-size:11px;flex-shrink:0}
+.log-item.info{}.log-item.info .t{color:#94a3b8}
+.log-item.success{background:#f0fdf4;color:var(--green)}
+.log-item.error{background:var(--red-light);color:var(--red)}
+.log-item.step{background:var(--blue);color:#1e40af;font-weight:500}
+.log-item.warning{background:var(--warn-light);color:#92400e}
+.log-clear{text-align:right;padding:0 24px 12px;font-size:12px;color:var(--gray);cursor:pointer}
+.log-clear:hover{color:var(--green)}
 
-/* ====== 题目卡片 ====== */
-.q-stats-bar{display:flex;gap:16px;padding:12px 16px;background:#f8fafc;border-radius:10px;margin-bottom:14px;font-size:14px;flex-wrap:wrap}
-.q-stats-bar .stat{display:flex;align-items:center;gap:8px}
-.q-stats-bar .num{font-weight:700;font-size:19px}
-.q-stats-bar .num.green{color:#059669}
-.q-stats-bar .num.red{color:#dc2626}
-.q-stats-bar .num.blue{color:#0d9488}
-.q-card{background:#fff;border:1px solid #eef0f5;border-radius:12px;margin-bottom:12px;overflow:hidden;transition:all .2s}
-.q-card:hover{box-shadow:0 3px 12px rgba(0,0,0,.07)}
-.q-head{display:flex;align-items:center;gap:12px;padding:12px 16px;background:#fafbfc;border-bottom:1px solid #f0f2f6}
-.q-head .qnum{font-size:20px;font-weight:700;color:#0d9488;min-width:48px}
-.q-head .qtype{font-size:12px;padding:3px 10px;border-radius:6px;background:#ccfbf1;color:#0f766e;font-weight:600}
-.q-head .qstatus{margin-left:auto;display:flex;gap:6px;align-items:center}
-.q-head .qstatus .tag{padding:3px 10px;border-radius:6px;font-size:12px;font-weight:600}
-.q-head .qstatus .tag.pass{background:#d1fae5;color:#065f46}
-.q-head .qstatus .tag.fail{background:#fee2e2;color:#991b1b}
-.q-head .qstatus .tag.human-pass{background:#a7f3d0;color:#064e3b}
-.q-head .qstatus .tag.human-fail{background:#fecaca;color:#7f1d1d}
-.q-head .qstatus .tag.pending-label{background:#fef3c7;color:#92400e;cursor:pointer;animation:blink 1.5s infinite}
-@keyframes blink{0%,100%{opacity:1}50%{opacity:.5}}
-.q-body{padding:14px 16px}
-.q-dims{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin-bottom:10px}
-.q-dim{text-align:center;padding:8px 2px;border-radius:10px;border:1px solid #eef0f5;background:#fafbfc}
-.q-dim .label{font-size:11px;font-weight:600;color:#64748b}
-.q-dim .score{font-size:11px;font-weight:700;margin-top:2px}
-.q-dim.pass{background:#f0fdf4;border-color:#bbf7d0}
-.q-dim.pass .label{color:#166534}
-.q-dim.fail{background:#fef2f2;border-color:#fecaca}
-.q-dim.fail .label{color:#991b1b}
-.q-dim.skip{background:#f8fafc;border-color:#f1f5f9}
-.q-dim.skip .label{color:#94a3b8}
-.q-reasons{font-size:14px;color:#475569;background:#f8fafc;border-radius:8px;padding:10px 14px;margin-bottom:10px;line-height:1.8}
-.q-reasons b{color:#334155}
-.q-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.q-actions .note{flex:1;min-width:120px;padding:8px 12px;border:1.5px solid #d7dde6;border-radius:7px;font-size:14px;outline:none;transition:border .2s}
-.q-actions .note:focus{border-color:#0d9488}
-.q-actions .action-label{font-size:13px;color:#64748b;font-weight:500;margin-right:4px}
-.q-actions .done-tag{font-size:13px;padding:5px 12px;border-radius:7px;background:#fef3c7;color:#92400e;display:flex;align-items:center;gap:4px}
+/* 上菜区（结果） */
+.serve-wrap{padding:20px 24px;border-top:1px solid var(--border);background:var(--white);max-height:300px;overflow-y:auto}
+.serve-wrap:empty{display:none}
+.serve-hdr{font-size:15px;font-weight:700;color:var(--green);margin-bottom:12px;display:flex;align-items:center;gap:6px}
 
-/* ====== 上传 ====== */
-.upload-area{border:2px dashed #c8d0dc;border-radius:12px;padding:22px;text-align:center;transition:all .2s;background:#fafbfd}
-.upload-area.dragover{border-color:#0d9488;background:#f0fdfa}
-.upload-area .icon{font-size:34px;color:#0d9488;margin-bottom:6px;line-height:1}
-.upload-area .txt{font-size:14px;color:#64748b;margin-bottom:12px}
-.file-list{font-size:13px;max-height:90px;overflow-y:auto;margin-top:8px;color:#475569}
-.file-list .item{padding:3px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.serve-cards{display:flex;flex-wrap:wrap;gap:10px}
+.serve-card{flex:1;min-width:180px;border:1.5px solid var(--border);border-radius:10px;padding:14px}
+.serve-card.ok{border-color:var(--green-light);background:#f0fdf4}
+.serve-card.fail{border-color:var(--red);background:var(--red-light)}
+.serve-card .sc-name{font-size:13px;font-weight:600;margin-bottom:4px}
+.serve-card .sc-stat{display:flex;align-items:baseline;gap:6px}
+.serve-card .sc-q{font-size:22px;font-weight:700;color:var(--green)}
+.serve-card.fail .sc-q{color:var(--red)}
+.serve-card .sc-q small{font-size:13px;font-weight:400;color:var(--gray)}
+.serve-card .sc-detail{font-size:11px;color:var(--gray);margin-top:4px}
 
-/* ====== 截图 / 信息 ====== */
-.screenshot-box{background:#f8fafc;border-radius:10px;overflow:hidden;min-height:140px;display:flex;align-items:center;justify-content:center;border:1px solid #eef0f5}
-.screenshot-box img{max-width:100%;max-height:300px;display:block;border-radius:8px}
-.screenshot-box .ph{color:#94a3b8;font-size:14px;padding:24px;text-align:center}
-.info-row{display:flex;justify-content:space-between;padding:8px 0;font-size:14px;border-bottom:1px solid #f1f5f9}
-.info-row:last-child{border:none}
-.info-row .key{color:#64748b}
-.info-row .val{font-weight:600;color:#1e293b}
-.placeholder{text-align:center;padding:50px 20px;color:#94a3b8}
-.placeholder .ph-icon{font-size:40px;margin-bottom:12px;color:#cbd5e1}
-.placeholder .ph-title{font-size:16px;font-weight:500;color:#64748b}
-.placeholder .ph-desc{font-size:13px;margin-top:8px}
+.serve-summary{font-size:13px;color:var(--gray);text-align:center;margin-top:12px;padding:8px;background:var(--cream);border-radius:8px}
+
+/* 文件上传区 */
+.file-hint{font-size:12px;color:var(--green);text-align:center;margin-top:8px;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.file-hint:hover{color:var(--green-light)}
+#fileOrder{display:none}
 </style>
 </head>
 <body>
 
-<!-- ====== 顶部导航 ====== -->
+<!-- ====== 顶部 ====== -->
 <div class="topbar">
-  <div class="brand">英语宝自动化控制台<small>ENGLISH APP AUTO TEST</small></div>
-  <div class="nav-links">
-    <a href="/" class="active">批量检查</a>
-    <a href="/trace">错误溯源</a>
-    <a href="/export">报告导出</a>
+  <div class="brand">
+    🍽 英语宝自动化检测
+    <span>餐馆经营系统</span>
   </div>
-  <div class="dev">
-    <select id="devSelect" onchange="selectDevice(this.value)">
-      <option value="">选择设备...</option>
-    </select>
+  <div class="dev-row">
     <span class="dot" id="devDot"></span>
-    设备: <b id="devStatus">检测中...</b>
+    <span id="devStatus" style="font-size:13px">检测中…</span>
+    <select id="devSelect" onchange="selectDevice(this.value)" style="margin-left:6px">
+      <option value="">选择设备…</option>
+    </select>
+    <span class="task-tag" id="taskBadge">—</span>
   </div>
 </div>
 
-<div class="wrap">
+<!-- ====== 左右两栏 ====== -->
+<div class="main">
 
-  <!-- ====== 自动化控制台（主导航区） ====== -->
-  <section class="console">
-    <div class="console-head">
-      <div>
-        <h1>自动化控制台</h1>
-        <div class="sub">一键启动英语宝 App 各模块自动化检测，设备端实时执行，日志同步输出</div>
+  <!-- 📋 左栏：点菜下单 -->
+  <div class="order">
+
+    <!-- 订单输入 -->
+    <div class="order-box">
+      <div class="order-label">📝 告诉我们你要测什么</div>
+      <div class="order-hint">
+        用一段话描述你的检测需求，或者粘贴一个任务清单。比如：<br>
+        <em>"帮我检测湘少版五年级上册的听力专项U1的难点突破和口语训练U1"</em><br>
+        <em>"测一下单元自检U1-U3和知识过关的U1重点词汇"</em>
       </div>
-      <div class="meta">
-        <span class="chip idle" id="taskChip"><span class="c-dot"></span>当前任务: 空闲</span>
-        <span class="chip" id="devChip"><span class="c-dot"></span>设备: 检测中</span>
-      </div>
+      <textarea id="orderInput" 
+        placeholder="在这里输入你的检测需求，或粘贴任务清单…&#10;&#10;未来上传 Word / Excel 清单也可直接解析。"
+        rows="5"></textarea>
     </div>
+    <div class="file-hint" onclick="$('fileOrder').click()">📎 或上传任务清单文件（.txt / .docx / .xlsx）</div>
+    <input type="file" id="fileOrder" accept=".txt,.docx,.xlsx,.doc,.xls" onchange="uploadOrder(event)">
 
-    <div class="prereq">
-      <div class="prereq-hdr">
-        <span class="prereq-title">检测设置</span>
-        <span class="prereq-hint">选择版本、年级与多个模块，一键开始检测</span>
-      </div>
-      <div class="prereq-row">
-        <div class="prereq-field">
+    <!-- 快捷配置（可折叠） -->
+    <div class="config-toggle open" onclick="this.classList.toggle('open');this.nextElementSibling.classList.toggle('open')">
+      <span class="arrow">▶</span> 基础配置（也可由清单自动解析）
+    </div>
+    <div class="config-body open">
+      <div class="config-grid">
+        <div class="field">
           <label>教材版本</label>
           <select id="setupVersion">
-            <option value="湘少版">湘少版</option>
-            <option value="湘鲁版">湘鲁版</option>
-            <option value="人教版(PEP)">人教版(PEP)</option>
-            <option value="教科版">教科版</option>
+            <option selected>湘少版</option><option>湘鲁版</option><option>人教PEP版</option><option>教科版</option>
           </select>
         </div>
-        <div class="prereq-field">
+        <div class="field">
           <label>年级</label>
           <select id="setupGrade">
-            <option>三年级上册</option>
-            <option>三年级下册</option>
-            <option>四年级上册</option>
-            <option>四年级下册</option>
-            <option selected>五年级上册</option>
-            <option>五年级下册</option>
-            <option>六年级上册</option>
-            <option>六年级下册</option>
+            <option selected>五年级上册</option><option>五年级下册</option><option>六年级上册</option><option>六年级下册</option><option>四年级下册</option><option>三年级下册</option>
           </select>
         </div>
-        <button class="prereq-btn" onclick="applySetup()">仅切换版本</button>
       </div>
-      <div class="prereq-modules">
-        <div class="prereq-modules-head">
-          <span class="prereq-modules-label">选择模块（可多选）</span>
-          <span id="moduleSelCount" class="prereq-count">已选 6 个</span>
-        </div>
-        <div class="prereq-checks">
-          <label class="mod-check"><input type="checkbox" class="mod-sel" value="听力专项" checked> 听力专项</label>
-          <label class="mod-check"><input type="checkbox" class="mod-sel" value="口语训练" checked> 口语训练</label>
-          <label class="mod-check"><input type="checkbox" class="mod-sel" value="单元自检" checked> 单元自检</label>
-          <label class="mod-check"><input type="checkbox" class="mod-sel" value="知识过关" checked> 知识过关</label>
-          <label class="mod-check"><input type="checkbox" class="mod-sel" value="语音评测" checked> 语音评测</label>
-          <label class="mod-check"><input type="checkbox" class="mod-sel" value="巧记单词" checked> 巧记单词</label>
-        </div>
-        <div class="prereq-actions">
-          <button class="start-btn" id="btnModulesRun" onclick="startModules()">开始检测</button>
-        </div>
+
+      <div style="font-size:13px;color:var(--gray);margin-bottom:6px">要测的模块（可多选）</div>
+      <div class="module-tags">
+        <label class="mod-tag on"><input type="checkbox" class="mod-sel" value="听力专项" checked>听力专项</label>
+        <label class="mod-tag on"><input type="checkbox" class="mod-sel" value="口语训练" checked>口语训练</label>
+        <label class="mod-tag on"><input type="checkbox" class="mod-sel" value="单元自检" checked>单元自检</label>
+        <label class="mod-tag on"><input type="checkbox" class="mod-sel" value="知识过关" checked>知识过关</label>
+        <label class="mod-tag on"><input type="checkbox" class="mod-sel" value="语音评测" checked>语音评测</label>
+        <label class="mod-tag on"><input type="checkbox" class="mod-sel" value="巧记单词" checked>巧记单词</label>
+        <span style="font-size:12px;color:var(--gray);margin-left:4px">已选 <b id="moduleSelCount">6</b></span>
       </div>
     </div>
 
-    <div class="module-grid">
-      <!-- 听力专项 -->
-      <div class="mod-card" style="--ac:#0d9488">
-        <div class="mod-top">
-          <span class="mod-name">听力专项</span>
-          <span class="mod-tag">练习 + 测试</span>
-        </div>
-        <div class="mod-desc">听力练习（基础巩固 / 综合进阶 / 难点突破）+ 测试卷，逐单元自动完成并出报告</div>
-        <div class="mod-meta">
-          <span class="mod-state" id="stAudio">未启动</span>
-          <button class="mod-btn" onclick="startAudio()">启动检测</button>
-        </div>
-      </div>
+    <!-- 开始烹饪 -->
+    <button class="btn-cook" id="btnCook" onclick="startCooking()">
+      <span class="emoji">🔥</span> 解析清单并开始烹饪
+    </button>
+    <div style="font-size:12px;color:var(--gray);text-align:center;margin-top:8px">
+      点击后后台会分析你的清单，自动调用对应模块开始检测
+    </div>
+  </div>
 
-      <!-- 口语训练 -->
-      <div class="mod-card" style="--ac:#0284c7">
-        <div class="mod-top">
-          <span class="mod-name">口语训练</span>
-          <span class="mod-tag">4 大题 x 5 小题</span>
-        </div>
-        <div class="mod-desc">朗读单词 / 朗读句子 / 看图回答 / 阅读短文，含录音与小喇叭题型自动处理</div>
-        <div class="mod-meta">
-          <span class="mod-state" id="stOral">未启动</span>
-          <button class="mod-btn" onclick="startOral()">启动检测</button>
-        </div>
-      </div>
+  <!-- 🔥 右栏：后厨 + 上菜 -->
+  <div class="kitchen" id="kitchenCol">
 
-      <!-- 单元自检 -->
-      <div class="mod-card" style="--ac:#d97706">
-        <div class="mod-top">
-          <span class="mod-name">单元自检</span>
-          <span class="mod-tag">36 题全题型</span>
-        </div>
-        <div class="mod-desc">选择题 / 判断题 / 匹配题 / 排序题 / 填空题 / 阅读题，覆盖单元评价全流程</div>
-        <div class="mod-meta">
-          <span class="mod-state" id="stUnit">未启动</span>
-          <button class="mod-btn" onclick="startUnit()">启动检测</button>
-        </div>
-      </div>
-
-      <!-- 知识过关 -->
-      <div class="mod-card" style="--ac:#059669">
-        <div class="mod-top">
-          <span class="mod-name">知识过关</span>
-          <span class="mod-tag">词汇 108 + 句型 8</span>
-        </div>
-        <div class="mod-desc">重点词汇 + 重点句型闯关，选择 / 判断 / 录音 / 填字母 / 连词成句 / 键盘填空</div>
-        <div class="mod-meta">
-          <span class="mod-state" id="stKnowledge">未启动</span>
-          <button class="mod-btn" onclick="startKnowledge()">启动检测</button>
-        </div>
-      </div>
-
-      <!-- 语音评测 -->
-      <div class="mod-card" style="--ac:#dc2626">
-        <div class="mod-top">
-          <span class="mod-name">语音评测</span>
-          <span class="mod-tag">模块待完善</span>
-        </div>
-        <div class="mod-desc">题目暂未制作完成，当前仅验证模块入口可达性与页面加载</div>
-        <div class="mod-meta">
-          <span class="mod-state" id="stVoice">未启动</span>
-          <button class="mod-btn" onclick="startVoice()">进入验证</button>
-        </div>
-      </div>
-
-      <!-- 巧记单词 -->
-      <div class="mod-card" style="--ac:#1d4ed8">
-        <div class="mod-top">
-          <span class="mod-name">巧记单词</span>
-          <span class="mod-tag">U1 - U9 闯关</span>
-        </div>
-        <div class="mod-desc">单词同步闯关，每单元 6 关（含 boss 关），听力选释义 / 填字母 / 录音题</div>
-        <div class="mod-meta">
-          <span class="mod-state" id="stQiaoji">未启动</span>
-          <button class="mod-btn" onclick="startQiaoji()">启动检测</button>
-        </div>
-      </div>
+    <!-- 后厨状态 -->
+    <div class="kitchen-bar">
+      <span class="pulse" id="kitchenPulse"></span>
+      <span class="msg" id="kitchenMsg">后厨空闲，等待下单…</span>
+      <span class="sub" id="kitchenSub"></span>
     </div>
 
-    <div class="log-wrap">
-      <div class="log-hdr">
-        <span>运行日志</span>
-        <span class="log-clear" onclick="$('logBox').innerHTML='<span style=&quot;color:#94a3b8&quot;>日志已清空...</span>'">清空日志</span>
-      </div>
-      <div class="log-box" id="logBox">
-        <span style="color:#94a3b8">等待任务启动...</span>
+    <!-- 日志流 -->
+    <div class="log-wrap" id="logWrap">
+      <div class="log-empty">
+        <span class="emoji">👨‍🍳</span>
+        还没有开始烹饪<br>在左侧下单后点"开始烹饪"吧
       </div>
     </div>
+    <div class="log-clear" onclick="clearLog()">清空日志</div>
 
-    <!-- 多模块检测汇总 -->
-    <div class="log-wrap" id="summaryWrap" style="display:none">
-      <div class="log-hdr">
-        <span>检测汇总</span>
-        <span class="summary-meta" id="summaryMeta"></span>
-      </div>
-      <div id="summaryBox"></div>
-    </div>
-  </section>
-
-  <!-- ====== 下方功能区 ====== -->
-  <div class="grid">
-
-    <!-- 列1：批量检查（原检查计划） -->
-    <div class="col">
-      <!-- 自然语言输入 -->
-      <div class="card">
-        <div class="card-hdr">一句话描述要检查什么</div>
-        <div class="card-body">
-          <textarea id="nlInput" placeholder='例如：帮我检测新湘鲁六年级上册的U6-U9听力专项模块基础巩固'
-            style="width:100%;height:72px;border:1px solid #d7dde6;border-radius:8px;padding:10px;font-size:14px;resize:vertical"
-            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();parseNL()}"></textarea>
-          <div style="display:flex;align-items:center;gap:10px;margin-top:8px">
-            <button class="btn btn-primary btn-sm" onclick="parseNL()">解析</button>
-            <span id="nlResult" style="font-size:12px;color:#64748b"></span>
-          </div>
-        </div>
-      </div>
-
-      <!-- 检查计划清单 -->
-      <div class="card">
-        <div class="card-hdr">检查计划清单</div>
-        <div class="card-body">
-          <div class="form-row">
-            <span class="form-label">教材版本</span>
-            <select id="planVersion">
-              <option selected>新湘鲁六上</option>
-              <option>新湘鲁五上</option>
-              <option>湘少版五上</option>
-            </select>
-          </div>
-          <div class="form-row">
-            <span class="form-label">Unit 范围</span>
-            <div style="display:flex;gap:10px;align-items:center">
-              <select id="planUnitFrom" style="flex:1">
-                <option>6</option><option>7</option><option>8</option><option>9</option>
-              </select>
-              <span style="color:#94a3b8">至</span>
-              <select id="planUnitTo" style="flex:1">
-                <option>6</option><option>7</option><option selected>9</option>
-              </select>
-            </div>
-          </div>
-          <div class="form-row">
-            <span class="form-label">阶段</span>
-            <div class="checks">
-              <label><input type="checkbox" checked id="cbBase"> 基础巩固</label>
-              <label><input type="checkbox" id="cbAdv"> 综合进阶</label>
-              <label><input type="checkbox" id="cbHard"> 难点突破</label>
-            </div>
-          </div>
-          <div class="form-row">
-            <span class="form-label">对照脚本 <span style="font-weight:400;color:#dc2626;font-size:12px">* 需先在右侧上传</span></span>
-            <select id="planDocx"></select>
-          </div>
-          <div class="btn-row">
-            <button class="btn btn-primary" id="btnStart" onclick="startBatch()">开始批量检查</button>
-            <button class="btn btn-danger btn-sm" id="btnCancel" onclick="cancelBatch()" style="display:none">停止</button>
-            <button class="btn btn-sm btn-outline" id="btnPause" onclick="togglePause()" style="display:none">暂停</button>
-          </div>
-          <div class="form-hint" id="planEta"></div>
-        </div>
-      </div>
-
-      <!-- 执行进度 -->
-      <div class="card" id="progressCard" style="display:none">
-        <div class="card-hdr">
-          执行进度
-          <span class="badge badge-running" id="batchBadge" style="margin-left:auto">运行中</span>
-        </div>
-        <div class="card-body">
-          <div class="progress-bar"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
-          <div class="progress-stats">
-            <span>完成: <b id="statDone">0</b>/<b id="statTotal">0</b> 模块</span>
-            <span>通过: <b id="statPassed" style="color:#059669">0</b> 题</span>
-            <span>错误: <b id="statFailed" style="color:#dc2626">0</b> 题</span>
-            <span>剩余: <b id="statEta">--</b></span>
-          </div>
-          <div style="margin-top:10px;font-size:13px;color:#64748b">当前: <b id="currentModule">--</b></div>
-        </div>
-      </div>
-
-      <!-- 模块清单 -->
-      <div class="card" id="moduleListCard" style="display:none">
-        <div class="card-hdr">模块状态</div>
-        <div class="card-body" style="padding:0">
-          <div class="module-list" id="moduleList"></div>
-        </div>
-      </div>
-
-      <!-- 脚本 & 知识库 -->
-      <div class="card">
-        <div class="card-hdr">脚本 & 知识库</div>
-        <div class="card-body">
-          <div class="form-row">
-            <span class="form-label">上传对照脚本 (.docx)</span>
-            <input type="file" id="uploadInput" accept=".docx,.doc" onchange="uploadFile()">
-            <div id="uploadList" style="margin-top:8px;font-size:13px;color:#94a3b8">暂无已上传文件</div>
-          </div>
-          <div class="form-row">
-            <span class="form-label">无脚本时 <span style="color:#0d9488">AI 自动生成答案</span></span>
-            <span class="form-hint">审查智能体会根据知识库自动推演正确答案</span>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- 列2：题目检查结果 -->
-    <div class="col">
-      <div class="card">
-        <div class="card-hdr">
-          <span>题目检查结果</span>
-          <span class="badge" id="qBadge">待启动</span>
-        </div>
-        <div class="card-body">
-          <div class="card-desc" style="font-size:13px;color:#64748b;margin-bottom:12px;line-height:1.7">
-            每道题展示 AI 的<strong style="color:#334155">六维检查结果</strong>（题干 / 内容 / 配图 / 作答 / 音频 / 答错后）。
-            每个维度有通过或不通过标记，底部可<strong style="color:#334155">人工标注</strong>，标注结果会自动存入反馈库供审查智能体学习。
-          </div>
-          <div class="q-stats-bar" id="qStatsBar" style="display:none">
-            <div class="stat">总题数: <span class="num blue" id="sTotal">0</span></div>
-            <div class="stat">AI通过: <span class="num green" id="sPassed">0</span></div>
-            <div class="stat">AI不通过: <span class="num red" id="sFailed">0</span></div>
-            <div class="stat" style="margin-left:auto">已人工标注: <span class="num blue" id="sLabeled">0</span></div>
-          </div>
-          <div id="questionList" style="max-height:800px;overflow-y:auto">
-            <div class="placeholder">
-              <div class="ph-icon">检</div>
-              <div class="ph-title">尚未开始检查</div>
-              <div class="ph-desc">请在左侧面板选择 <strong>版本 / Unit / 阶段</strong>，然后点击「开始批量检查」</div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- 列3：脚本上传 / 知识库 / 审查智能体 -->
-    <div class="col">
-      <!-- 脚本上传 -->
-      <div class="card">
-        <div class="card-hdr">脚本上传</div>
-        <div class="card-body">
-          <div style="font-size:13px;color:#64748b;line-height:1.7;margin-bottom:12px">
-            上传公司提供的<strong style="color:#334155">DOCX / DOC 脚本文件</strong>（如"260717新湘鲁六上听力专项.docx"），系统自动解析并导入知识库，审查时用这些内容核验题目是否正确。
-          </div>
-          <div class="upload-area" id="dropZone">
-            <div class="icon">+</div>
-            <div class="txt">拖拽 DOCX 或 DOC 文件到此处，或点下方按钮选择</div>
-            <input type="file" id="fileInput" accept=".docx,.doc" style="display:none">
-            <button class="btn btn-outline" onclick="document.getElementById('fileInput').click()">选择文件 (.docx / .doc)</button>
-          </div>
-          <div id="uploadStatus" style="font-size:14px;color:#64748b;margin-bottom:8px;margin-top:6px"></div>
-          <div class="file-list" id="uploadList2"></div>
-        </div>
-      </div>
-
-      <!-- 知识库 -->
-      <div class="card">
-        <div class="card-hdr">知识库</div>
-        <div class="card-body">
-          <div style="font-size:13px;color:#64748b;line-height:1.7;margin-bottom:10px">
-            教材知识点仓库，存储所有已上传脚本中的<strong style="color:#334155">词汇、句型、语法</strong>。审查时 AI 自动查证题目内容是否在教材范围内。
-          </div>
-          <div id="kbContent">
-            <div class="info-row"><span class="key">总知识点数</span><span class="val" id="kbTotal">加载中</span></div>
-            <div class="info-row"><span class="key">覆盖年级</span><span class="val" id="kbGrades">—</span></div>
-          </div>
-        </div>
-      </div>
-
-      <!-- 审查智能体 -->
-      <div class="card">
-        <div class="card-hdr">审查智能体</div>
-        <div class="card-body">
-          <div style="font-size:13px;color:#64748b;line-height:1.7;margin-bottom:12px">
-            选择已上传的脚本文件，指定单元后一键审查。<br>
-            <strong style="color:#334155">审查流程</strong>：AI 逐题做六维检查 → 结果保存在中栏 → 可人工标注 → 智能体自动学习。
-          </div>
-          <div class="form-row">
-            <span class="form-label">脚本文件</span>
-            <span class="form-hint">选择要对照审查的 DOCX</span>
-            <select id="reviewDocx" style="margin-top:4px"></select>
-          </div>
-          <div class="form-row">
-            <span class="form-label">单元编号</span>
-            <span class="form-hint">0=审查整个脚本，6-9=指定 Unit</span>
-            <div style="display:flex;gap:8px;margin-top:4px">
-              <input type="number" id="reviewUnit" placeholder="例: 6 (0=全部)">
-              <button class="btn btn-primary" onclick="runReview()">审查</button>
-            </div>
-          </div>
-          <div id="reviewResult" style="margin-top:10px;font-size:14px;color:#64748b"></div>
-        </div>
-      </div>
-
-      <!-- 智能体学习状态 -->
-      <div class="card">
-        <div class="card-hdr">智能体学习状态</div>
-        <div class="card-body">
-          <div style="font-size:13px;color:#64748b;line-height:1.7;margin-bottom:10px">
-            人工标注数据统计：AI 判断 vs 人工判定<strong style="color:#334155">一致越多</strong>，智能体越准确。
-            在中栏题目卡片底部点击「通过 / 不通过」即可标注。
-          </div>
-          <div id="agentStats">
-            <div class="info-row"><span class="key">反馈样本数</span><span class="val" id="fbTotal">0</span></div>
-            <div class="info-row"><span class="key">AI准确率</span><span class="val" id="fbAccuracy">—</span></div>
-            <div class="info-row"><span class="key">已人工标注</span><span class="val" id="fbLabeled">0</span></div>
-          </div>
-        </div>
-      </div>
-
-      <!-- 截图预览 -->
-      <div class="card">
-        <div class="card-hdr">截图预览</div>
-        <div class="card-body">
-          <div style="font-size:13px;color:#64748b;line-height:1.7;margin-bottom:10px">最近一题的 APP 真实截图，供肉眼核验 AI 判断是否准确。</div>
-          <div class="screenshot-box" id="screenshotArea"><div class="ph">等待巡检截图...</div></div>
-        </div>
-      </div>
-    </div>
-
+    <!-- 上菜区（结果） -->
+    <div class="serve-wrap" id="serveWrap" style="display:none"></div>
   </div>
 </div>
 
 <script>
-// ====== 快捷选择器 ======
-function $(id){return document.getElementById(id)}
+const $=id=>document.getElementById(id)
+let logLast=0,_devListTs=0,_lastLogs=0
 
-// ====== 初始化 ======
-async function init(){
-  pollStatus()
-  loadUploadList()
-}
-init()
-
-// ====== 设备状态轮询 ======
-let _devListTs=0  // 设备列表刷新时间戳（避免每 2s 刷下拉）
+// ====== 设备轮询 ======
 async function pollStatus(){
-  while(true){
-    try{
-      const s=await(await fetch('/api/status')).json()
-      const on=s.device_connected
-      $('devStatus').textContent=on?'已连接':'离线'
-      $('devStatus').style.color=on?'#22c55e':'#ef4444'
-      $('devDot').className='dot '+(on?'on':'off')
-      $('devChip').className='chip '+(on?'on':'idle')
-      $('devChip').innerHTML='<span class="c-dot"></span>设备: '+(on?'已连接':'离线')
-
-      // 刷新设备下拉列表（每 8s 一次，避免频繁打断选择）
-      const now=Date.now()
-      if(now-_devListTs>8000){
-        _devListTs=now
-        const dl=await(await fetch('/api/devices')).json()
-        refreshDevSelect(dl.devices||[], s.device_serial||'')
-      }
-
-      // 批量状态
-      const bs=await(await fetch('/api/batch/status')).json()
-      updateBatchUI(bs)
-      updateTaskChip(bs)
-    }catch(e){}
-    await new Promise(r=>setTimeout(r,2000))
-  }
+  try{
+    const s=await(await fetch('/api/status')).json()
+    const on=s.device_connected
+    $('devDot').className='dot'+(on?' on':'')
+    $('devStatus').textContent=on?s.device_serial:'离线'
+    const now=Date.now()
+    if(now-_devListTs>8000){
+      _devListTs=now
+      const dl=await(await fetch('/api/devices')).json()
+      refreshDevSelect(dl.devices||[], s.device_serial||'')
+    }
+    const ts=s.task_status||{}
+    if(ts.running){
+      $('kitchenPulse').className='pulse running'
+      $('kitchenMsg').textContent='🔥 烹饪中… '+(ts.current_task||'')
+    }else if(!ts.current_task){
+      $('kitchenPulse').className='pulse'
+      $('kitchenMsg').textContent='后厨空闲，等待下单…'
+      $('kitchenSub').textContent=''
+    }
+    $('taskBadge').textContent=ts.current_task||'空闲'
+  }catch(e){}
+  setTimeout(pollStatus,2000)
 }
 
-// ====== 设备下拉刷新 ======
-function refreshDevSelect(devices, curSerial){
-  const sel=$('devSelect')
-  const focus=curSerial||sel.value
-  sel.innerHTML='<option value="">选择设备...</option>'+
-    devices.map(d=>`<option value="${d.serial}" ${d.serial===focus?'selected':''}>${d.serial}</option>`).join('')
+function refreshDevSelect(devs,cur){
+  const sel=$('devSelect'),focus=cur||sel.value
+  sel.innerHTML='<option value="">选择设备…</option>'+
+    devs.map(d=>`<option value="${d.serial}" ${d.serial===focus?'selected':''}>${d.serial}</option>`).join('')
 }
-
-// ====== 选择设备 ======
 async function selectDevice(serial){
   try{
-    const r=await fetch('/api/device/select',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({serial})})
+    const r=await fetch('/api/device/select',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({serial})})
     const j=await r.json()
-    if(j.error){alert('选择失败: '+j.error);return}
-    if(j.serial) addLog('info',`设备已切换: ${j.serial}${j.connected?' (已连接)':' (离线)'}`)
-    else addLog('info',`已恢复默认设备连接`)
-  }catch(e){alert('选择失败: '+e.message)}
+    if(j.error){alert('设备选择失败: '+j.error);return}
+    addLog('info',j.serial?'已切换设备: '+j.serial+'':'已恢复默认设备')
+  }catch(e){alert('设备选择失败: '+e.message)}
 }
 
-// ====== 自动化任务状态 chip ======
-function updateTaskChip(bs){
-  const chip=$('taskChip')
-  if(bs.running||bs.paused){
-    chip.className='chip run'
-    chip.innerHTML='<span class="c-dot"></span>当前任务: '+(bs.paused?'已暂停':'运行中')
-  }else{
-    chip.className='chip idle'
-    chip.innerHTML='<span class="c-dot"></span>当前任务: 空闲'
-  }
-}
-
-// ====== 批量UI更新 (B实现) ======
-function updateBatchUI(bs){
-  if(!bs.running && !bs.paused){
-    $('btnStart').style.display=''; $('btnCancel').style.display='none'; $('btnPause').style.display='none'
-    $('progressCard').style.display='none'; $('moduleListCard').style.display='none'
-    return
-  }
-  $('btnStart').style.display='none'; $('btnCancel').style.display=''; $('btnPause').style.display=''
-  $('progressCard').style.display=''; $('moduleListCard').style.display=''
-
-  const total=bs.completed.length+(bs.pending?.length||0)
-  const done=bs.completed.length
-  $('progressFill').style.width=(done/Math.max(total,1)*100)+'%'
-  $('statDone').textContent=done; $('statTotal').textContent=total
-  $('batchBadge').textContent=bs.paused?'已暂停':'运行中'
-  $('batchBadge').className='badge '+(bs.paused?'badge-idle':'badge-running')
-  $('statEta').textContent=bs.eta_remaining||'--'
-  $('currentModule').textContent=bs.current?`U${bs.current.unit} ${bs.current.stage}`:'--'
-
-  // 模块列表
-  const items=[]
-  bs.completed.forEach(m=>items.push({name:`U${m.unit} ${m.stage}`,status:'done',detail:`${m.questions||0}题`}))
-  if(bs.current) items.push({name:`U${bs.current.unit} ${bs.current.stage}`,status:'running',detail:bs.current.question||''})
-  bs.pending.forEach(m=>items.push({name:`U${m.unit} ${m.stage}`,status:'pending',detail:''}))
-  bs.failed_modules.forEach(m=>items.push({name:`U${m.unit} ${m.stage}`,status:'failed',detail:m.reason||'失败'}))
-  $('moduleList').innerHTML=items.map((m,i)=>
-    `<div class="module-item">
-      <div class="idx ${m.status}">${m.status==='done'?'√':m.status==='running'?'›':m.status==='failed'?'×':i+1}</div>
-      <div class="name">${m.name}</div>
-      <div class="stat">${m.detail}</div>
-    </div>`
-  ).join('')
-
-  // 统计
-  let tp=0,tf=0
-  bs.completed.forEach(m=>{tp+=m.passed||0;tf+=m.failed||0})
-  $('statPassed').textContent=tp; $('statFailed').textContent=tf
-
-  // 完成后显示
-  if(!bs.running && done===total && total>0){
-    $('progressFill').style.width='100%'
-    $('btnStart').style.display=''; $('btnCancel').style.display='none'; $('btnPause').style.display='none'
-    $('batchBadge').textContent='已完成'; $('batchBadge').className='badge badge-idle'
-    addLog('success',`全部完成! ${tp}题通过, ${tf}题出错 → 查看 <a href="/trace" style="color:#4ade80">错误溯源</a>`)
-  }
-}
-
-// ====== 文件上传 ======
-async function uploadFile(){
-  const f=$('uploadInput').files[0]; if(!f) return
-  const fd=new FormData(); fd.append('file',f)
-  await fetch('/api/upload',{method:'POST',body:fd})
-  loadUploadList()
-}
-
-async function loadUploadList(){
-  const d=await(await fetch('/api/upload/list')).json()
-  $('planDocx').innerHTML=(d.files||[]).map(f=>`<option>${f.name}</option>`).join('')
-  $('uploadList').innerHTML=(d.files||[]).length
-    ? d.files.map(f=>`<div>${f.name} (${(f.size/1024).toFixed(0)}KB)</div>`).join('')
-    : '<span>暂无上传 — 可跳过，AI将自动生成答案</span>'
-}
-
-// ====== 自然语言解析 ======
-async function parseNL(){
-  const text=$('nlInput').value.trim()
-  if(!text){$('nlResult').textContent='请先输入描述';return}
-  $('nlResult').textContent='解析中...'
-  try{
-    const r=await(await fetch('/api/batch/parse',{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({text})
-    })).json()
-    if(r.error){$('nlResult').textContent='解析失败: '+r.error;return}
-    // 自动填入表单
-    $('planVersion').value=r.version||'新湘鲁六上'
-    $('planUnitFrom').value=r.units[0]
-    $('planUnitTo').value=r.units[r.units.length-1]
-    $('cbBase').checked=(r.stages||[]).includes('基础巩固')
-    $('cbAdv').checked=(r.stages||[]).includes('综合进阶')
-    $('cbHard').checked=(r.stages||[]).includes('难点突破')
-    $('nlResult').textContent=`解析成功: ${r.version} U${r.units[0]}-${r.units[r.units.length-1]} [${(r.stages||[]).join('/')}] ${r.module_type}`
-    $('planEta').textContent='预计 '+(r.units.length*(r.stages||[]).length*6)+' 分钟'
-    // 自动开始跑
-    setTimeout(()=>startBatch(),500)
-  }catch(e){$('nlResult').textContent='解析失败: '+e}
-}
-
-// ====== 听力专项（练习+测试）新引擎 ======
-async function startAudio(){
-  const units=[1]
-  if(!confirm('启动听力专项自动化？\n练习: U1 (基础巩固→综合进阶→难点突破)\n测试: U1 测试卷\n(当前配置仅U1，打通后可改脚本扩展)')) return
-  try{
-    const r=await fetch('/api/audio/run',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({mode:'all',units,test_units:units})})
-    const j=await r.json()
-    if(j.error){alert(j.error);return}
-    addLog('info',`听力专项已启动: ${j.mode} 模式`)
-    $('stAudio').textContent='运行中'
-  }catch(e){alert('启动失败: '+e.message)}
-}
-
-// ====== 口语训练 新引擎 ======
-async function startOral(){
-  const units=[1]
-  if(!confirm('启动口语训练自动化？\nU1 (4大题×5小题，含录音/小喇叭题型)\n(当前配置仅U1，打通后可改脚本扩展)')) return
-  try{
-    const r=await fetch('/api/oral/run',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({units})})
-    const j=await r.json()
-    if(j.error){alert(j.error);return}
-    addLog('info',`口语训练已启动: 单元${j.units}`)
-    $('stOral').textContent='运行中'
-  }catch(e){alert('启动失败: '+e.message)}
-}
-
-// ====== 单元自检 新引擎 ======
-async function startUnit(){
-  const units=[1]
-  if(!confirm('启动单元自检自动化？\nU1 (36题：选择/判断/匹配/排序/填空/阅读)\n(当前配置仅U1，打通后可改脚本扩展)')) return
-  try{
-    const r=await fetch('/api/unit/run',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({units})})
-    const j=await r.json()
-    if(j.error){alert(j.error);return}
-    addLog('info',`单元自检已启动: 单元${j.units}`)
-    $('stUnit').textContent='运行中'
-  }catch(e){alert('启动失败: '+e.message)}
-}
-
-// ====== 知识过关 新引擎 ======
-async function startKnowledge(){
-  const units=[1]
-  if(!confirm('启动知识过关自动化？\nU1 (重点词汇108题 + 重点句型8题)\n题型：选择/判断/录音/填字母/连词成句/系统键盘填空\n(当前配置仅U1，打通后可改脚本扩展)')) return
-  try{
-    const r=await fetch('/api/knowledge/run',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({units})})
-    const j=await r.json()
-    if(j.error){alert(j.error);return}
-    addLog('info',`知识过关已启动: 单元${j.units}`)
-    $('stKnowledge').textContent='运行中'
-  }catch(e){alert('启动失败: '+e.message)}
-}
-
-// ====== 语音评测 新引擎 ======
-async function startVoice(){
-  if(!confirm('启动语音评测自动化？\n(题目未做好，仅进入模块)')) return
-  try{
-    const r=await fetch('/api/voice/run',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({})})
-    const j=await r.json()
-    if(j.error){alert(j.error);return}
-    addLog('info',`语音评测已启动（仅进入）`)
-    $('stVoice').textContent='运行中'
-  }catch(e){alert('启动失败: '+e.message)}
-}
-
-// ====== 巧记单词 新引擎 ======
-async function startQiaoji(){
-  const units=[1,2,3,4,5,6,7,8,9]
-  if(!confirm('启动巧记单词自动化？\n单词同步闯关（U1-U9 全部单元，每单元6关含boss）\n题型：听力选释义/填字母/录音题/选择判断')) return
-  try{
-    const r=await fetch('/api/qiaoji/run',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({units})})
-    const j=await r.json()
-    if(j.error){alert(j.error);return}
-    addLog('info',`巧记单词已启动: ${j.units.length}个单元`)
-    $('stQiaoji').textContent='运行中'
-  }catch(e){alert('启动失败: '+e.message)}
-}
-
-// ====== 批量操作 ======
-async function startBatch(){
-  const from=parseInt($('planUnitFrom').value),to=parseInt($('planUnitTo').value)
-  const units=[]; for(let u=from;u<=to;u++) units.push(u)
-  const stages=[]
-  if($('cbBase').checked) stages.push('基础巩固')
-  if($('cbAdv').checked) stages.push('综合进阶')
-  if($('cbHard').checked) stages.push('难点突破')
-  if(!stages.length){alert('至少选一个阶段');return}
-
-  const body={
-    version:$('planVersion').value,
-    units,stages,
-    docx:$('planDocx').value||''
-  }
-  $('btnStart').disabled=true
-  const r=await(await fetch('/api/batch/start',{
-    method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify(body)
-  })).json()
-
-  if(r.error){alert(r.error);$('btnStart').disabled=false;return}
-  $('planEta').textContent='预计 '+r.eta
-  addLog('success',`批量任务已启动: ${r.modules} 个模块`)
-  $('logBox').innerHTML=''
-}
-
-async function cancelBatch(){
-  await fetch('/api/batch/cancel',{method:'POST'})
-  addLog('warning','任务已取消')
-}
-
-async function togglePause(){
-  const bs=await(await fetch('/api/batch/status')).json()
-  const ep=bs.paused?'resume':'pause'
-  await fetch('/api/batch/'+ep,{method:'POST'})
-  addLog('info',bs.paused?'继续':'暂停')
-}
-
-// ====== 日志轮询 (B实现) ======
-let logLast=0
-async function pollLog(){
-  const d=await(await fetch('/api/log')).json()
-  const logs=(d.logs||[]).slice(logLast)
-  if(logs.length) logLast+=logs.length
-  logs.forEach(l=>addLog(l.level,l.msg))
-  await new Promise(r=>setTimeout(r,1500))
-}
-
-function addLog(level,msg){
-  const t=new Date().toLocaleTimeString()
-  $('logBox').innerHTML+=`<div class="level-${level}">[${t}] ${msg}</div>`
-  $('logBox').scrollTop=$('logBox').scrollHeight
-}
-
-// 启动日志轮询
-// ====== 前提设置：切换版本/年级 ======
-async function applySetup(){
-  const version=$('setupVersion').value
-  const grade=$('setupGrade').value
-  const btn=document.querySelector('.prereq-btn')
-  btn.disabled=true; btn.textContent='切换中...'
-  try{
-    const r=await fetch('/api/setup',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({version,grade})})
-    const j=await r.json()
-    if(j.error){alert(j.error);return}
-    addLog('info',`前提设置已启动: ${version} ${grade}`)
-  }catch(e){alert('设置失败: '+e.message)}
-  finally{btn.disabled=false; btn.textContent='仅切换版本'}
-}
-
-// ====== 模块多选状态同步 ======
+// ====== 模块标签 ======
 function refreshModuleSel(){
   const boxes=[...document.querySelectorAll('.mod-sel')]
   const n=boxes.filter(b=>b.checked).length
-  $('moduleSelCount').textContent='已选 '+n+' 个'
-  boxes.forEach(b=>{
-    const lb=b.closest('.mod-check')
-    if(lb) lb.classList.toggle('checked',b.checked)
-  })
+  $('moduleSelCount').textContent=n
+  boxes.forEach(b=>{const lb=b.closest('.mod-tag');if(lb)lb.classList.toggle('on',b.checked)})
 }
-document.querySelectorAll('.mod-sel').forEach(b=>{
-  b.addEventListener('change',refreshModuleSel)
-})
-refreshModuleSel()
+document.querySelectorAll('.mod-sel').forEach(b=>b.addEventListener('change',refreshModuleSel))
 
-// ====== 多模块检测：开始检测 ======
-async function startModules(){
+// ====== 日志 ======
+function addLog(level,msg){
+  const t=new Date().toLocaleTimeString()
+  const el=$('logWrap')
+  // 隐藏空状态
+  const empty=el.querySelector('.log-empty')
+  if(empty) empty.style.display='none'
+  el.innerHTML+=`<div class="log-item ${level}"><span class="t">${t}</span>${msg}</div>`
+  el.scrollTop=el.scrollHeight
+}
+function clearLog(){
+  $('logWrap').innerHTML='<div class="log-empty"><span class="emoji">👨‍🍳</span>日志已清空</div>'
+  $('serveWrap').style.display='none'
+}
+async function pollLog(){
+  try{
+    const d=await(await fetch('/api/log')).json()
+    const logs=(d.logs||[]).slice(logLast)
+    if(logs.length) logLast+=logs.length
+    logs.forEach(l=>addLog(l.level,l.msg))
+  }catch(e){}
+  setTimeout(pollLog,1500)
+}
+
+// ====== 文件上传（占位，后端后续支持） ======
+function uploadOrder(e){
+  const f=e.target.files[0]
+  if(!f) return
+  addLog('info','📎 已选择任务清单: '+f.name+' ('+(f.size/1024).toFixed(1)+'KB)')
+  addLog('step','📋 注：清单文件解析功能即将上线，当前请使用文字描述')
+}
+
+// ====== 开始烹饪（多模块检测） ======
+async function startCooking(){
   const version=$('setupVersion').value
   const grade=$('setupGrade').value
   const modules=[...document.querySelectorAll('.mod-sel')].filter(b=>b.checked).map(b=>b.value)
-  if(!modules.length){alert('请至少选择一个模块');return}
-  const btn=$('btnModulesRun')
-  btn.disabled=true; btn.textContent='检测中...'
+  const orderText=($('orderInput').value||'').trim()
+
+  if(!modules.length){alert('请至少选择一个模块（或在清单中说明）');return}
+
+  let confirmMsg = '确认启动多模块检测？\n'
+  confirmMsg += `版本: ${version} | 年级: ${grade}\n`
+  confirmMsg += `模块: ${modules.join('、')} (共${modules.length}个)`
+  if(orderText) confirmMsg += `\n清单描述: "${orderText.substring(0,80)}${orderText.length>80?'…':''}"`
+  if(!confirm(confirmMsg)) return
+
+  const btn=$('btnCook')
+  btn.disabled=true; btn.innerHTML='<span class="emoji">🔥</span> 烹饪中…'
+
+  // 如果用户写了清单文字，先记录
+  if(orderText){
+    addLog('step','📝 收到清单: '+orderText.substring(0,200)+(orderText.length>200?'…':''))
+  }
+  addLog('step','📋 开始分析清单 → 准备调用模块: '+modules.join('、'))
+  addLog('info','版本/年级: '+version+' '+grade)
+
   try{
-    const r=await fetch('/api/modules/run',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({version,grade,modules})})
+    const r=await fetch('/api/modules/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version,grade,modules})})
     const j=await r.json()
-    if(j.error){alert(j.error);return}
-    addLog('info',`多模块检测已启动: ${version} ${grade} → ${modules.join('、')}`)
-    // 启动结果轮询
-    pollModulesResult(modules)
-  }catch(e){alert('启动失败: '+e.message)}
-  finally{btn.disabled=false; btn.textContent='开始检测'}
+    if(j.error){alert(j.error);btn.disabled=false;btn.innerHTML='<span class="emoji">🔥</span> 解析清单并开始烹饪';return}
+    addLog('success','✅ 已接单！开始烹饪 '+j.modules.length+' 道菜')
+    $('serveWrap').style.display='none'
+    // 轮询结果
+    pollCookResult(modules)
+  }catch(e){alert('启动失败: '+e.message);btn.disabled=false;btn.innerHTML='<span class="emoji">🔥</span> 解析清单并开始烹饪'}
+  finally{setTimeout(()=>{btn.disabled=false;btn.innerHTML='<span class="emoji">🔥</span> 解析清单并开始烹饪'},4000)}
 }
 
-// ====== 多模块检测：结果轮询与汇总展示 ======
-function pollModulesResult(modules){
+function pollCookResult(modules){
   let tried=0
   const timer=setInterval(async()=>{
     tried++
@@ -995,42 +349,45 @@ function pollModulesResult(modules){
       const r=await(await fetch('/api/modules/result')).json()
       if(r.done&&r.results){
         clearInterval(timer)
-        renderSummary(r)
-      }else if(tried>600){ // 10分钟超时
+        renderServe(r)
+      }else if(tried>600){
         clearInterval(timer)
+        addLog('warning','⏰ 烹饪超时（10分钟），请手动查看设备状态')
       }
     }catch(e){}
   },2000)
 }
 
-function renderSummary(data){
+// ====== 上菜（结果展示） ======
+function renderServe(data){
   const rs=data.results||{}
   const names=Object.keys(rs)
-  $('summaryMeta').textContent=`${data.version} ${data.grade}`
   const totalQ=names.reduce((s,n)=>s+(rs[n].q||0),0)
   const okN=names.filter(n=>rs[n].ok).length
-  $('summaryBox').innerHTML=`
-    <div class="sm-grid">
-      ${names.map(n=>{
-        const r=rs[n]
-        const ok=r.ok
-        return `<div class="sm-card ${ok?'ok':'fail'}">
-          <div class="sm-status"></div>
-          <div class="sm-body">
-            <div class="sm-name">${n}</div>
-            <div class="sm-detail">${ok?'完成':'失败'} · 耗时 ${r.t||0}s${r.error?' · '+r.error:''}</div>
-          </div>
-          <div class="sm-q">${r.q||0}<small> 题</small></div>
-        </div>`
-      }).join('')}
-    </div>
-    <div style="margin-top:12px;font-size:13px;color:#64748b">
-      共 ${names.length} 个模块，成功 ${okN} 个，累计答题 ${totalQ} 题
+  let html='<div class="serve-hdr">🍲 出餐完成！</div><div class="serve-cards">'
+  names.forEach(n=>{
+    const r=rs[n]; const ok=r.ok
+    html+=`<div class="serve-card ${ok?'ok':'fail'}">
+      <div class="sc-name">${n}</div>
+      <div class="sc-stat"><span class="sc-q">${r.q||0}<small> 题</small></span></div>
+      <div class="sc-detail">${ok?'✅ 完成':'❌ 失败'} · ${r.t||0}s${r.error?' · '+r.error:''}</div>
     </div>`
-  $('summaryWrap').style.display=''
+  })
+  html+=`</div><div class="serve-summary">
+    ${names.length} 道菜 · 成功 <b style="color:var(--green)">${okN}</b> 道 · 
+    累计答题 <b style="color:var(--green)">${totalQ}</b> 题 · ${data.version||''} ${data.grade||''}
+  </div>`
+  const el=$('serveWrap')
+  el.innerHTML=html
+  el.style.display='block'
+  el.scrollIntoView({behavior:'smooth'})
+  addLog('success',`🍲 全部出餐！${names.length}道菜，${okN}道成功，${totalQ}题`)
 }
 
-setInterval(pollLog,2000)
+// ====== 启动 ======
+pollStatus()
+pollLog()
+refreshModuleSel()
 </script>
 </body>
 </html>
