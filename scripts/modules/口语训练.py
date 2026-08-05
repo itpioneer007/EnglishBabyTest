@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import uiautomator2 as u2
 from common.tools import (
+    S, S_swipe, S_h, S_w,
     close_ad, dismiss_global_popups, ensure_grade, scroll_and_find,
 )
 
@@ -46,7 +47,7 @@ def _close_bottom_ad(d):
             b = elem.bounds
             w = b[2] - b[0]
             h = b[3] - b[1]
-            if w < 80 and h < 80 and b[1] > 1700:
+            if w < 80 and h < 80 and b[1] > S_h(d, 1700):
                 elem.click()
                 print(f"    🔔 关闭底部广告 (小X按钮)")
                 time.sleep(0.8)
@@ -202,7 +203,7 @@ def _answer_big_question(d, big_idx=0):
                 q += 1
                 continue
             # 仍没有：下滑查看下一小题
-            d.swipe(540, 1600, 540, 800, 0.4)
+            S_swipe(d, 540, 1600, 540, 800, 0.4)
             time.sleep(1.2)
             # 再尝试一次
             if _speak_question(d, wait_countdown=False):
@@ -229,7 +230,7 @@ def _run_one_unit(d, unit_num, is_retry):
         if idx < len(btns):
             break
         # 可能需下滑
-        d.swipe(540, 1800, 540, 600, 0.3); time.sleep(1)
+        S_swipe(d, 540, 1800, 540, 600, 0.3); time.sleep(1)
     if idx >= len(btns):
         print(f"    ❌ 找不到 U{unit_num} 的{btn_text}")
         return 0

@@ -2553,6 +2553,99 @@ def api_knowledge_run():
 
 
 # ============================================================
+# 语音评测 自动化（题目未做好，仅进入模块）
+# ============================================================
+
+_VOICE_RUNNER = None  # 后台线程
+
+
+@app.route("/api/voice/run", methods=["POST"])
+def api_voice_run():
+    """启动语音评测模块（仅进入，题目未做好）"""
+    global _VOICE_RUNNER
+    if task_status["running"]:
+        return jsonify({"error": "已有任务在运行"}), 409
+
+    def _run():
+        try:
+            set_running(f"语音评测")
+            log_msg(f"启动语音评测（题目未做好，仅进入）")
+            sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+            from modules.语音评测 import run_module
+            from common.tools import dismiss_global_popups, close_ad, ensure_grade
+            import uiautomator2 as u2
+
+            d = u2.connect()
+            log_msg("设备已连接")
+
+            for _ in range(3):
+                dismiss_global_popups(d)
+            close_ad(d)
+            ok = ensure_grade(d, "五年级上册", "湘少版")
+            log_msg("年级确认: 湘少版 五年级上册" if ok else "⚠ 年级切换失败，继续尝试")
+
+            r = run_module(d)
+            log_msg(f"✅ 语音评测进入完成: {r}")
+            set_done()
+        except Exception as e:
+            log_msg(f"❌ 任务异常: {e}", "error")
+            set_done()
+
+    _VOICE_RUNNER = threading.Thread(target=_run, daemon=True)
+    _VOICE_RUNNER.start()
+    return jsonify({"status": "started"})
+
+
+# ============================================================
+# 巧记单词 自动化（单词同步闯关）
+# ============================================================
+
+_QIAOJI_RUNNER = None  # 后台线程
+
+
+@app.route("/api/qiaoji/run", methods=["POST"])
+def api_qiaoji_run():
+    """启动巧记单词自动化（单词同步闯关）
+    请求: {"units": [1]}  # 单元数，默认 U1-U9 全跑
+    """
+    global _QIAOJI_RUNNER
+    if task_status["running"]:
+        return jsonify({"error": "已有任务在运行"}), 409
+
+    data = request.get_json() or {}
+    units = data.get("units", list(range(1, 10)))  # 默认全部单元
+
+    def _run():
+        try:
+            set_running(f"巧记单词")
+            log_msg(f"启动巧记单词: 单元{units}")
+            sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+            from modules.巧记单词 import run_module
+            from common.tools import dismiss_global_popups, close_ad, ensure_grade
+            import uiautomator2 as u2
+
+            d = u2.connect()
+            log_msg("设备已连接")
+
+            for _ in range(3):
+                dismiss_global_popups(d)
+            close_ad(d)
+            ok = ensure_grade(d, "五年级上册", "湘少版")
+            log_msg("年级确认: 湘少版 五年级上册" if ok else "⚠ 年级切换失败，继续尝试")
+
+            q = run_module(d)
+            log_msg(f"✅ 巧记单词完成: {q} 题")
+            set_done()
+        except Exception as e:
+            log_msg(f"❌ 任务异常: {e}", "error")
+            set_done()
+
+    _QIAOJI_RUNNER = threading.Thread(target=_run, daemon=True)
+    _QIAOJI_RUNNER.start()
+    return jsonify({"status": "started", "units": units})
+
+
+# ============================================================
 # 启动
 # ============================================================
 

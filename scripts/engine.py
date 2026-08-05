@@ -6,6 +6,7 @@ close_ad / ensure_grade / run_single_module 等核心逻辑
 import uiautomator2 as u2
 import time, re
 from config import MODULE_CONFIG, GLOBAL_POPUPS, APP_PACKAGE, GRADE_LEVEL, BOOK_VERSION
+from common.tools import S, S_swipe, S_h, S_w
 
 def close_ad(d):
     """关闭广告：多种策略按顺序尝试"""
@@ -44,7 +45,7 @@ def close_ad(d):
             w = b[2] - b[0]
             h = b[3] - b[1]
             # X 按钮特征：尺寸小（< 80x80）、位于右侧、y>600
-            if w < 80 and h < 80 and b[0] > 800 and b[1] > 600:
+            if w < 80 and h < 80 and b[0] > S_w(d, 800) and b[1] > S_h(d, 600):
                 elem.click()
                 print(f"    🔔 通过小尺寸 clickable (X) 关闭广告 ({sum(b)//4},{h*1000})")
                 time.sleep(0.8)
@@ -69,7 +70,7 @@ def close_ad(d):
 
     # 方式5：硬编码右上角坐标
     try:
-        d.click(986, 1823)
+        d.click(*S(d, 986, 1823))
         print("    🔔 通过 ad-X 坐标 (986,1823) 关闭广告")
         time.sleep(0.8)
         return True
@@ -121,7 +122,7 @@ def execute_actions(d, actions, label=""):
             text = action["text"]
             for _ in range(5):
                 if d(text=text).exists(timeout=1.5): break
-                d.swipe(500, 1400, 500, 400, duration=0.3)
+                S_swipe(d, 500, 1400, 500, 400, 0.3)
                 time.sleep(1)
             if safe_click(d, text, timeout=min(timeout, 3)):
                 print(f"    ✅ 滑动后点击 '{text}'")
@@ -133,7 +134,7 @@ def execute_actions(d, actions, label=""):
 
         elif at == "swipe_left":
             # 水平左滑切换子模块
-            d.swipe(900, 600, 200, 600, duration=0.3)
+            S_swipe(d, 900, 600, 200, 600, 0.3)
             time.sleep(1.5)
             print(f"    👈 左滑切换子模块")
 
@@ -168,12 +169,12 @@ def scroll_and_find(d, text, max_swipes=8) -> bool:
     if d(text=text).exists(timeout=2): return True
     # 第一轮：向上滑（内容下移）
     for _ in range(max_swipes):
-        d.swipe(500, 1400, 500, 400, duration=0.3)
+        S_swipe(d, 500, 1400, 500, 400, 0.3)
         time.sleep(0.8)
         if d(text=text).exists(timeout=1.5): return True
     # 第二轮：向下滑（内容上移，返回顶部区域）
     for _ in range(max_swipes):
-        d.swipe(500, 400, 500, 1400, duration=0.3)
+        S_swipe(d, 500, 400, 500, 1400, 0.3)
         time.sleep(0.8)
         if d(text=text).exists(timeout=1.5): return True
     return False
@@ -203,7 +204,7 @@ def ensure_grade(d, grade_level, book_version=""):
     for _ in range(8):
         if d(text=grade_level).exists(timeout=1):
             break
-        d.swipe(500, 1400, 500, 400, duration=0.3)
+        S_swipe(d, 500, 1400, 500, 400, 0.3)
         time.sleep(1)
 
     try:
@@ -283,7 +284,7 @@ def _handle_sort_question(d, config):
     for e in (d.xpath('//*[@clickable="true"]').all() or []):
         b = e.bounds
         w = b[2] - b[0]
-        if 700 < b[1] < 1900 and 300 < w < 700:
+        if S_h(d, 700) < b[1] < S_h(d, 1900) and 300 < w < 700:
             has_big_image = True
             big_images.append(e)
 
@@ -331,7 +332,7 @@ def _handle_sort_question(d, config):
     clicked_box = False
     for e in (d.xpath('//*[@clickable="true"]').all() or []):
         b = e.bounds
-        if 700 < b[1] < 1900 and 100 < b[2] - b[0] < 300:
+        if S_h(d, 700) < b[1] < S_h(d, 1900) and 100 < b[2] - b[0] < 300:
             try:
                 e.click()
                 print(f"      → 点第一个方框激活")
@@ -360,7 +361,7 @@ def _handle_sort_question(d, config):
             w = b[2] - b[0]
             # x 起点 58 是句子方框，跳过
             # y 上限放宽到 2200（兼容知识过关连词成句的单词按钮 y~2044-2141）
-            if 1680 < b[1] < 2200 and 200 < w < 300 and b[0] != 58:
+            if S_h(d, 1680) < b[1] < S_h(d, 2200) and 200 < w < 300 and b[0] != 58:
                 cx = (b[0] + b[2]) // 2
                 cy = (b[1] + b[3]) // 2
                 btns.append((cx, cy, b[0], b[1]))
@@ -742,7 +743,7 @@ def run_single_module(d, module_name, config):
                             be.click(); time.sleep(4); clicked = True
                             break
                 if clicked: break
-                d.swipe(500, 1800, 500, 600, 0.3); time.sleep(1)
+                S_swipe(d, 500, 1800, 500, 600, 0.3); time.sleep(1)
             if not clicked:
                 print(f"  ❌ U{unit_num} 找不到去练习"); continue
             print(f"  ✅ U{unit_num} 去练习")
@@ -819,7 +820,7 @@ def _handle_fill_blank(d, config):
         if not new_inputs:
             if round_i < 4:
                 # 下滑找新方框
-                d.swipe(540, 1800, 540, 800, 0.4)
+                S_swipe(d, 540, 1800, 540, 800, 0.4)
                 time.sleep(1.5)
                 continue
             else:

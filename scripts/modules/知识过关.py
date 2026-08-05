@@ -31,6 +31,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import uiautomator2 as u2
 from common.tools import (
+    S, S_swipe, S_h, S_w,
     close_ad, dismiss_global_popups, ensure_grade, scroll_and_find,
 )
 from engine import _handle_match_question, _handle_sort_question  # noqa: F401  (预留)
@@ -170,7 +171,7 @@ def _answer_loop(d, max_q=120):
                 x1, y1, x2, y2 = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
                 w, h = x2-x1, y2-y1
                 # 字母按钮特征：宽 180-210 高 130-145，y 在 600-900 之间
-                if 180 < w < 210 and 125 < h < 150 and 600 < y1 < 950:
+                if 180 < w < 210 and 125 < h < 150 and S_h(d, 600) < y1 < S_h(d, 950):
                     letter_positions.append(((x1+x2)//2, (y1+y2)//2))
             letter_positions.sort(key=lambda t: (t[1], t[0]))  # 按 y 再 x 排序（左到右、上到下）
             # 找第一个方框（y < 700 的 LL clickable 170x114）
@@ -181,7 +182,7 @@ def _answer_loop(d, max_q=120):
             ):
                 x1, y1, x2, y2 = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
                 w, h = x2-x1, y2-y1
-                if 400 < y1 < 700 and 150 < w < 200 and 100 < h < 130:
+                if S_h(d, 400) < y1 < S_h(d, 700) and 150 < w < 200 and 100 < h < 130:
                     first_box = ((x1+x2)//2, (y1+y2)//2)
                     break
             if first_box and letter_positions:
@@ -244,7 +245,7 @@ def _answer_loop(d, max_q=120):
             x1, y1, x2, y2 = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
             w = x2-x1; h = y2-y1
             # 字母按钮：y 1100-1700（排除上方句子方框 y 815-1043）
-            if 1100 < y1 < 1700 and 150 < w < 250 and 100 < h < 180:
+            if S_h(d, 1100) < y1 < S_h(d, 1700) and 150 < w < 250 and 100 < h < 180:
                 letter_btns.append(((x1+x2)//2, (y1+y2)//2))
         letter_btns.sort(key=lambda t: (t[1], t[0]))
 
@@ -345,7 +346,7 @@ def _answer_loop(d, max_q=120):
             x1, y1, x2, y2 = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
             w = x2-x1; h = y2-y1
             cx = (x1+x2)//2; cy = (y1+y2)//2
-            if 200 < w < 250 and 100 < h < 130 and 600 < y1 < 1100:
+            if 200 < w < 250 and 100 < h < 130 and S_h(d, 600) < y1 < S_h(d, 1100):
                 sentence_boxes.append((cx, cy, y1))
         if len(sentence_boxes) >= 2:
             print(f"    🧩 连词成句 ({len(sentence_boxes)}句) → 调用排序处理")
@@ -383,7 +384,7 @@ def _enter_unit(d, unit_num):
             if d(text="知识过关").exists(timeout=1):
                 found = True
                 break
-            d.swipe(540, 1800, 540, 600, 0.4)
+            S_swipe(d, 540, 1800, 540, 600, 0.4)
             time.sleep(1)
         if not found:
             print(f"    ❌ 找不到知识过关入口")
@@ -405,7 +406,7 @@ def _enter_unit(d, unit_num):
                     units.append(e)
         if units:
             break
-        d.swipe(540, 1800, 540, 600, 0.4)
+        S_swipe(d, 540, 1800, 540, 600, 0.4)
         time.sleep(1)
     units.sort(key=lambda e: e.bounds[1])
     if unit_num - 1 >= len(units):
@@ -503,7 +504,7 @@ def run_module(d):
     for _ in range(5):
         if d(text="知识过关").exists(timeout=1):
             break
-        d.swipe(540, 1800, 540, 600, 0.4)
+        S_swipe(d, 540, 1800, 540, 600, 0.4)
         time.sleep(1)
 
     for ui, unit_num in enumerate(UNITS):

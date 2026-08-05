@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import uiautomator2 as u2
 from common.tools import (
+    S, S_swipe, S_h, S_w,
     close_ad, dismiss_global_popups, ensure_grade, scroll_and_find,
 )
 from engine import _handle_match_question, _handle_sort_question
@@ -119,7 +120,7 @@ def _enter_unit(d, unit_num):
     for _ in range(5):
         if idx < len(btns):
             break
-        d.swipe(540, 1800, 540, 600, 0.3); time.sleep(1)
+        S_swipe(d, 540, 1800, 540, 600, 0.3); time.sleep(1)
         btns = [e for e in (d.xpath('//*[@text!=""]').all() or [])
                 if (e.text or "").strip() == "去答题"]
         btns.sort(key=lambda e: e.bounds[1])
@@ -156,7 +157,7 @@ def run_module(d):
             if d(text="单元自检").exists(timeout=1):
                 found = True
                 break
-            d.swipe(540, 1800, 540, 600, 0.4); time.sleep(1)
+            S_swipe(d, 540, 1800, 540, 600, 0.4); time.sleep(1)
         if not found:
             # 尝试点专项突破后再下滑
             if d(text="专项突破").exists(timeout=1):
@@ -165,7 +166,7 @@ def run_module(d):
                 if d(text="单元自检").exists(timeout=1):
                     found = True
                     break
-                d.swipe(540, 1800, 540, 600, 0.4); time.sleep(1)
+                S_swipe(d, 540, 1800, 540, 600, 0.4); time.sleep(1)
         if not found:
             print("  ❌ 找不到单元自检入口")
             return 0

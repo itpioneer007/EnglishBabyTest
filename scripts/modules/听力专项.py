@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import uiautomator2 as u2
 from common.tools import (
+    S, S_swipe, S_h, S_w,
     close_ad, dismiss_global_popups, ensure_grade, back_to_home, scroll_and_find,
 )
 from engine import run_single_module
@@ -177,7 +178,7 @@ def run_test_module(d):
                 found = True
                 break
             if not found:
-                d.swipe(500, 1800, 500, 600, 0.3); time.sleep(1)
+                S_swipe(d, 500, 1800, 500, 600, 0.3); time.sleep(1)
         if not found:
             print(f"  ❌ U{unit_num} 找不到去答题"); continue
         time.sleep(2)
