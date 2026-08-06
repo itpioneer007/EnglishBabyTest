@@ -43,21 +43,21 @@ def _answer_loop(d, max_q=60):
         if d(textContains="继续答题").exists(timeout=0.6):
             d(textContains="继续答题").click()
             print("      → 继续答题弹窗")
-            time.sleep(1.5)
+            time.sleep(0.6)
             continue
         # 最后一题 → 查看报告
         if d(text="查看报告").exists(timeout=0.6):
             d(text="查看报告").click()
             print("      → 查看报告！单元自检完成")
             step_log(f"📊 单元自检完成，共{q}题", "success")
-            time.sleep(2)
+            time.sleep(0.8)
             return q
         # 答错后"下一题" → 点它
         if d(text="下一题").exists(timeout=0.6):
             d(text="下一题").click()
             print("      → 下一题(答错)")
             step_log(f"  答错 → 下一题", "warning")
-            time.sleep(1.5)
+            time.sleep(0.6)
             continue
         # 新题：找选项
         opt = None
@@ -72,18 +72,18 @@ def _answer_loop(d, max_q=60):
             d(text=opt).click()
             print(f"      → 选 {opt}")
             step_log(f"  第{q}题: 选 {opt} → 检查", "info")
-            time.sleep(0.8)
+            time.sleep(0.35)
             # 等检查出现并点击
             for _ in range(10):
                 try:
-                    if d(text="检查").exists(timeout=0.5):
+                    if d(text="检查").exists(timeout=0.15):
                         d(text="检查").click()
                         print(f"      → 检查")
-                        time.sleep(1.5)
+                        time.sleep(0.6)
                         break
                 except Exception:
                     pass
-                time.sleep(0.4)
+                time.sleep(0.2)
             q += 1
             continue
 
@@ -124,7 +124,7 @@ def _answer_loop(d, max_q=60):
             d.screenshot(os.path.join(_shot_dir, f"unknown_type_{q}.png"))
         except Exception:
             pass
-        time.sleep(5)
+        time.sleep(2.5)
     return q
 
 
@@ -138,7 +138,7 @@ def _enter_unit(d, unit_num):
     for _ in range(5):
         if idx < len(btns):
             break
-        S_swipe(d, 540, 1800, 540, 600, 0.3); time.sleep(1)
+        S_swipe(d, 540, 1800, 540, 600, 0.3); time.sleep(0.4)
         btns = [e for e in (d.xpath('//*[@text!=""]').all() or [])
                 if (e.text or "").strip() == "去答题"]
         btns.sort(key=lambda e: e.bounds[1])
@@ -147,17 +147,17 @@ def _enter_unit(d, unit_num):
         return False
     btns[idx].click()
     print(f"    ✅ 点击去答题 (U{unit_num})")
-    time.sleep(3)
+    time.sleep(1.2)
     # 弹窗
     if d(text="好的，我知道啦~").exists(timeout=3):
         d(text="好的，我知道啦~").click()
         print(f"    ✅ 好的，我知道啦~")
-        time.sleep(2)
+        time.sleep(0.8)
     # 开始答题
     if d(text="开始答题").exists(timeout=3):
         d(text="开始答题").click()
         print(f"    ✅ 开始答题")
-        time.sleep(4)
+        time.sleep(1.6)
     return True
 
 
@@ -175,22 +175,22 @@ def run_module(d):
             if d(text="单元自检").exists(timeout=1):
                 found = True
                 break
-            S_swipe(d, 540, 1800, 540, 600, 0.4); time.sleep(1)
+            S_swipe(d, 540, 1800, 540, 600, 0.4); time.sleep(0.4)
         if not found:
             # 尝试点专项突破后再下滑
             if d(text="专项突破").exists(timeout=1):
-                d(text="专项突破").click(); time.sleep(2)
+                d(text="专项突破").click(); time.sleep(0.8)
             for _ in range(6):
                 if d(text="单元自检").exists(timeout=1):
                     found = True
                     break
-                S_swipe(d, 540, 1800, 540, 600, 0.4); time.sleep(1)
+                S_swipe(d, 540, 1800, 540, 600, 0.4); time.sleep(0.4)
         if not found:
             print("  ❌ 找不到单元自检入口")
             return 0
     d(text="单元自检").click()
     print("  ✅ 已进入单元自检")
-    time.sleep(4)
+    time.sleep(1.6)
 
     # 逐单元执行
     for ui, unit_num in enumerate(UNITS):
@@ -204,7 +204,7 @@ def run_module(d):
         for _ in range(4):
             if d(text="去答题").exists(timeout=1.5):
                 break
-            d.press("back"); time.sleep(1.5)
+            d.press("back"); time.sleep(0.6)
 
     print(f"✅ 单元自检完成: {total} 题, 耗时 {time.time()-t0:.0f}s")
     return total
@@ -213,12 +213,13 @@ def run_module(d):
 def main():
     d = u2.connect()
     print("✅ 设备已连接")
-    d.press("home"); time.sleep(1)
-    d.app_stop(APP_PACKAGE); time.sleep(2)
-    d.app_start(APP_PACKAGE); time.sleep(8)
+    d.press("home"); time.sleep(0.4)
+    d.app_stop(APP_PACKAGE); time.sleep(0.8)
+    d.app_start(APP_PACKAGE); time.sleep(3)
     for _ in range(3):
         dismiss_global_popups(d)
     close_ad(d)
+    # ★ 仅命令行单跑时需要；多模块调度器已在开头统一切换一次，不重复
     if not ensure_grade(d, GRADE_LEVEL, BOOK_VERSION):
         print("❌ 年级切换失败")
         return 1

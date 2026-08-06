@@ -59,13 +59,18 @@ python modules/语音评测.py     # 语音评测
 
 ```
 英语宝模块检测/
-├── web_server.py                 # Web 控制面板（Flask）
-├── templates/index.html          # 前端页面
+├── web_server.py                 # Web 控制面板（Flask，唯一启动入口）
+├── config.yaml                   # 配置（设备/APP）
+├── templates/index.html          # 前端页面（餐馆经营系统）
 ├── scripts/
-│   ├── engine.py                 # ★ 核心引擎（题型处理/排序/匹配）
+│   ├── engine.py                 # ★ 核心引擎（题型处理/排序/匹配/填空）
+│   ├── scheduler.py              # ★ 多模块调度器（统一切年级+依次调模块）
 │   ├── config.py                 # 配置（模块/弹窗/年级）
 │   ├── common/
-│   │   └── tools.py              # ★ 工具函数（S() 坐标换算/广告关闭/年级切换）
+│   │   ├── logger.py             # ★ 全局日志通道（模块流程 → 前端）
+│   │   ├── tools.py              # 工具函数（坐标换算/广告关闭/年级切换）
+│   │   ├── device.py             # 设备管理（ANDROID_SERIAL 选择）
+│   │   └── setup.py              # 版本/年级切换
 │   └── modules/
 │       ├── 听力专项.py           # 听力专项（练习+测试）
 │       ├── 口语训练.py           # 口语训练（录音/小喇叭）
@@ -73,8 +78,14 @@ python modules/语音评测.py     # 语音评测
 │       ├── 知识过关.py           # 知识过关（重点词汇+重点句型）
 │       ├── 巧记单词.py           # 巧记单词（单词同步闯关）
 │       └── 语音评测.py           # 语音评测（题目未做好，仅进入）
+├── src/                          # 旧版批量检查引擎（web_server 部分引用）
+├── routes/                       # Flask 路由（web_server 启动导入）
+├── data/                         # 知识库/检查数据
 ├── docs/                         # 早期规划文档
-└── outputs/                      # 截图/日志
+├── outputs/                      # 输出
+├── screenshots/                  # 截图
+├── uploads/                      # 上传文件
+└── _archive/                     # 弃用文件归档（可删除）
 ```
 
 ---

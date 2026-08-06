@@ -17,17 +17,17 @@ d = u2.connect()
 def sw():
     """向上滑一次（内容向下滚动）"""
     d.swipe(500, 1400, 500, 400, duration=0.3)
-    time.sleep(1)
+    time.sleep(0.4)
 
 def back(n=1):
     for _ in range(n):
-        d.press("back"); time.sleep(1.2)
+        d.press("back"); time.sleep(0.5)
 
 def wait_for(target, timeout=10):
     for _ in range(timeout):
         if d(text=target).exists(timeout=1):
             return True
-        time.sleep(0.8)
+        time.sleep(0.35)
     return False
 
 def click_if_exist(target, wait_after=2):
@@ -53,7 +53,7 @@ def answer_loop(max_q=10):
 
         # 检查
         click_if_exist("检查", 1.5)
-        time.sleep(1)
+        time.sleep(0.4)
 
         # 下一题
         if click_if_exist("下一题", 2):
@@ -91,7 +91,7 @@ for _ in range(10):
     if d(text="听力专项").exists(timeout=1.5): break
     sw()
 d(text="听力专项").click(timeout=3)
-time.sleep(4)
+time.sleep(1.6)
 
 results = []
 
@@ -127,7 +127,7 @@ for unit in [6, 7, 8, 9]:
         print(f"  ❌ 找不到 U{unit} 的去练习")
         continue
 
-    time.sleep(4)
+    time.sleep(1.6)
     print(f"  ✅ 进入 U{unit}")
 
     # 2b. U{unit} 概览页 → 遍历子模块
@@ -166,11 +166,11 @@ for unit in [6, 7, 8, 9]:
 
             # 返回 Level 列表
             back(1)
-            time.sleep(2)
+            time.sleep(0.8)
 
     # 返回 U{unit} 概览
     back(2)
-    time.sleep(2)
+    time.sleep(0.8)
 
 # 返回主页
 go_main()

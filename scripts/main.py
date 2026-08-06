@@ -16,8 +16,8 @@ if __name__ == "__main__":
     print(f"📋 待跑模块: {len(modules)} 个 → {modules}")
 
     # 强制重启 App 回主页
-    d.app_stop(APP_PACKAGE); time.sleep(2)
-    d.app_start(APP_PACKAGE); time.sleep(7)
+    d.app_stop(APP_PACKAGE); time.sleep(0.8)
+    d.app_start(APP_PACKAGE); time.sleep(3.5)
     # 关广告
     for _ in range(3):
         dismiss_global_popups(d)
@@ -49,7 +49,7 @@ if __name__ == "__main__":
         if i < len(modules):
             print(f"  ↩ 返回主页...")
             back_to_home(d, GRADE_LEVEL)
-            time.sleep(2)
+            time.sleep(0.8)
 
     # 汇总
     print(f"\n{'='*45}")

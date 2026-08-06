@@ -10,8 +10,8 @@ print(f"✅ 设备已连接，目标: {TARGET_MODULE}")
 
 # 回到主页
 for _ in range(5):
-    d.press("back"); time.sleep(1)
-d.app_start("com.dinoenglish.yyb"); time.sleep(5)
+    d.press("back"); time.sleep(0.4)
+d.app_start("com.dinoenglish.yyb"); time.sleep(2.5)
 
 # 确认年级
 print("🔍 确认「五年级上册」...")
@@ -23,7 +23,7 @@ print("✅ 已确认")
 print(f"🔍 查找「{TARGET_MODULE}」...")
 for i in range(8):
     if d(text=TARGET_MODULE).exists(timeout=1.5): break
-    d.swipe(500,1400,500,400,0.3); time.sleep(1)
+    d.swipe(500,1400,500,400,0.3); time.sleep(0.4)
 
 if not d(text=TARGET_MODULE).exists(timeout=2):
     print(f"❌ 找不到 {TARGET_MODULE}")
@@ -36,7 +36,7 @@ if not d(text=TARGET_MODULE).exists(timeout=2):
 
 d(text=TARGET_MODULE).click(timeout=2)
 print(f"✅ 已进入 {TARGET_MODULE}")
-time.sleep(4)
+time.sleep(1.6)
 
 # 检查空态
 if d(text="暂无数据").exists(timeout=3):
@@ -58,7 +58,7 @@ while q < 20:
         if d(text=kw).exists(timeout=2):
             d(text=kw).click()
             print(f"  ⏩ 点击 {kw}")
-            time.sleep(2)
+            time.sleep(0.8)
             found = True
             break
     if not found:

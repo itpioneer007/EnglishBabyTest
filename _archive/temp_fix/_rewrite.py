@@ -22,20 +22,20 @@ else:
     for _ in range(max_q):
         # 中途弹窗
         for kw in ('继续答题（0S）', '继续答题', '确定', '好的'):
-            if d(text=kw).exists(timeout=0.3):
+            if d(text=kw).exists(timeout=0.1):
                 d(text=kw).click()
-                time.sleep(1.5)
+                time.sleep(0.6)
                 break
         # 最后一题 → 查看报告
-        if d(text="查看报告").exists(timeout=0.5):
+        if d(text="查看报告").exists(timeout=0.15):
             d(text="查看报告").click()
             print(f"    ✅ 查看报告！知识关过完成")
-            time.sleep(2)
+            time.sleep(0.8)
             return q
         # 下一题按钮
-        if d(text="下一题").exists(timeout=0.5):
+        if d(text="下一题").exists(timeout=0.15):
             d(text="下一题").click()
-            time.sleep(1.5)
+            time.sleep(0.6)
             continue
 
         # 题型识别（页面文字）
@@ -44,19 +44,19 @@ else:
             texts += (e.text or "") + " "
 
         # 1. 录音题
-        if d(text="点原音").exists(timeout=0.3) or d(text="点读原音").exists(timeout=0.3):
+        if d(text="点原音").exists(timeout=0.1) or d(text="点读原音").exists(timeout=0.1):
             print(f"    🎤 录音题")
-            if d(text="点原音").exists(timeout=0.3):
+            if d(text="点原音").exists(timeout=0.1):
                 d(text="点原音").click()
-            elif d(text="点读原音").exists(timeout=0.3):
+            elif d(text="点读原音").exists(timeout=0.1):
                 d(text="点读原音").click()
-            time.sleep(2)
+            time.sleep(0.8)
             if d(text="点击录音").exists(timeout=0.8):
                 d(text="点击录音").click()
-                time.sleep(1.5)
+                time.sleep(0.6)
             if d(text="点击结束").exists(timeout=0.8):
                 d(text="点击结束").click()
-                time.sleep(2)
+                time.sleep(0.8)
             q += 1
             continue
 
@@ -90,7 +90,7 @@ else:
                 if idx < len(letter_btns):
                     bx, by = letter_btns[idx]
                     d.click(bx, by)
-                    time.sleep(0.4)
+                    time.sleep(0.2)
             q += 1
             continue
 
@@ -104,32 +104,32 @@ else:
                 pass
             for cx, cy, y1 in edit_inputs:
                 d.click(cx, cy)
-                time.sleep(1)
+                time.sleep(0.4)
                 try:
                     d.send_keys("a")
                 except Exception:
                     d.shell("input text a")
                 time.sleep(0.3)
             d.press("back")
-            time.sleep(1)
+            time.sleep(0.4)
             q += 1
             continue
 
         # 2. 选择题（A 选项 + 检测按钮）
-        if d(text="A").exists(timeout=0.5):
+        if d(text="A").exists(timeout=0.15):
             d(text="A").click()
             time.sleep(0.3)
             if d(text="检测").exists(timeout=1.5):
                 d(text="检测").click()
                 print(f"    ✓ 选择A → 检测")
-                time.sleep(1.5)
+                time.sleep(0.6)
             q += 1
             continue
 
         # 未知
         d.screenshot(f"unknown_kp_{q}.png")
         print(f"    ⚠ 未知: {texts[:5]}")
-        time.sleep(2)
+        time.sleep(0.8)
     return q
 
 

@@ -67,9 +67,9 @@ def main():
     print("✅ 设备已连接")
 
     # 1. 重启 App 回主页
-    d.press("home"); time.sleep(1)
-    d.app_stop(APP_PACKAGE); time.sleep(2)
-    d.app_start(APP_PACKAGE); time.sleep(8)
+    d.press("home"); time.sleep(0.4)
+    d.app_stop(APP_PACKAGE); time.sleep(0.8)
+    d.app_start(APP_PACKAGE); time.sleep(3)
 
     # 2. 关广告 + 确认年级
     for _ in range(3):

@@ -35,10 +35,13 @@ DEFAULT_VERSION = "湘少版"
 
 
 def _switch_if_needed(d, version, grade):
-    """切换到目标版本+年级；已是目标则跳过"""
+    """切换到目标版本+年级；已是目标则跳过
+    ★ 调度器统一在此做一次年级切换，各模块的 run_module 不再各自切换"""
     if version and grade:
         try:
-            switch_version_grade(d, version, grade, skip_if_ok=True)
+            ok = switch_version_grade(d, version, grade, skip_if_ok=True)
+            if ok is True:
+                step_log(f"✔ 版本/年级已是 {version} {grade}，无需切换", "info")
         except Exception as e:
             print(f"  ⚠ 切换版本/年级异常: {e}")
 
@@ -62,9 +65,9 @@ def run_all(module_names=None, d=None, version=None, grade=None):
     # 0. 重启 App 回主页（保证干净起点，避免停留在上个模块的答题页）
     step_log("🔄 重启 App，准备开始烹饪...", "step")
     try:
-        d.press("home"); time.sleep(1)
-        d.app_stop(APP_PACKAGE); time.sleep(2)
-        d.app_start(APP_PACKAGE); time.sleep(8)
+        d.press("home"); time.sleep(0.4)
+        d.app_stop(APP_PACKAGE); time.sleep(0.8)
+        d.app_start(APP_PACKAGE); time.sleep(3)
     except Exception as e:
         step_log(f"⚠ App 重启异常: {e}", "error")
 
@@ -102,8 +105,9 @@ def run_all(module_names=None, d=None, version=None, grade=None):
             results[name] = {"q": 0, "t": elapsed, "ok": False, "error": str(e)}
             step_log(f"❌ {name} 烹饪失败: {e}", "error")
 
-        # 模块间回到主页（保证下一模块干净起点）
-        time.sleep(2)
+        # 模块间回到主页（保证下一模块干净起点；★ 不再切换年级，调度器只在开头切一次）
+        step_log(f"↩ {name} 完成，返回主页准备下一道菜…", "info")
+        time.sleep(0.8)
 
     # 汇总
     total_q = sum(r.get("q", 0) for r in results.values())
@@ -127,9 +131,9 @@ def main():
 
     d = u2.connect()
     # 重启 App 回主页（保证干净起点）
-    d.press("home"); time.sleep(1)
-    d.app_stop(APP_PACKAGE); time.sleep(2)
-    d.app_start(APP_PACKAGE); time.sleep(8)
+    d.press("home"); time.sleep(0.4)
+    d.app_stop(APP_PACKAGE); time.sleep(0.8)
+    d.app_start(APP_PACKAGE); time.sleep(3)
     run_all(names if names else None, d, version=version, grade=grade)
     return 0
 

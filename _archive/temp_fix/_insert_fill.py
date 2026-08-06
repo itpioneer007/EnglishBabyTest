@@ -43,7 +43,7 @@ def _handle_fill_blank(d, config):
     words = ['a', 'b', 'cat', 'dog', 'sun', 'ok', 'hi', 'go']
     for attempt in range(8):
         d.swipe(540, 1200, 540, 800, 0.4)
-        time.sleep(1)
+        time.sleep(0.4)
         inputs = _find_inputs()
         if len(inputs) >= 3:
             break
@@ -54,25 +54,25 @@ def _handle_fill_blank(d, config):
 
     for i, (cx, cy, y1) in enumerate(inputs, 1):
         d.click(cx, cy)
-        time.sleep(1.5)
+        time.sleep(0.6)
         word = random.choice(words)
         for ch in word:
             if ch in _KEYBOARD_LETTERS:
                 px, py = _KEYBOARD_LETTERS[ch]
                 d.click(px, py)
                 time.sleep(0.3)
-        time.sleep(0.8)
+        time.sleep(0.35)
         d.click(960, 1140)  # 点右下角"确定"
-        time.sleep(1.2)
+        time.sleep(0.5)
         if i < len(inputs):
             d.swipe(540, 1200, 540, 600, 0.3)
-            time.sleep(1)
+            time.sleep(0.4)
 
-    time.sleep(1)
+    time.sleep(0.4)
     if d(text="检查").exists(timeout=2):
         d(text="检查").click()
         print(f"    填空完成，点击检查")
-        time.sleep(1.5)
+        time.sleep(0.6)
         return True
     return False
 

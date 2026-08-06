@@ -30,18 +30,18 @@ def find_levels():
 def enter_level(level_pos):
     """点关卡→马上闯关→进入答题页"""
     d.click(*level_pos)
-    time.sleep(3)
+    time.sleep(1.2)
     # 单词浏览页
     if d(text="马上闯关").exists(timeout=3):
         print(f"  ✅ 进入单词浏览页，点马上闯关")
         d(text="马上闯关").click()
-        time.sleep(3)
+        time.sleep(1.2)
         # 答题页
         texts = [e.text for e in (d.xpath('//*[@text!=""]').all() or []) if e.text]
         qinfo = [t for t in texts if '/' in t and '关' in t]
         print(f"  📝 答题页: {qinfo[:1]}")
         return True
-    elif d(text="马上闯关").exists(timeout=0.5) is False:
+    elif d(text="马上闯关").exists(timeout=0.15) is False:
         # 可能直接进答题页或关卡锁定
         texts = [e.text for e in (d.xpath('//*[@text!=""]').all() or []) if e.text]
         print(f"  ⚠ 未出现马上闯关: {texts[:4]}")
@@ -54,7 +54,7 @@ def exit_to_map():
         if 'boss关' in texts or any(t.isdigit() and int(t)<=9 for t in texts if t.isdigit()):
             return True
         d.press('back')
-        time.sleep(1.5)
+        time.sleep(0.6)
     return False
 
 # ==== 主流程 ====
@@ -97,7 +97,7 @@ if ok:
     if d(text="下一单元").exists(timeout=2):
         d(text="下一单元").click()
         print(f"  ✅ 点下一单元")
-        time.sleep(3)
+        time.sleep(1.2)
         texts = [e.text for e in (d.xpath('//*[@text!=""]').all() or []) if e.text]
         print(f"  下一单元地图: {texts[:12]}")
 else:

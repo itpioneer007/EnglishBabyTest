@@ -52,8 +52,8 @@ print(f"✅ 设备已连接，目标: {TARGET_MODULE}（界面: {e}）")
 
 # 回主页 + 启动
 for _ in range(5):
-    d.press("back"); time.sleep(1)
-d.app_start("com.dinoenglish.yyb"); time.sleep(5)
+    d.press("back"); time.sleep(0.4)
+d.app_start("com.dinoenglish.yyb"); time.sleep(2.5)
 
 # 确认年级
 print("🔍 确认「五年级上册」...")
@@ -65,7 +65,7 @@ print("✅ 已确认")
 print(f"🔍 查找「{e}」...")
 for i in range(8):
     if d(text=e).exists(timeout=1.5): break
-    d.swipe(500,1400,500,400,0.3); time.sleep(1)
+    d.swipe(500,1400,500,400,0.3); time.sleep(0.4)
 if not d(text=e).exists(timeout=2):
     print(f"❌ 找不到 {e}"); exit(1)
 d(text=e).click(timeout=2)
@@ -83,12 +83,12 @@ if cfg["has_entry_button"]:
     if not d(text=btn).exists(timeout=3):
         # 尝试滑动
         for _ in range(3):
-            d.swipe(500,1400,500,400,0.3); time.sleep(1)
+            d.swipe(500,1400,500,400,0.3); time.sleep(0.4)
             if d(text=btn).exists(timeout=1.5): break
     if d(text=btn).exists(timeout=2):
         d(text=btn).click()
         print(f"✅ 点击 {btn}")
-        time.sleep(3)
+        time.sleep(1.2)
     else:
         print(f"⚠ 未找到「{btn}」，尝试直接答题")
 
@@ -99,7 +99,7 @@ finish_kw = cfg["finish_texts"]
 while q < 20:
     # 完成判定
     for kw in finish_kw:
-        if d(text=kw).exists(timeout=0.5):
+        if d(text=kw).exists(timeout=0.15):
             d(text=kw).click()
             print(f"  ⏹ {kw}，结束")
             break
@@ -111,20 +111,20 @@ while q < 20:
 
         # 选答案（A/B/C/T/F）
         for opt in ("A","B","C","T","F"):
-            if d(text=opt).exists(timeout=0.3):
+            if d(text=opt).exists(timeout=0.1):
                 d(text=opt).click(); time.sleep(0.3)
                 break
         # 检查按钮
         for kw in ("检查","提交"):
             if d(text=kw).exists(timeout=1):
-                d(text=kw).click(); time.sleep(1)
+                d(text=kw).click(); time.sleep(0.4)
                 break
 
         # 下一题
         found = False
         for kw in next_kw:
             if d(text=kw).exists(timeout=2):
-                d(text=kw).click(); time.sleep(2)
+                d(text=kw).click(); time.sleep(0.8)
                 found = True
                 break
         if not found:

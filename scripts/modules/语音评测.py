@@ -32,10 +32,10 @@ def _enter_voice_eval(d):
     for _ in range(5):
         if d(text="教材精学").exists(timeout=1):
             break
-        d.press("back"); time.sleep(1.5)
+        d.press("back"); time.sleep(0.6)
     d.click(*S(d, *VOICE_CARD))
     print(f"    ✅ 点语音评测卡片")
-    time.sleep(4)
+    time.sleep(1.6)
     # 页面标题是图片（没有"语音评测"文字），通过内容特征判断：
     # 有"简介/目录" tab + "学习进度" + "暂无数据" 或教材名
     for kw in ("学习进度", "暂无数据", "简介"):
@@ -52,7 +52,7 @@ def run_module(d):
     if not _enter_voice_eval(d):
         return 0
     # 题目未做好，停留几秒后返回主页
-    time.sleep(2)
+    time.sleep(0.8)
     print(f"✅ 语音评测进入完成, 耗时 {time.time()-t0:.0f}s")
     return 1
 
@@ -60,12 +60,13 @@ def run_module(d):
 def main():
     d = u2.connect()
     print("✅ 设备已连接")
-    d.press("home"); time.sleep(1)
-    d.app_stop(APP_PACKAGE); time.sleep(2)
-    d.app_start(APP_PACKAGE); time.sleep(8)
+    d.press("home"); time.sleep(0.4)
+    d.app_stop(APP_PACKAGE); time.sleep(0.8)
+    d.app_start(APP_PACKAGE); time.sleep(3)
     for _ in range(3):
         dismiss_global_popups(d)
     close_ad(d)
+    # ★ 仅命令行单跑时需要；多模块调度器已在开头统一切换一次，不重复
     if not ensure_grade(d, GRADE_LEVEL, BOOK_VERSION):
         print("❌ 年级切换失败")
         return 1

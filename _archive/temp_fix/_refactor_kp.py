@@ -36,12 +36,12 @@ old = '''        # 找 EditText（填空方框）
                     d.click(bx, by)
                 except Exception:
                     pass
-                time.sleep(0.4)
+                time.sleep(0.2)
             # 点检测
             try:
                 if d(text="检测").exists(timeout=1.5):
                     d(text="检测").click()
-                    time.sleep(1.5)
+                    time.sleep(0.6)
             except Exception:
                 pass
             q += 1
@@ -58,7 +58,7 @@ old = '''        # 找 EditText（填空方框）
             for cx, cy, y1 in edit_inputs:
                 try:
                     d.click(cx, cy)
-                    time.sleep(1)
+                    time.sleep(0.4)
                     d.send_keys("a")
                 except Exception:
                     try:
@@ -70,12 +70,12 @@ old = '''        # 找 EditText（填空方框）
                 d.press("back")
             except Exception:
                 pass
-            time.sleep(1)
+            time.sleep(0.4)
             # 点检测
             try:
                 if d(text="检测").exists(timeout=1.5):
                     d(text="检测").click()
-                    time.sleep(1.5)
+                    time.sleep(0.6)
             except Exception:
                 pass
             q += 1
@@ -132,7 +132,7 @@ new = '''        # 题目文字（用于判断题型）
                     d.click(*first_box)
                 except Exception:
                     pass
-                time.sleep(1)
+                time.sleep(0.4)
                 # 依次点字母：按字母表顺序找可用字母，填每个方框
                 # 每个方框按 a-z 顺序点（保证填入字母，不用关心具体哪个字母）
                 # 简化：直接按 a, b, c, d, e... 顺序点字母按钮，直到检测出现
@@ -144,14 +144,14 @@ new = '''        # 题目文字（用于判断题型）
                             pass
                         time.sleep(0.3)
                         # 检测出现了就停
-                        if d(text="检测").exists(timeout=0.3):
+                        if d(text="检测").exists(timeout=0.1):
                             break
-                time.sleep(1)
+                time.sleep(0.4)
                 # 点检测
                 try:
                     if d(text="检测").exists(timeout=1.5):
                         d(text="检测").click()
-                        time.sleep(1.5)
+                        time.sleep(0.6)
                 except Exception:
                     pass
                 q += 1
@@ -200,11 +200,11 @@ new = '''        # 题目文字（用于判断题型）
                     d.click(bx, by)
                 except Exception:
                     pass
-                time.sleep(0.4)
+                time.sleep(0.2)
             try:
                 if d(text="检测").exists(timeout=1.5):
                     d(text="检测").click()
-                    time.sleep(1.5)
+                    time.sleep(0.6)
             except Exception:
                 pass
             q += 1
@@ -221,7 +221,7 @@ new = '''        # 题目文字（用于判断题型）
             for cx, cy, y1 in edit_inputs:
                 try:
                     d.click(cx, cy)
-                    time.sleep(1)
+                    time.sleep(0.4)
                     d.send_keys("a")
                 except Exception:
                     try:
@@ -233,11 +233,11 @@ new = '''        # 题目文字（用于判断题型）
                 d.press("back")
             except Exception:
                 pass
-            time.sleep(1)
+            time.sleep(0.4)
             try:
                 if d(text="检测").exists(timeout=1.5):
                     d(text="检测").click()
-                    time.sleep(1.5)
+                    time.sleep(0.6)
             except Exception:
                 pass
             q += 1

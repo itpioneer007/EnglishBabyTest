@@ -64,7 +64,7 @@ def _handle_fill_blank(d, config):
             if round_i < 4:
                 # 下滑找新方框
                 d.swipe(540, 1800, 540, 800, 0.4)
-                time.sleep(1.5)
+                time.sleep(0.6)
                 continue
             else:
                 break
@@ -72,26 +72,26 @@ def _handle_fill_blank(d, config):
         # 填一个方框（避免 back 后布局变化丢失目标）
         cx, cy, y1 = new_inputs[0]
         d.click(cx, cy)
-        time.sleep(1.5)
+        time.sleep(0.6)
         word = random.choice(words)
         for ch in word:
             if ch == ' ':
                 d.click(*_KEYBOARD_LETTERS[' '])
             elif ch.lower() in _KEYBOARD_LETTERS:
                 d.click(*_KEYBOARD_LETTERS[ch.lower()])
-            time.sleep(0.4)
-        time.sleep(0.6)
+            time.sleep(0.2)
+        time.sleep(0.3)
         # back 收起键盘（不是点\\"英文\\"按钮，那是切换中英文）
         d.press("back")
-        time.sleep(1.5)
+        time.sleep(0.6)
         filled.add(y1)
         print(f"    填 (y={y1}) 字={word}")
 
-    time.sleep(1.5)
+    time.sleep(0.6)
     if d(text="检查").exists(timeout=2):
         d(text="检查").click()
         print(f"    填空完成，点击检查")
-        time.sleep(1.5)
+        time.sleep(0.6)
         return True
     return False
 

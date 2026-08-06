@@ -94,32 +94,32 @@ def _test_answer_loop(d, max_q=30):
         if d(textContains="继续答题").exists(timeout=0.8):
             d(textContains="继续答题").click()
             print("      → 继续答题弹窗")
-            time.sleep(1.5)
+            time.sleep(0.6)
             continue
         # 练习子模块完成 → 练习报告（防卡：测试循环误入练习部分时）
         if d(text="练习报告").exists(timeout=0.8):
             d(text="练习报告").click()
             print("      → 练习报告（本轮结束）")
             step_log(f"📊 练习报告（本轮结束，共{q}题）", "success")
-            time.sleep(2)
+            time.sleep(0.8)
             # 报告页 → 继续练习/back 退出
             if d(textContains="继续练习").exists(timeout=1.5):
                 d(textContains="继续练习").click()
-                time.sleep(2)
+                time.sleep(0.8)
             return q
         # 最后一题 → 查看报告
         if d(text="查看报告").exists(timeout=0.8):
             d(text="查看报告").click()
             print("      → 查看报告！测试完成")
             step_log(f"📊 测试完成，共{q}题", "success")
-            time.sleep(2)
+            time.sleep(0.8)
             return q
         # 答错后"下一题" → 点它
         if d(text="下一题").exists(timeout=0.8):
             d(text="下一题").click()
             print("      → 下一题(答错)")
             step_log(f"  答错 → 下一题", "warning")
-            time.sleep(1.5)
+            time.sleep(0.6)
             continue
         # 新题：找选项
         opt = None
@@ -134,18 +134,18 @@ def _test_answer_loop(d, max_q=30):
             d(text=opt).click()
             print(f"      → 选 {opt}")
             step_log(f"  第{q}题: 选 {opt} → 检查", "info")
-            time.sleep(0.8)
+            time.sleep(0.35)
             # 等检查出现
             for _ in range(10):
                 try:
-                    if d(text="检查").exists(timeout=0.5):
+                    if d(text="检查").exists(timeout=0.15):
                         d(text="检查").click()
                         print(f"      → 检查")
-                        time.sleep(1.5)
+                        time.sleep(0.6)
                         break
                 except Exception:
                     pass
-                time.sleep(0.4)
+                time.sleep(0.2)
             q += 1
             continue
         # 匹配题：点第一个方框 → 点字母
@@ -203,13 +203,13 @@ def _test_answer_loop(d, max_q=30):
                 d(text="查看报告").click()
                 print("      → 查看报告！测试完成")
                 step_log(f"📊 测试完成，共{q}题", "success")
-                time.sleep(2)
+                time.sleep(0.8)
                 return q
             continue
         # 无选项无按钮 → 检查页面
         texts2 = [e.text for e in (d.xpath('//*[@text!=""]').all() or []) if e.text]
         print(f"    ⚠ 无选项: {texts2[:6]}")
-        time.sleep(1)
+        time.sleep(0.4)
     return q
 
 
@@ -223,10 +223,10 @@ def run_test_module(d):
     if not d(text="测试").exists(timeout=3):
         if not scroll_and_find(d, "听力专项"):
             print("  ❌ 找不到听力专项入口"); return 0
-        d(text="听力专项").click(); time.sleep(3)
+        d(text="听力专项").click(); time.sleep(1.2)
     if not d(text="测试").exists(timeout=3):
         print("  ❌ 找不到测试 tab"); return 0
-    d(text="测试").click(); time.sleep(3)
+    d(text="测试").click(); time.sleep(1.2)
     print("  ✅ 已进入测试 tab")
 
     for ui, unit_num in enumerate(TEST_UNITS):
@@ -242,16 +242,16 @@ def run_test_module(d):
                 found = True
                 break
             if not found:
-                S_swipe(d, 500, 1800, 500, 600, 0.3); time.sleep(1)
+                S_swipe(d, 500, 1800, 500, 600, 0.3); time.sleep(0.4)
         if not found:
             print(f"  ❌ U{unit_num} 找不到去答题"); continue
-        time.sleep(2)
+        time.sleep(0.8)
         # 规则弹窗"好的，我知道啦~"
         if d(text="好的，我知道啦~").exists(timeout=3):
-            d(text="好的，我知道啦~").click(); time.sleep(2)
+            d(text="好的，我知道啦~").click(); time.sleep(0.8)
         # 开始答题
         if d(text="开始答题").exists(timeout=3):
-            d(text="开始答题").click(); time.sleep(3)
+            d(text="开始答题").click(); time.sleep(1.2)
         # 答题循环
         q = _test_answer_loop(d)
         total += q
@@ -260,10 +260,10 @@ def run_test_module(d):
         for _ in range(3):
             if d(text="去答题").exists(timeout=1.5):
                 break
-            d.press("back"); time.sleep(1.5)
+            d.press("back"); time.sleep(0.6)
         # 回到测试 tab
         if d(text="测试").exists(timeout=2):
-            d(text="测试").click(); time.sleep(2)
+            d(text="测试").click(); time.sleep(0.8)
 
     print(f"✅ 测试部分完成: {total} 题, 耗时 {time.time()-t0:.0f}s")
     return total
@@ -282,14 +282,15 @@ def main():
     print("✅ 设备已连接")
 
     # 1. 重启 App 回主页
-    d.press("home"); time.sleep(1)
-    d.app_stop(APP_PACKAGE); time.sleep(2)
-    d.app_start(APP_PACKAGE); time.sleep(8)
+    d.press("home"); time.sleep(0.4)
+    d.app_stop(APP_PACKAGE); time.sleep(0.8)
+    d.app_start(APP_PACKAGE); time.sleep(3)
 
     # 2. 关广告 + 确认年级
     for _ in range(3):
         dismiss_global_popups(d)
     close_ad(d)
+    # ★ 仅命令行单跑时需要；多模块调度器已在开头统一切换一次，不重复
     if not ensure_grade(d, GRADE_LEVEL, BOOK_VERSION):
         print("❌ 年级切换失败")
         return 1

@@ -57,35 +57,35 @@ def _answer_loop(d, max_q=120):
     for _ in range(max_q):
         # 中途弹窗
         for kw in ('继续答题（0S）', '继续答题', '确定', '好的'):
-            if d(text=kw).exists(timeout=0.3):
+            if d(text=kw).exists(timeout=0.1):
                 d(text=kw).click()
-                time.sleep(1.5)
+                time.sleep(0.6)
                 break
         # 最后一题 → 提交（知识过关答完最后一题是"提交"而非"查看报告"）
-        if d(text="提交").exists(timeout=0.5):
+        if d(text="提交").exists(timeout=0.15):
             try:
                 d(text="提交").click()
             except Exception:
                 pass
             print(f"    ✅ 提交！知识过关完成")
-            time.sleep(2)
+            time.sleep(0.8)
             return q
         # 最后一题 → 查看报告
-        if d(text="查看报告").exists(timeout=0.5):
+        if d(text="查看报告").exists(timeout=0.15):
             try:
                 d(text="查看报告").click()
             except Exception:
                 pass
             print(f"    ✅ 查看报告！知识关过完成")
-            time.sleep(2)
+            time.sleep(0.8)
             return q
         # 下一题按钮
-        if d(text="下一题").exists(timeout=0.5):
+        if d(text="下一题").exists(timeout=0.15):
             try:
                 d(text="下一题").click()
             except Exception:
                 pass
-            time.sleep(1.5)
+            time.sleep(0.6)
             continue
 
         # 题型识别（页面文字）
@@ -94,55 +94,55 @@ def _answer_loop(d, max_q=120):
             texts += (e.text or "") + " "
 
         # 1. 录音题：检测"原音"按钮（跟读单词题）
-        if d(text="原音").exists(timeout=0.3):
+        if d(text="原音").exists(timeout=0.1):
             print(f"    🎤 录音题")
             try:
                 d(text="原音").click()
             except Exception:
                 pass
-            time.sleep(2)
+            time.sleep(0.8)
             # 点录音（多轮重试，点击结束后等待自动跳转）
             try:
                 if d(text="点击录音").exists(timeout=1):
                     d(text="点击录音").click()
-                    time.sleep(1.5)
+                    time.sleep(0.6)
             except Exception:
                 pass
             try:
                 if d(text="点击结束").exists(timeout=1):
                     d(text="点击结束").click()
-                    time.sleep(2)
+                    time.sleep(0.8)
                 else:
                     # 点完录音后可能直接出下一题/检测
-                    time.sleep(2)
+                    time.sleep(0.8)
             except Exception:
                 pass
             # 点检测
             try:
                 if d(text="检测").exists(timeout=1.5):
                     d(text="检测").click()
-                    time.sleep(1.5)
+                    time.sleep(0.6)
             except Exception:
                 pass
             q += 1
             continue
-        if d(text="点原音").exists(timeout=0.3) or d(text="点读原音").exists(timeout=0.3):
+        if d(text="点原音").exists(timeout=0.1) or d(text="点读原音").exists(timeout=0.1):
             print(f"    🎤 录音题")
-            if d(text="点原音").exists(timeout=0.3):
+            if d(text="点原音").exists(timeout=0.1):
                 d(text="点原音").click()
-            elif d(text="点读原音").exists(timeout=0.3):
+            elif d(text="点读原音").exists(timeout=0.1):
                 d(text="点读原音").click()
-            time.sleep(2)
+            time.sleep(0.8)
             if d(text="点击录音").exists(timeout=0.8):
                 d(text="点击录音").click()
-                time.sleep(1.5)
+                time.sleep(0.6)
             if d(text="点击结束").exists(timeout=0.8):
                 d(text="点击结束").click()
-                time.sleep(2)
+                time.sleep(0.8)
             # 点检测
             if d(text="检测").exists(timeout=1.5):
                 d(text="检测").click()
-                time.sleep(1.5)
+                time.sleep(0.6)
             q += 1
             continue
 
@@ -192,7 +192,7 @@ def _answer_loop(d, max_q=120):
                     d.click(*first_box)
                 except Exception:
                     pass
-                time.sleep(1)
+                time.sleep(0.4)
                 # 依次点每个字母按钮（填到所有方框）
                 # 简化：按顺序点 5-10 个字母按钮（覆盖任意方框数）
                 # 关键：每点一个后检测是否出现，出现就停
@@ -201,15 +201,15 @@ def _answer_loop(d, max_q=120):
                         d.click(bx, by)
                     except Exception:
                         pass
-                    time.sleep(0.4)
-                    if d(text="检测").exists(timeout=0.3):
+                    time.sleep(0.2)
+                    if d(text="检测").exists(timeout=0.1):
                         break
-                time.sleep(1)
+                time.sleep(0.4)
                 # 点检测
                 try:
                     if d(text="检测").exists(timeout=1.5):
                         d(text="检测").click()
-                        time.sleep(1.5)
+                        time.sleep(0.6)
                 except Exception:
                     pass
                 q += 1
@@ -258,11 +258,11 @@ def _answer_loop(d, max_q=120):
                     d.click(bx, by)
                 except Exception:
                     pass
-                time.sleep(0.4)
+                time.sleep(0.2)
             try:
                 if d(text="检测").exists(timeout=1.5):
                     d(text="检测").click()
-                    time.sleep(1.5)
+                    time.sleep(0.6)
             except Exception:
                 pass
             q += 1
@@ -279,7 +279,7 @@ def _answer_loop(d, max_q=120):
             for cx, cy, y1 in edit_inputs:
                 try:
                     d.click(cx, cy)
-                    time.sleep(1)
+                    time.sleep(0.4)
                     d.send_keys("a")
                 except Exception:
                     try:
@@ -291,18 +291,18 @@ def _answer_loop(d, max_q=120):
                 d.press("back")
             except Exception:
                 pass
-            time.sleep(1)
+            time.sleep(0.4)
             try:
                 if d(text="检测").exists(timeout=1.5):
                     d(text="检测").click()
-                    time.sleep(1.5)
+                    time.sleep(0.6)
             except Exception:
                 pass
             q += 1
             continue
 
         # 2. 选择题（A 选项 + 检测按钮）
-        if d(text="A").exists(timeout=0.5):
+        if d(text="A").exists(timeout=0.15):
             try:
                 d(text="A").click()
             except Exception:
@@ -312,14 +312,14 @@ def _answer_loop(d, max_q=120):
                 if d(text="检测").exists(timeout=1.5):
                     d(text="检测").click()
                     print(f"    ✓ 选择A → 检测")
-                    time.sleep(1.5)
+                    time.sleep(0.6)
             except Exception:
                 pass
             q += 1
             continue
 
         # 2.5 判断题（T/F 选项）
-        if d(text="T").exists(timeout=0.5) and d(text="F").exists(timeout=0.3):
+        if d(text="T").exists(timeout=0.15) and d(text="F").exists(timeout=0.1):
             try:
                 d(text="T").click()
             except Exception:
@@ -329,7 +329,7 @@ def _answer_loop(d, max_q=120):
                 if d(text="检测").exists(timeout=1.5):
                     d(text="检测").click()
                     print(f"    ✓ 判断T → 检测")
-                    time.sleep(1.5)
+                    time.sleep(0.6)
             except Exception:
                 pass
             q += 1
@@ -368,7 +368,7 @@ def _answer_loop(d, max_q=120):
         except Exception:
             pass
         print(f"    ⚠ 未知: {texts[:5]}")
-        time.sleep(2)
+        time.sleep(0.8)
     return q
 
 
@@ -390,12 +390,12 @@ def _enter_unit(d, unit_num):
                 found = True
                 break
             S_swipe(d, 540, 1800, 540, 600, 0.4)
-            time.sleep(1)
+            time.sleep(0.4)
         if not found:
             print(f"    ❌ 找不到知识过关入口")
             return False
         d(text="知识过关").click()
-        time.sleep(4)
+        time.sleep(1.6)
 
     # 找单元文本框（按 y 排序，第 unit_num 个）
     for _ in range(3):
@@ -412,20 +412,20 @@ def _enter_unit(d, unit_num):
         if units:
             break
         S_swipe(d, 540, 1800, 540, 600, 0.4)
-        time.sleep(1)
+        time.sleep(0.4)
     units.sort(key=lambda e: e.bounds[1])
     if unit_num - 1 >= len(units):
         print(f"    ❌ 找不到 U{unit_num}")
         return False
     units[unit_num - 1].click()
     print(f"    ✅ 点 U{unit_num}")
-    time.sleep(4)
+    time.sleep(1.6)
 
     # 收到了，马上去过关
     if d(text="收到了，马上去过关").exists(timeout=5):
         d(text="收到了，马上去过关").click()
         print(f"    ✅ 收到了，马上去过关")
-        time.sleep(4)
+        time.sleep(1.6)
     return True
 
 
@@ -442,7 +442,7 @@ def _enter_submodule(d, name_keyword="重点词汇"):
         if btns:
             btns[0].click()
             print(f"    ✅ 进入子模块（{btn_text}）")
-            time.sleep(4)
+            time.sleep(1.6)
             return True
     print(f"    ❌ 找不到「去闯关/重新闯关」按钮")
     return False
@@ -469,7 +469,7 @@ def _run_one_unit(d, unit_num):
                 if d(text="重点词汇").exists(timeout=1.5) or d(text="去闯关").exists(timeout=1.5) or d(text="重新闯关").exists(timeout=1.5):
                     break
                 d.press("back")
-                time.sleep(1.5)
+                time.sleep(0.6)
             if not _enter_submodule(d):
                 continue
 
@@ -487,14 +487,14 @@ def _run_one_unit(d, unit_num):
                 if d(text="重点词汇").exists(timeout=1.5) or d(text="去闯关").exists(timeout=1.5) or d(text="重新闯关").exists(timeout=1.5):
                     break
                 d.press("back")
-                time.sleep(1.5)
+                time.sleep(0.6)
         else:
             # back 2 次回单元列表
             for _ in range(3):
                 if d(text="Unit 1").exists(timeout=1.5):
                     break
                 d.press("back")
-                time.sleep(1.5)
+                time.sleep(0.6)
 
     return total
 
@@ -510,7 +510,7 @@ def run_module(d):
         if d(text="知识过关").exists(timeout=1):
             break
         S_swipe(d, 540, 1800, 540, 600, 0.4)
-        time.sleep(1)
+        time.sleep(0.4)
 
     for ui, unit_num in enumerate(UNITS):
         q = _run_one_unit(d, unit_num)
@@ -520,7 +520,7 @@ def run_module(d):
             if d(text="知识过关").exists(timeout=1.5):
                 break
             d.press("back")
-            time.sleep(1.5)
+            time.sleep(0.6)
 
     print(f"✅ 知识过关完成: {total} 题, 耗时 {time.time()-t0:.0f}s")
     return total
@@ -529,12 +529,13 @@ def run_module(d):
 def main():
     d = u2.connect()
     print("✅ 设备已连接")
-    d.press("home"); time.sleep(1)
-    d.app_stop(APP_PACKAGE); time.sleep(2)
-    d.app_start(APP_PACKAGE); time.sleep(8)
+    d.press("home"); time.sleep(0.4)
+    d.app_stop(APP_PACKAGE); time.sleep(0.8)
+    d.app_start(APP_PACKAGE); time.sleep(3)
     for _ in range(3):
         dismiss_global_popups(d)
     close_ad(d)
+    # ★ 仅命令行单跑时需要；多模块调度器已在开头统一切换一次，不重复
     if not ensure_grade(d, GRADE_LEVEL, BOOK_VERSION):
         print("❌ 年级切换失败")
         return 1

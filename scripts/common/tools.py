@@ -47,7 +47,7 @@ def close_ad(d):
         if d(description="关闭").exists(timeout=1):
             d(description="关闭").click()
             print("    🔔 通过 description='关闭' 关闭广告")
-            time.sleep(0.8)
+            time.sleep(0.35)
             return True
     except Exception:
         pass
@@ -63,7 +63,7 @@ def close_ad(d):
                     close_y = b[3] + 15
                     d.click(close_x, close_y)
                     print(f"    🔔 通过 ad 文字 [{kw}] 定位 X 按钮 ({close_x},{close_y})")
-                    time.sleep(0.8)
+                    time.sleep(0.35)
                     return True
     except Exception:
         pass
@@ -78,7 +78,7 @@ def close_ad(d):
             if w < 80 and h < 80 and b[0] > 800 and b[1] > 600:
                 elem.click()
                 print(f"    🔔 通过小尺寸 clickable (X) 关闭广告 ({sum(b)//4},{h*1000})")
-                time.sleep(0.8)
+                time.sleep(0.35)
                 return True
     except Exception:
         pass
@@ -101,7 +101,7 @@ def close_ad(d):
                 if b.get("right", 0) > d.window_size()[0] * 0.7 and b.get("top", 0) < 200:
                     elem.click()
                     print("    🔔 通过右上角 ImageView 关闭广告（检测到广告特征）")
-                    time.sleep(0.8)
+                    time.sleep(0.35)
                     return True
     except Exception:
         pass
@@ -117,7 +117,7 @@ def close_ad(d):
         if has_ad:
             d.click(986, 1823)
             print("    🔔 通过 ad-X 坐标 (986,1823) 关闭广告")
-            time.sleep(0.8)
+            time.sleep(0.35)
             return True
     except Exception:
         pass
@@ -154,7 +154,7 @@ def execute_actions(d, actions, label=""):
                     if d(text=t).exists(timeout=min(timeout, 2)):
                         d(text=t).click()
                         print(f"    🔔 关闭弹窗: '{t}'")
-                        time.sleep(0.8)
+                        time.sleep(0.35)
                         break
                 except Exception:
                     pass
@@ -168,7 +168,7 @@ def execute_actions(d, actions, label=""):
             for _ in range(5):
                 if d(text=text).exists(timeout=1.5): break
                 d.swipe(500, 1400, 500, 400, duration=0.3)
-                time.sleep(1)
+                time.sleep(0.4)
             if safe_click(d, text, timeout=min(timeout, 3)):
                 print(f"    ✅ 滑动后点击 '{text}'")
             else:
@@ -180,13 +180,13 @@ def execute_actions(d, actions, label=""):
         elif at == "swipe_left":
             # 水平左滑切换子模块
             d.swipe(900, 600, 200, 600, duration=0.3)
-            time.sleep(1.5)
+            time.sleep(0.6)
             print(f"    👈 左滑切换子模块")
 
         elif at == "swipe_left_sub":
             # 子模块区左滑：用 swipe_ext，在基础巩固文字稍上方
             d.swipe_ext("left", scale=0.5)
-            time.sleep(1.5)
+            time.sleep(0.6)
             print(f"    👈 swipe_ext 左滑")
 
 # ==================== ⑤ 基础工具 ====================
@@ -200,10 +200,10 @@ def safe_click(d, text, timeout=3) -> bool:
 def dismiss_global_popups(d):
     for t in GLOBAL_POPUPS:
         try:
-            if d(text=t).exists(timeout=0.5):
+            if d(text=t).exists(timeout=0.15):
                 d(text=t).click()
                 print(f"    🔔 全局弹窗: '{t}'")
-                time.sleep(0.8)
+                time.sleep(0.35)
                 return True
         except Exception:
             pass
@@ -215,12 +215,12 @@ def scroll_and_find(d, text, max_swipes=5) -> bool:
     # 第一轮：向上滑（内容下移）
     for _ in range(max_swipes):
         d.swipe(500, 1400, 500, 400, duration=0.3)
-        time.sleep(0.8)
+        time.sleep(0.35)
         if d(text=text).exists(timeout=1.5): return True
     # 第二轮：向下滑（内容上移，返回顶部区域）
     for _ in range(max_swipes):
         d.swipe(500, 400, 500, 1400, duration=0.3)
-        time.sleep(0.8)
+        time.sleep(0.35)
         if d(text=text).exists(timeout=1.5): return True
     return False
 
@@ -234,7 +234,7 @@ def ensure_grade(d, grade_level, book_version=""):
     for _ in range(4):
         if d(text="教材精学").exists(timeout=1) or d(text="专项突破").exists(timeout=1):
             break
-        d.press("back"); time.sleep(1.5)
+        d.press("back"); time.sleep(0.6)
 
     # ② 主页版本号如 "湘少版（2024审定）五年级上册"
     if d(textContains=grade_level).exists(timeout=3):
@@ -249,14 +249,14 @@ def ensure_grade(d, grade_level, book_version=""):
     except Exception:
         print("❌ 找不到版本号入口")
         return False
-    time.sleep(2)
+    time.sleep(0.8)
 
     # 在弹层中找年级（可能需要向上滑）
     for _ in range(8):
         if d(text=grade_level).exists(timeout=1):
             break
         d.swipe(500, 1400, 500, 400, duration=0.3)
-        time.sleep(1)
+        time.sleep(0.4)
 
     try:
         d(text=grade_level).click(timeout=3)
@@ -264,7 +264,7 @@ def ensure_grade(d, grade_level, book_version=""):
         print(f"❌ 弹层中找不到 {grade_level}")
         d.press("back")
         return False
-    time.sleep(2)
+    time.sleep(0.8)
 
     # 确认按钮
     for btn in ("确定", "确认", "完成", "好的"):
@@ -274,7 +274,7 @@ def ensure_grade(d, grade_level, book_version=""):
                 break
         except Exception:
             pass
-    time.sleep(3)
+    time.sleep(1.2)
 
     ok = d(textContains=grade_level).exists(timeout=3)
     if ok:
@@ -293,7 +293,7 @@ def back_to_home(d, grade_level):
             d.press("back")
         except Exception:
             pass
-        time.sleep(1.2)
+        time.sleep(0.5)
     return d(textContains=grade_level).exists(timeout=2)
 
 # ==================== ⑦ 核心：单模块检测 ====================

@@ -94,7 +94,7 @@ def dismiss_popups(d, popups):
             if d(text=p["text"]).exists(timeout=1):
                 d(text=p["text"]).click()
                 print(f"  🔔 关闭弹窗: {p['text']}")
-                time.sleep(1.2)
+                time.sleep(0.5)
                 return True
         except Exception:
             pass
@@ -109,8 +109,8 @@ print(f"✅ 目标: {TARGET_MODULE}")
 
 # 回主页 + 启动
 for _ in range(5):
-    d.press("back"); time.sleep(1)
-d.app_start("com.dinoenglish.yyb"); time.sleep(5)
+    d.press("back"); time.sleep(0.4)
+d.app_start("com.dinoenglish.yyb"); time.sleep(2.5)
 
 # 确认年级
 if not d(textContains="五年级上册").exists(timeout=5):
@@ -122,7 +122,7 @@ entry = cfg["entry_text"]
 print(f"🔍 查找「{entry}」...")
 for i in range(8):
     if d(text=entry).exists(timeout=1.5): break
-    d.swipe(500,1400,500,400,0.3); time.sleep(1)
+    d.swipe(500,1400,500,400,0.3); time.sleep(0.4)
 if not d(text=entry).exists(timeout=2):
     print(f"❌ 找不到 {entry}"); exit(1)
 d(text=entry).click()
@@ -143,17 +143,17 @@ if cfg["entry_button"]:
     print(f"🔍 查找入口「{btn}」...")
     if not d(text=btn).exists(timeout=3):
         for _ in range(3):
-            d.swipe(500,1400,500,400,0.3); time.sleep(1)
+            d.swipe(500,1400,500,400,0.3); time.sleep(0.4)
             if d(text=btn).exists(timeout=1.5): break
     if d(text=btn).exists(timeout=2):
         d(text=btn).click()
         print(f"✅ 点击 {btn}")
-        time.sleep(3)
+        time.sleep(1.2)
         # 处理入口后续弹窗（如"训练规则说明"）
         for _ in range(3):
             if not dismiss_popups(d, cfg["entry_popups"]):
                 break
-            time.sleep(1)
+            time.sleep(0.4)
 
 # 5. 答题循环
 q = 0
@@ -165,7 +165,7 @@ while q < 20:
 
     # 完成判定
     for kw in finish_kw:
-        if d(text=kw).exists(timeout=0.5):
+        if d(text=kw).exists(timeout=0.15):
             d(text=kw).click()
             print(f"  ⏹ {kw}，结束"); break
     else:
@@ -177,7 +177,7 @@ while q < 20:
         # 选答案
         for opt in cfg["answer_options"]:
             try:
-                if d(text=opt).exists(timeout=0.3):
+                if d(text=opt).exists(timeout=0.1):
                     d(text=opt).click(); time.sleep(0.3)
                     break
             except Exception: pass
@@ -186,7 +186,7 @@ while q < 20:
         for kw in cfg["check_buttons"]:
             try:
                 if d(text=kw).exists(timeout=1):
-                    d(text=kw).click(); time.sleep(1)
+                    d(text=kw).click(); time.sleep(0.4)
                     break
             except Exception: pass
 
@@ -195,7 +195,7 @@ while q < 20:
         for kw in next_kw:
             try:
                 if d(text=kw).exists(timeout=2):
-                    d(text=kw).click(); time.sleep(2)
+                    d(text=kw).click(); time.sleep(0.8)
                     found = True
                     break
             except Exception: pass

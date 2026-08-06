@@ -7,8 +7,8 @@ print("✅ 设备已连接")
 
 # 回到主页
 for _ in range(5):
-    d.press("back"); time.sleep(1)
-d.app_start("com.dinoenglish.yyb"); time.sleep(5)
+    d.press("back"); time.sleep(0.4)
+d.app_start("com.dinoenglish.yyb"); time.sleep(2.5)
 
 # 确认年级
 print("🔍 确认「五年级上册」...")
@@ -20,12 +20,12 @@ print("✅ 已确认")
 print("🔍 查找「听力训练」...")
 for i in range(8):
     if d(text="听力专项").exists(timeout=1.5): break
-    d.swipe(500,1400,500,400,0.3); time.sleep(1)
+    d.swipe(500,1400,500,400,0.3); time.sleep(0.4)
 if not d(text="听力专项").exists(timeout=2):
     print("❌ 找不到听力训练"); exit(1)
 d(text="听力专项").click(timeout=2)
 print("✅ 已进入听力训练")
-time.sleep(4)
+time.sleep(1.6)
 
 # 检查空态
 if d(text="暂无数据").exists(timeout=3):
@@ -47,7 +47,7 @@ while q < 20:
         if d(text=kw).exists(timeout=2):
             d(text=kw).click()
             print(f"  ⏩ 点击 {kw}")
-            time.sleep(2)
+            time.sleep(0.8)
             found = True
             break
     if not found:

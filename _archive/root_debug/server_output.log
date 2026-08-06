@@ -11,6 +11,4 @@ WARNING: This is a development server. Do not use it in a production deployment.
  * Running on http://127.0.0.1:5000
  * Running on http://192.168.10.5:5000
 Press CTRL+C to quit
-127.0.0.1 - - [06/Aug/2026 10:28:40] "GET /api/status HTTP/1.1" 200 -
-127.0.0.1 - - [06/Aug/2026 10:29:02] "POST /api/device/select HTTP/1.1" 200 -
-127.0.0.1 - - [06/Aug/2026 10:29:03] "GET /api/status HTTP/1.1" 200 -
+127.0.0.1 - - [06/Aug/2026 10:25:24] "POST /api/device/select HTTP/1.1" 200 -
