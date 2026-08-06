@@ -18,6 +18,7 @@ import sys, os, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import uiautomator2 as u2
+from common.logger import step_log
 from common.tools import (
     S, S_swipe, S_h, S_w,
     close_ad, dismiss_global_popups, ensure_grade,
@@ -140,11 +141,13 @@ def _speak_question(d, wait_countdown=True):
     # 3. 点录音图标（麦克风圆形按钮）
     d.click(pos[0], pos[1])
     print(f"    🎤 点录音 ({pos[0]},{pos[1]})")
+    step_log(f"🎤 点录音", "info")
     time.sleep(0.8)
 
     # 4. 点结束（同一位置，文字从"点击录音"变成"点击结束"）
     d.click(pos[0], pos[1])
     print(f"    ⏹ 点结束 ({pos[0]},{pos[1]})")
+    step_log(f"⏹ 点结束", "info")
     time.sleep(1.5)
     return True
 
@@ -163,6 +166,7 @@ def _answer_big_question(d, big_idx=0):
         if d(text="交卷").exists(timeout=0.3):
             d(text="交卷").click()
             print(f"    ✅ 交卷按钮出现，点击交卷")
+            step_log("✅ 交卷", "success")
             time.sleep(1.5)
             if d(text="确定交卷").exists(timeout=2):
                 d(text="确定交卷").click()
@@ -175,6 +179,7 @@ def _answer_big_question(d, big_idx=0):
         if q > 0 and d(text="下一题").exists(timeout=0.3):
             d(text="下一题").click()
             print(f"    ➡ 下一题（进入下一大题）")
+            step_log(f"➡ 进入下一大题", "step")
             time.sleep(2)
             return q
 
@@ -190,6 +195,7 @@ def _answer_big_question(d, big_idx=0):
             pos = _click_horn(d)
             if pos:
                 print(f"    🔊 点小喇叭 ({pos[0]},{pos[1]})")
+                step_log(f"🔊 点小喇叭", "info")
                 time.sleep(1.5)
 
         # 作答小题（用户约定流程：每道小题点"点击录音"→点"点击结束"，找不到就下滑）
@@ -271,6 +277,7 @@ def _run_one_unit(d, unit_num, is_retry):
             print(f"  📝 第{big}大题（最后一题）")
         else:
             print(f"  📝 第{big}大题")
+            step_log(f"📝 开始第{big}大题", "step")
         q = _answer_big_question(d, big_idx=big)
         total += q
         # 若交卷了则退出

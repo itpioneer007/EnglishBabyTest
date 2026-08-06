@@ -7,6 +7,7 @@ import uiautomator2 as u2
 import time, re
 from config import MODULE_CONFIG, GLOBAL_POPUPS, APP_PACKAGE, GRADE_LEVEL, BOOK_VERSION
 from common.tools import S, S_swipe, S_h, S_w
+from common.logger import step_log
 
 def close_ad(d):
     """关闭广告：多种策略按顺序尝试"""
@@ -275,6 +276,7 @@ def _handle_sort_question(d, config):
     之后点"检查"，答对自动进下一题 / 答错点"下一题"。
     """
     print(f"    📋 识别到排序题，处理中...")
+    step_log("🔢 检测到排序题，开始处理…", "step")
 
     # ── 先区分两种子题型 ──
     # 图片排序特征：y 700-1900 有宽度 300-700 的图片卡片
@@ -291,6 +293,7 @@ def _handle_sort_question(d, config):
     if has_big_image:
         # ── 模式A：图片排序 ── 直接点图片，序号自动填充
         print(f"    🖼 图片排序（模式A）：直接点图片，序号自动填充")
+        step_log("🖼 图片排序：直接点图片，序号自动填", "step")
         clicked_keys = set()
         # 依次点击所有大图片（每张点一次）
         for _ in range(len(big_images) + 2):
@@ -328,6 +331,7 @@ def _handle_sort_question(d, config):
 
     # ── 模式B：人物/句子排序 ── 点方框激活 + 点底部序号
     print(f"    🔢 人物/句子排序（模式B）：点方框激活 → 点序号")
+    step_log("🔢 方框排序：点方框激活 → 点序号", "step")
     # 1. 点第一个方框（y 700-1900、宽度100-300的可点击元素，即句子方框）
     clicked_box = False
     for e in (d.xpath('//*[@clickable="true"]').all() or []):
@@ -467,6 +471,7 @@ def _handle_sentence_sort(d, config):
     """
     import time
     print(f"    📝 句子圆圈排序题：直接按顺序点击句子（序号自动填入）")
+    step_log("📝 圆圈排序题：直接点句子", "step")
 
     def _find_sentences():
         """找未填的整行句子（宽 > 800，y 700-1900）。
@@ -576,6 +581,7 @@ def _handle_match_question(d, config):
       3. 因此只需把字母选项（A/B/C/D/E）全部依次点击完即可
     """
     print(f"    📋 识别到匹配题，处理中...")
+    step_log("📋 检测到匹配题，开始配对…", "step")
 
     # 1. 点第一个可点击方框激活字母选项界面（人物名文字所在区域的方框）
     clicked_box = False
@@ -699,6 +705,7 @@ def _answer_loop(d, config, module_name):
         if d(text="练习报告").exists(timeout=0.5):
             d(text="练习报告").click()
             print(f"      → 练习报告（最后一题）")
+            step_log(f"📊 练习报告（子模块完成，共{q}题）", "success")
             time.sleep(1)
             if not config.get('_is_last_sub', False):
                 for _ in range(8):
@@ -714,6 +721,7 @@ def _answer_loop(d, config, module_name):
         if d(text="下一题").exists(timeout=0.5):
             d(text="下一题").click()
             print(f"      → 下一题（答错）")
+            step_log(f"  第{q}题: 答错 → 下一题", "warning")
             time.sleep(1)
             continue
 
@@ -751,6 +759,7 @@ def _answer_loop(d, config, module_name):
         # 新题：计数
         q += 1
         print(f"    📸 第{q}题")
+        step_log(f"📸 第{q}题", "step")
 
         # 等渲染 + 选答案
         time.sleep(0.3)
@@ -760,6 +769,7 @@ def _answer_loop(d, config, module_name):
                 if d(text=opt).exists(timeout=0.3):
                     d(text=opt).click()
                     print(f"      → 选 {opt}")
+                    step_log(f"  第{q}题: 选 {opt} → 检查", "info")
                     time.sleep(0.5)
                     answered = True
                     break
@@ -971,6 +981,7 @@ def _handle_fill_blank(d, config):
     """
     import random
     print(f"    填空题，处理中...")
+    step_log("📝 补全短文/填空题：开始逐框输入", "step")
 
     # 开场：确保 EditText 可见（首次进入"补全短文"题时 App 会自动激活系统键盘
     #   把方框挡住，dump 里看不到 EditText 节点；先按 back 收起键盘）
@@ -1033,6 +1044,7 @@ def _handle_fill_blank(d, config):
             d.press("back")
             time.sleep(1.5)
             print(f"    填一空 ({cx},{cy}) 字={word}")
+            step_log(f"  ✏ 输入: {word}", "info")
             no_new_swipes = 0
             continue
 
@@ -1054,6 +1066,7 @@ def _handle_fill_blank(d, config):
         if btn:
             d(text=btn).click()
             print(f"    填空完成，点击{btn}")
+            step_log("✅ 填空全部完成", "success")
             time.sleep(2)
             break
         S_swipe(d, 540, 1800, 540, 600, 0.4)
@@ -1063,6 +1076,7 @@ def _handle_fill_blank(d, config):
     if d(text="下一题").exists(timeout=2):
         d(text="下一题").click()
         print(f"    点击下一题")
+        step_log("➡ 填空答完，进入下一题", "info")
         time.sleep(2)
     return True
 

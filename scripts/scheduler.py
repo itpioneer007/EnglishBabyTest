@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import uiautomator2 as u2
 from common.setup import switch_version_grade
 from common.tools import close_ad, dismiss_global_popups
+from common.logger import step_log
 
 # ═══════════ 模块注册表：新增模块只需在此加一行 ═══════════
 MODULE_MAP = {
@@ -59,15 +60,17 @@ def run_all(module_names=None, d=None, version=None, grade=None):
         grade = DEFAULT_GRADE
 
     # 0. 重启 App 回主页（保证干净起点，避免停留在上个模块的答题页）
+    step_log("🔄 重启 App，准备开始烹饪...", "step")
     try:
         d.press("home"); time.sleep(1)
         d.app_stop(APP_PACKAGE); time.sleep(2)
         d.app_start(APP_PACKAGE); time.sleep(8)
     except Exception as e:
-        print(f"  ⚠ App 重启异常: {e}")
+        step_log(f"⚠ App 重启异常: {e}", "error")
 
     # 0.5 关广告（与单模块 main() 一致：先清全局弹窗 + 关广告，再操作界面，
     #     否则重启 App 后主页广告/弹窗未关，后续点坐标会点到广告上！）
+    step_log("🧹 清理广告弹窗...", "step")
     try:
         for _ in range(3):
             dismiss_global_popups(d)
@@ -76,41 +79,36 @@ def run_all(module_names=None, d=None, version=None, grade=None):
         print(f"  ⚠ 关广告异常: {e}")
 
     # 1. 前提：切换版本+年级（全部模块共用一次）
-    print(f"前提设置: {version} {grade}")
+    step_log(f"🔧 切换版本/年级: {version} {grade}", "step")
     _switch_if_needed(d, version, grade)
 
     results = {}
-    for name in module_names:
+    for i, name in enumerate(module_names):
         if name not in MODULE_MAP:
             print(f"未知模块: {name}（可选: {list(MODULE_MAP.keys())}）")
             results[name] = {"q": 0, "t": 0, "ok": False, "error": "未知模块"}
             continue
 
-        print(f"{'='*50}")
-        print(f"开始模块: {name}")
-        print(f"{'='*50}")
+        step_log(f"🍳 开始烹饪第 {i+1}/{len(module_names)} 道菜: {name}", "step")
         t0 = time.time()
         try:
             mod = importlib.import_module(MODULE_MAP[name])
             q = mod.run_module(d)
-            results[name] = {"q": q, "t": round(time.time() - t0), "ok": True}
+            elapsed = round(time.time() - t0)
+            results[name] = {"q": q, "t": elapsed, "ok": True}
+            step_log(f"✅ {name} 完成: {q} 题, 耗时 {elapsed}s", "success")
         except Exception as e:
-            print(f"{name} 异常: {e}")
-            results[name] = {"q": 0, "t": round(time.time() - t0), "ok": False, "error": str(e)}
+            elapsed = round(time.time() - t0)
+            results[name] = {"q": 0, "t": elapsed, "ok": False, "error": str(e)}
+            step_log(f"❌ {name} 烹饪失败: {e}", "error")
 
         # 模块间回到主页（保证下一模块干净起点）
         time.sleep(2)
 
     # 汇总
-    print(f"{'='*50}")
-    print("调度汇总")
-    print(f"{'='*50}")
-    total_q = 0
-    for name, r in results.items():
-        status = "OK" if r.get("ok") else "FAIL"
-        print(f"  [{status}] {name}: {r['q']} 题, {r['t']}s")
-        total_q += r["q"]
-    print(f"  总模块: {len(results)} | 总题数: {total_q}")
+    total_q = sum(r.get("q", 0) for r in results.values())
+    ok_n = sum(1 for r in results.values() if r.get("ok"))
+    step_log(f"🍲 全部烹饪完成！{len(results)} 道菜, {ok_n} 道成功, 累计 {total_q} 题", "success")
     return results
 
 

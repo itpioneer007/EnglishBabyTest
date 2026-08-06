@@ -18,6 +18,7 @@ from common.tools import (
     S, S_swipe, S_h, S_w,
     close_ad, dismiss_global_popups, ensure_grade, scroll_and_find,
 )
+from common.logger import step_log
 from engine import _handle_match_question, _handle_sort_question
 
 APP_PACKAGE = "com.dinoenglish.yyb"
@@ -48,12 +49,14 @@ def _answer_loop(d, max_q=60):
         if d(text="查看报告").exists(timeout=0.6):
             d(text="查看报告").click()
             print("      → 查看报告！单元自检完成")
+            step_log(f"📊 单元自检完成，共{q}题", "success")
             time.sleep(2)
             return q
         # 答错后"下一题" → 点它
         if d(text="下一题").exists(timeout=0.6):
             d(text="下一题").click()
             print("      → 下一题(答错)")
+            step_log(f"  答错 → 下一题", "warning")
             time.sleep(1.5)
             continue
         # 新题：找选项
@@ -68,6 +71,7 @@ def _answer_loop(d, max_q=60):
         if opt:
             d(text=opt).click()
             print(f"      → 选 {opt}")
+            step_log(f"  第{q}题: 选 {opt} → 检查", "info")
             time.sleep(0.8)
             # 等检查出现并点击
             for _ in range(10):
