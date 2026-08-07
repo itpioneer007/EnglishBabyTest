@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>英语宝自动化检测 - 餐馆经营系统</title>
+<title>E英语宝 · 自动化检测与审查系统</title>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#faf7f2;color:#3d3226;min-height:100vh}
@@ -98,6 +98,19 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 .log-item.info{}.log-item.info .t{color:#94a3b8}
 .log-item.success{background:#f0fdf4;color:var(--green)}
 .log-item.error{background:var(--red-light);color:var(--red)}
+/* 审查证据卡 */
+.review-log{flex-direction:column!important;gap:4px!important;padding:8px 12px!important}
+.review-evidence{margin:4px 0 0 62px;border-left:3px solid #e2e8f0;padding-left:12px}
+.evidence-row{padding:4px 0;border-bottom:1px solid #f1f5f9;font-family:-apple-system,"Microsoft YaHei",sans-serif;font-size:12px}
+.evidence-row:last-child{border-bottom:none}
+.evidence-field{display:inline-block;background:#e2e8f0;color:#475569;padding:1px 8px;border-radius:3px;font-weight:600;margin-bottom:4px}
+.evidence-row.text_ok .evidence-field{background:#c8e6c9;color:#1b5e20}
+.evidence-row.text_mismatch .evidence-field{background:#ffcdd2;color:#b71c1c}
+.evidence-diff{font-family:monospace;font-size:12px;line-height:1.5;padding:4px 8px;background:#fff;border:1px solid #e2e8f0;border-radius:4px;margin:3px 0}
+.evidence-desc{color:#64748b;margin:2px 0;font-size:11px}
+.evidence-pair{display:flex;gap:16px;margin-top:3px;font-size:11px}
+.evidence-pair .exp{color:var(--green);max-width:50%}
+.evidence-pair .act{color:var(--orange,#e65100);max-width:50%}
 .log-item.step{background:var(--blue);color:#1e40af;font-weight:500}
 .log-item.warning{background:var(--warn-light);color:#92400e}
 .log-clear{text-align:right;padding:0 24px 12px;font-size:12px;color:var(--gray);cursor:pointer}
@@ -132,8 +145,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <!-- ====== 顶部 ====== -->
 <div class="topbar">
   <div class="brand">
-    🍽 英语宝自动化检测
-    <span>餐馆经营系统</span>
+    📋 英语宝自动化检测
+    <span>审查系统</span>
   </div>
   <div class="dev-row">
     <span class="dot" id="devDot"></span>
@@ -221,8 +234,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
     <!-- 日志流 -->
     <div class="log-wrap" id="logWrap">
       <div class="log-empty">
-        <span class="emoji">👨‍🍳</span>
-        还没有开始检测<br>在左侧配置任务后点"开始检测"吧
+        <span class="emoji">📋</span>
+        等待开始检测<br>在左侧配置任务后点"开始检测"，运行日志与审查结果将在此展示
       </div>
     </div>
     <div class="log-clear" onclick="clearLog()">清空日志</div>
@@ -288,17 +301,36 @@ function refreshModuleSel(){
 document.querySelectorAll('.mod-sel').forEach(b=>b.addEventListener('change',refreshModuleSel))
 
 // ====== 日志 ======
-function addLog(level,msg){
+function addLog(level,msg,evidence){
   const t=new Date().toLocaleTimeString()
   const el=$('logWrap')
-  // 隐藏空状态
   const empty=el.querySelector('.log-empty')
   if(empty) empty.style.display='none'
-  el.innerHTML+=`<div class="log-item ${level}"><span class="t">${t}</span>${msg}</div>`
+  let html=`<div class="log-item ${level}"><span class="t">${t}</span>${msg}</div>`
+  // ★ 审查证据卡: 带差异高亮和字段对照
+  if(evidence && Array.isArray(evidence) && evidence.length){
+    html=`<div class="log-item ${level} review-log">`
+    html+=`<span class="t">${t}</span>${msg}`
+    html+=`<div class="review-evidence">`
+    evidence.forEach(e=>{
+      const fieldLabel={stem:'题干',content:'内容',answer:'答案',options:'选项',audio:'音频'}[e.field]||e.field
+      html+=`<div class="evidence-row ${e.type}">`
+      html+=`<span class="evidence-field">${fieldLabel}</span>`
+      if(e.diff_html){
+        html+=`<div class="evidence-diff">${e.diff_html}</div>`
+      }else if(e.diff){
+        html+=`<div class="evidence-desc">${e.diff}</div>`
+      }
+      html+=`<div class="evidence-pair"><span class="exp">预期: ${e.expected||'(无)'}</span><span class="act">实际: ${e.actual||'(无)'}</span></div>`
+      html+=`</div>`
+    })
+    html+=`</div></div>`
+  }
+  el.innerHTML+=html
   el.scrollTop=el.scrollHeight
 }
 function clearLog(){
-  $('logWrap').innerHTML='<div class="log-empty"><span class="emoji">👨‍🍳</span>日志已清空</div>'
+  $('logWrap').innerHTML='<div class="log-empty"><span class="emoji">📋</span>日志已清空</div>'
   $('serveWrap').style.display='none'
 }
 async function pollLog(){
@@ -308,7 +340,7 @@ async function pollLog(){
     const arr = Array.isArray(d) ? d : (d.logs||[])
     const logs=arr.slice(logLast)
     if(logs.length) logLast+=logs.length
-    logs.forEach(l=>addLog(l.level,l.msg))
+    logs.forEach(l=>addLog(l.level,l.msg,l.evidence))
   }catch(e){}
   setTimeout(pollLog,1500)
 }
@@ -570,6 +602,15 @@ function parseOrder(text){
     }
     if(nearest){
       m.units=nearest.to?`${nearest.from}-${nearest.to}`:`${nearest.from}`
+    }
+    // ★ 关键词目标：期中/期末/AI检测 等（不依赖 Unit 编号，智能体按名字找）
+    //   取本模块名到下一个模块名之间的文本，避免串到别的模块描述
+    const nextPos=pos.find(q=>q.idx>p.idx)
+    const seg=text.slice(p.idx, nextPos?nextPos.idx:text.length)
+    if(!m.units){
+      for(const kw of ['期中评价','期末评价','期中','期末','AI检测']){
+        if(seg.includes(kw)){m.units=kw;break}
+      }
     }
     // 听力专项：练习/测试区分 + 子模块
     if(p.name==='听力专项'){

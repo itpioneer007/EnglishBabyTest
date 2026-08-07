@@ -17,6 +17,7 @@ import uiautomator2 as u2
 from common.tools import (
     S, S_swipe, S_h, S_w,
     close_ad, dismiss_global_popups, ensure_grade, scroll_and_find,
+    smart_find_unit_row,
 )
 from common.logger import step_log
 from common.screenshot import shot_to_file
@@ -29,7 +30,8 @@ BOOK_VERSION = "湘少版"
 UNITS = [1]  # U1 验证；打通后 [1,2,3,4]
 
 def _resolve_units(units, default_units):
-    """把外部传入的单元范围解析为列表；None 则用默认全部单元"""
+    """把外部传入的单元范围解析为列表；None 则用默认全部单元
+    ★ 支持关键词目标（"期中"/"期末"/"AI检测"等非数字）直接透传"""
     if units is None:
         return list(default_units)
     if isinstance(units, list):
@@ -40,11 +42,15 @@ def _resolve_units(units, default_units):
     result = []
     for part in str(units).split(','):
         part = part.strip()
+        if not part:
+            continue
         m = _re.match(r'^(\d+)\s*-\s*(\d+)$', part)
         if m:
             result.extend(range(int(m.group(1)), int(m.group(2)) + 1))
         elif part.isdigit():
             result.append(int(part))
+        else:
+            result.append(part)   # ★ 关键词（期中/期末/AI检测等）透传，按名字找
     return result or list(default_units)
 
 
@@ -186,11 +192,23 @@ def _answer_loop(d, max_q=60):
 
 
 def _enter_unit(d, unit_num):
-    """在单元自检列表页进入指定单元的答题
+    """在单元自检列表页进入指定单元的答题 —— ★ 随机应变按名字定位
 
-    ★ 优先按标题文字匹配（如"Unit 3单元评价"）精确定位，不依赖列表顺序；
-      下滑逐屏查找（列表可能多屏），找到该单元行后点其"去答题"。
+    unit_num: 数字(1)/区间("1-3")/关键词("期中"/"期末"/"AI检测"/"湘少三上期中评价")
+    流程: 智能定位（忽略"湘少X上"前缀；关键词先点筛选 tab 再匹配标题）
+          → 找到标题行 → 点同行"去答题"
     """
+    # ★ 方式0：智能定位（支持数字/区间/关键词，自动处理 期中/期末 tab）
+    if smart_find_unit_row(d, unit_num, click_text="去答题"):
+        print(f"    ✅ 智能定位去答题 ({unit_num})")
+        time.sleep(1.2)
+        _after_enter_unit(d)
+        return True
+    # 关键词目标若智能定位失败 → 直接返回（不误点其他单元）
+    if not str(unit_num).isdigit():
+        print(f"    ❌ 找不到目标 [{unit_num}]（含筛选 tab 均尝试）")
+        return False
+
     # 方式1：按 Unit N 标题文字匹配（可靠，不受列表顺序/滚动影响）
     import re as _re
     target_title = _re.compile(rf"Unit\s*{unit_num}\s*单元评价")
@@ -272,7 +290,8 @@ def run_module(d, units=None):
     t0 = time.time()
     total = 0
     _units = _resolve_units(units, UNITS)
-    print(f"\n📋 单元自检 · 单元 {_units[0]}-{_units[-1]} · {len(_units)}个单元")
+    _desc = "、".join(str(x) for x in _units)
+    print(f"\n📋 单元自检 · 目标: {_desc} · {len(_units)}项")
 
     # 进入单元自检：主页直接有入口（新版主页改版后"单元自检"入口直接可见）
     # 先确保在 App 主页（防止退过头到桌面）

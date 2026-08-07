@@ -195,13 +195,15 @@ def get_adb():
     return ADBController(serial=config.device.serial, screenshot_dir="screenshots")
 
 
-def log_msg(msg: str, level: str = "info"):
-    """添加日志"""
+def log_msg(msg: str, level: str = "info", evidence: list = None):
+    """添加日志, 可选附带结构化证据(审查差异高亮展示)"""
     entry = {
         "time": datetime.now().strftime("%H:%M:%S"),
         "msg": msg,
         "level": level,
     }
+    if evidence:
+        entry["evidence"] = evidence
     task_status["log"].append(entry)
     print(f"[{entry['time']}] [{level}] {msg}")
 
@@ -2047,7 +2049,7 @@ def api_inspect_state():
 
 @app.route("/api/inspect/question-result", methods=["POST"])
 def api_inspect_question_result():
-    """接收AI对一道题的判断结果"""
+    """接收AI对一道题的判断结果, 推送审查证据到前端日志"""
     data = request.get_json() or {}
     qid = data.get("qid", "")
     if not qid:
@@ -2061,6 +2063,18 @@ def api_inspect_question_result():
     }
     _inspection_state["current_question_idx"] = data.get("idx", 0)
     _save_inspection_state()
+
+    # ★ 推送审查证据到前端日志(收集各维度的 evidence)
+    idx = data.get("idx", "?")
+    overall = "通过" if data.get("overall_passed") else "不通过"
+    level = "success" if data.get("overall_passed") else "error"
+    all_evidence = []
+    for dim in ("stem", "content", "image", "answer", "audio", "post_error"):
+        check = data.get(f"{dim}_check", {})
+        if isinstance(check, dict) and check.get("evidence"):
+            all_evidence.extend(check["evidence"])
+    log_msg(f"📋 Q{idx} 审查{overall} | 方法:{data.get('method','')}",
+            level, evidence=all_evidence if all_evidence else None)
     return jsonify({"success": True, "qid": qid})
 
 

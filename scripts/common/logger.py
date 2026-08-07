@@ -31,10 +31,13 @@ def should_stop():
             pass
     return False
 
-def step_log(msg, level="info"):
-    """模块内部打流程日志 → 前端实时可见"""
+def step_log(msg, level="info", evidence=None):
+    """模块内部打流程日志 → 前端实时可见; evidence=结构化审查证据(差异高亮)"""
     if _log_callback:
-        _log_callback(msg, level)
+        if evidence:
+            _log_callback(msg, level, evidence)
+        else:
+            _log_callback(msg, level)
     else:
         # 没有注入回调时（命令行直接运行模块），回退到 print
         print(f"    [{level}] {msg}")

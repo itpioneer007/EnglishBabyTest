@@ -256,3 +256,84 @@ def back_to_home(d, grade_level):
     return d(textContains=grade_level).exists(timeout=2)
 
 # ==================== ⑦ 核心：单模块检测 ====================
+
+
+# ==================== ⑧ 智能单元定位（随机应变按名字找内容） ====================
+def smart_find_unit_row(d, target, click_text="去答题", max_pages=8):
+    """智能定位目标单元/测试行并点击其按钮 —— 不写死标题，随机应变
+
+    target: 单元引用
+      - 数字(1) / 区间("1-3")：按 "Unit N" / "Unit N单元评价" 模式匹配
+      - 关键词("期中"/"期末"/"AI检测"/"湘少三上期中评价")：先点筛选 tab（如有），
+        再匹配标题包含关键词的行
+    click_text: 目标行旁按钮文字（"去答题"/"去练习"）
+    返回: 是否点击成功
+    """
+    import re as _re
+    s = str(target).strip()
+    is_keyword = not _re.fullmatch(r"\d+(-\d+)?", s)
+
+    # ① 关键词目标 → 若页面有筛选 tab（全部/单元/期中/期末…），先点匹配 tab
+    if is_keyword:
+        _clicked_tab = False
+        try:
+            xml = d.dump_hierarchy()
+        except Exception:
+            xml = ""
+        # tab 名：目标关键词本身或其变体（"期中评价"→"期中"，"期末评价"→"期末"）
+        tab_names = [s]
+        for _k in ("期中评价", "期末评价", "期中", "期末", "单元"):
+            if _k in s:
+                tab_names.append(_k)
+        for _t in tab_names:
+            try:
+                if f'text="{_t}"' in xml:
+                    d(text=_t).click()
+                    time.sleep(1.2)
+                    _clicked_tab = True
+                    break
+            except Exception:
+                pass
+
+    # ② 构造标题匹配函数
+    def _match(t):
+        t = (t or "").strip()
+        if not t:
+            return False
+        if is_keyword:
+            return s in t          # 标题包含关键词（如"AI检测 测试题目选题"）
+        # 数字/区间：Unit N 或 Unit N单元评价（忽略"湘少X上"前缀）
+        if _re.search(rf"Unit\s*{s}(?:\s*单元评价|\s|$)", t):
+            return True
+        if _re.fullmatch(r"\d+", s):
+            return _re.search(rf"U{_re.escape(s)}(?:\s|$)", t) is not None
+        return False
+
+    # ③ 逐屏查找：标题行 → 点同行 click_text 按钮
+    for _ in range(max_pages):
+        try:
+            elements = (d.xpath('//*[@text!=""]').all() or [])
+        except Exception:
+            elements = []
+        row = None
+        for e in elements:
+            if _match(e.text):
+                row = e
+                break
+        if row:
+            row_y = row.bounds[1]
+            for e in elements:
+                if (e.text or "").strip() == click_text:
+                    if abs(e.bounds[1] - row_y) < 300:   # 同行
+                        try:
+                            e.click()
+                        except Exception:
+                            d.click((e.bounds[0]+e.bounds[2])//2, (e.bounds[1]+e.bounds[3])//2)
+                        return True
+        # 未找到 → 下滑翻页
+        try:
+            S_swipe(d, 540, 1800, 540, 600, 0.3)
+            time.sleep(0.4)
+        except Exception:
+            break
+    return False

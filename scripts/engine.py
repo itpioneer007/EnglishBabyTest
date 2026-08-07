@@ -692,6 +692,51 @@ def _answer_loop(d, config, module_name):
     _xml = ""  # 当前 UI 缓存
     _need_dump = True  # 需要在下一轮重新 dump
 
+    def _collect_ui_evidence(qtype):
+        """每题界面级检查证据（题型/题干/选项/音频/作答）→ 前端证据卡展示"""
+        import re as _re
+        ev = []
+        try:
+            # ① 题型识别
+            ev.append({"field": "题型", "type": "text_ok",
+                       "expected": qtype or "选择题",
+                       "actual": qtype or "选择题", "diff": f"识别为[{qtype or '选择题'}]"})
+            # ② 题干文字（页面上的长文本）
+            stems = []
+            for m in _re.finditer(r'text="([^"]{8,})"', _xml):
+                t = m.group(1).strip()
+                if t and t not in stems and len(t) < 60:
+                    stems.append(t)
+                if len(stems) >= 3:
+                    break
+            stem_txt = " / ".join(stems[:2]) if stems else "(无题干文字)"
+            ev.append({"field": "题干", "type": "text_ok" if stems else "text_mismatch",
+                       "expected": "文字完整可见", "actual": stem_txt,
+                       "diff": f"提取到{len(stems)}条文字" if stems else "⚠ 未提取到题干文字"})
+            # ③ 选项存在性
+            opts_found = [o for o in ("A", "B", "C", "D", "T", "F")
+                          if f'text="{o}"' in _xml]
+            ev.append({"field": "选项", "type": "text_ok" if opts_found else "text_mismatch",
+                       "expected": "存在可选项", "actual": ",".join(opts_found) or "(无)",
+                       "diff": f"检测到 {len(opts_found)} 个选项"})
+            # ④ 音频控件（听力题小喇叭/播放按钮）
+            has_audio = ("喇叭" in _xml or "播放" in _xml
+                         or 'content-desc="播放' in _xml or "ic_play" in _xml
+                         or "btn_play" in _xml or "audio" in _xml.lower())
+            ev.append({"field": "音频", "type": "text_ok" if has_audio else "skip",
+                       "expected": "播放控件可见" if has_audio else "非音频题或无需检查",
+                       "actual": "存在播放控件" if has_audio else "—",
+                       "diff": "播放按钮可见" if has_audio else "本题无音频控件"})
+            # ⑤ 作答元素（检查/录音/输入框）
+            has_act = ("检查" in _xml or "录音" in _xml or "完成" in _xml
+                       or "EditText" in _xml)
+            ev.append({"field": "作答", "type": "text_ok" if has_act else "text_mismatch",
+                       "expected": "可作答（检查/录音/输入）", "actual": "可作答" if has_act else "⚠ 未见作答元素",
+                       "diff": "作答元素存在" if has_act else "⚠ 检查/录音/输入元素未识别"})
+        except Exception:
+            pass
+        return ev
+
     # ── 缓存辅助函数 ──
     def _dump():
         return d.dump_hierarchy()
@@ -798,6 +843,9 @@ def _answer_loop(d, config, module_name):
         q += 1
         print(f"    📸 第{q}题")
         step_log(f"📸 第{q}题", "step")
+        # ★ 每题界面级检查证据 → 前端证据卡（题型/题干/选项/音频/作答）
+        qtype_now = _detect_question_type_cached(_xml, config)
+        step_log(f"  第{q}题 检查", "info", _collect_ui_evidence(qtype_now))
         time.sleep(0.3); _xml = _dump()
 
         _click_text(opt)

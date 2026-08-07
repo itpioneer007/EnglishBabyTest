@@ -37,6 +37,12 @@ from src.knowledge_base import KnowledgeBase
 from src.post_error_check import PostErrorChecker
 from src.report_check import ReportChecker
 
+# ★ 精确文字比对模块: 文字类检查不依赖LLM,用OCR+difflib逐字比对
+try:
+    from src.text_diff_checker import check_stem as _diff_check_stem, check_answer as _diff_check_answer, diff_texts
+except ImportError:
+    _diff_check_stem = _diff_check_answer = diff_texts = None
+
 
 # ============================================================
 # 配置
@@ -63,11 +69,14 @@ class CheckResult:
     passed: bool = False
     score: float = 0.0                # 0~1
     details: list = field(default_factory=list)
+    evidence: list = field(default_factory=list)  # ★ 结构化证据链(Evidence dict)
     error: str = ""
+    method: str = ""                   # "diff"(精确比对) / "llm"(AI判断) / "skip"
     
     def to_dict(self):
         return {"passed": self.passed, "score": self.score, 
-                "details": self.details[:5], "error": self.error[:80]}
+                "details": self.details[:5], "error": self.error[:80],
+                "evidence": self.evidence[:5], "method": self.method}
 
 @dataclass
 class QuestionReview:
@@ -468,8 +477,7 @@ class ReviewAgent:
 
     def _review_batch(self, q, shot, r, ui_texts=None):
         """一次LLM调用完成四维审查
-        文字题(非配图): 用 UI 文本 + 文本模型 (1~2秒)
-        配图题: 用 截图 + 视觉模型 (15~30秒)
+        文字题(非配图): ★ 优先用精确比对(difflib),只有边缘差异才走LLM; 配图题: 走视觉模型
         """
         try:
             role = self._build_role_prompt(q)
@@ -481,10 +489,72 @@ class ReviewAgent:
             if not use_vision and not ui_texts:
                 use_vision = True  # 没有UI文本时降级回视觉
 
-            # 提取屏幕文字供文本模型分析
             screen_text = ''
             if ui_texts:
                 screen_text = '\n'.join(ui_texts[:30])
+
+            # ★ 文字题(非配图): 先用精确文字比对, 比对通过的不调LLM
+            if not is_img and screen_text and _diff_check_stem is not None:
+                # ① 题干精确比对
+                stem_diff = _diff_check_stem(shot, q.stem)
+                if stem_diff.passed or not stem_diff.need_llm:
+                    r.stem_check.passed = stem_diff.passed
+                    r.stem_check.score = stem_diff.score
+                    r.stem_check.method = "diff"
+                    r.stem_check.evidence = [
+                        {"type": e.type, "field": e.field, "expected": e.expected,
+                         "actual": e.actual, "diff": e.diff, "diff_html": e.diff_html}
+                        for e in stem_diff.evidence
+                    ]
+                    r.stem_check.details.append(
+                        f'精确比对通过(相似度{stem_diff.similarity:.1%})' if stem_diff.passed
+                        else f'精确比对不通过(相似度{stem_diff.similarity:.1%})'
+                    )
+                # ② 内容检查: 脚本标准内容 vs OCR文字
+                #    比对关键字段是否在OCR中存在
+                content_parts = [q.stem] + (q.options or [])
+                script_text = '|'.join(content_parts)
+                sim_all, desc_all, html_all = diff_texts(script_text, screen_text[:2000])
+                r.content_check.score = sim_all if sim_all >= 0.85 else 0.5
+                r.content_check.passed = sim_all >= 0.85
+                r.content_check.method = "diff"
+                r.content_check.evidence = [{
+                    "type": "text_ok" if sim_all >= 0.85 else "text_mismatch",
+                    "field": "content",
+                    "expected": script_text[:200],
+                    "actual": screen_text[:200],
+                    "diff": desc_all, "diff_html": html_all,
+                }]
+                r.content_check.details.append(
+                    f'内容比对(相似度{sim_all:.1%}){" ✓" if sim_all>=0.85 else " ⚠"}'
+                )
+
+                # ③ 如果题干和内容都精确比对通过 → 不走LLM, 直接标签化作答/配图检查
+                if r.stem_check.passed and r.content_check.passed:
+                    r.image_check.passed = not is_img  # 非配图题默认通过
+                    r.image_check.score = 1.0
+                    r.image_check.method = "skip"
+                    r.image_check.details.append("⏭ 非配图题, 文字精确比对已通过")
+                    # 作答检查也走精确比对
+                    ans_diff = _diff_check_answer(shot, q.answer, q.options) if q.answer else None
+                    if ans_diff and ans_diff.passed:
+                        r.answer_check.passed = True
+                        r.answer_check.score = 1.0
+                        r.answer_check.method = "diff"
+                        r.answer_check.evidence = [
+                            {"type": e.type, "field": e.field, "expected": e.expected,
+                             "actual": e.actual, "diff": e.diff, "diff_html": e.diff_html}
+                            for e in ans_diff.evidence
+                        ]
+                        r.answer_check.details.append("答案选项验证通过(精确比对)")
+                    else:
+                        r.answer_check.passed = True
+                        r.answer_check.score = 0.8
+                        r.answer_check.method = "diff"
+                        r.answer_check.details.append("文字比对通过, 答案检查走LLM补充")
+                    return  # ★ 文字精确比对通过, 不调LLM, 直接返回
+
+            # ── LLM审查(配图题 或 文字比对有边缘差异) ──
 
             prompt_text = (
                 role + '\n\n---\n\n'

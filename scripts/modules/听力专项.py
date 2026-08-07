@@ -26,6 +26,7 @@ from common.logger import step_log
 from common.tools import (
     S, S_swipe, S_h, S_w,
     close_ad, dismiss_global_popups, ensure_grade, back_to_home, scroll_and_find,
+    smart_find_unit_row,
 )
 from engine import run_single_module
 
@@ -39,23 +40,28 @@ TEST_UNITS = [1]  # 测试部分：U1-U5；测试先跑 U1
 
 
 def _resolve_units(units, default_units):
-    """把外部传入的单元范围解析为列表；None 则用默认全部单元"""
+    """把外部传入的单元范围解析为列表；None 则用默认全部单元
+    ★ 支持关键词目标（"期中"/"期末"/"AI检测"等非数字）直接透传"""
     if units is None:
         return list(default_units)
     if isinstance(units, list):
         return list(units)
     if isinstance(units, int):
         return [units]
-    # 字符串：'1-3' / '1,3,5' / '1' 或列表字符串
+    # 字符串：'1-3' / '1,3,5' / '1' 或列表字符串 / 关键词
     import re as _re
     result = []
     for part in str(units).split(","):
         part = part.strip()
+        if not part:
+            continue
         m = _re.match(r"^(\d+)\s*-\s*(\d+)$", part)
         if m:
             result.extend(range(int(m.group(1)), int(m.group(2)) + 1))
         elif part.isdigit():
             result.append(int(part))
+        else:
+            result.append(part)   # ★ 关键词（期中/期末/AI检测等）透传，按名字找
     return result or list(default_units)
 
 CONFIG = {
@@ -248,7 +254,8 @@ def run_test_module(d, test_units=None):
     t0 = time.time()
     total = 0
     _tunits = _resolve_units(test_units, TEST_UNITS)
-    print(f"\n📋 听力专项·测试 · 单元 {_tunits[0]}-{_tunits[-1]} · {len(_tunits)}个单元")
+    _desc = "、".join(str(x) for x in _tunits)
+    print(f"\n📋 听力专项·测试 · 目标: {_desc} · {len(_tunits)}项")
 
     # 确认在听力专项页 → 点"测试" tab
     if not d(text="测试").exists(timeout=3):
@@ -261,21 +268,11 @@ def run_test_module(d, test_units=None):
     print("  ✅ 已进入测试 tab")
 
     for ui, unit_num in enumerate(_tunits):
-        print(f"\n  🎯 测试 Unit {unit_num} [{ui+1}/{len(_tunits)}]")
-        # 在测试列表找该单元的"去答题"
-        found = False
-        for _ in range(10):
-            # 找单元标题 + 去答题
-            rows = [e for e in (d.xpath('//*[@text!=""]').all() or [])
-                    if f"Unit {unit_num}" in (e.text or "") or f"U{unit_num}" in (e.text or "")]
-            if rows and d(text="去答题").exists(timeout=1):
-                d(text="去答题").click()
-                found = True
-                break
-            if not found:
-                S_swipe(d, 500, 1800, 500, 600, 0.3); time.sleep(0.4)
+        print(f"\n  🎯 测试目标 [{unit_num}] [{ui+1}/{len(_tunits)}]")
+        # ★ 智能定位：数字/区间/关键词（期中/期末/AI检测…）随机应变找"去答题"
+        found = smart_find_unit_row(d, unit_num, click_text="去答题")
         if not found:
-            print(f"  ❌ U{unit_num} 找不到去答题"); continue
+            print(f"  ❌ 找不到目标 [{unit_num}] 的去答题"); continue
         time.sleep(0.8)
         # 规则弹窗"好的，我知道啦~"
         if d(text="好的，我知道啦~").exists(timeout=3):
