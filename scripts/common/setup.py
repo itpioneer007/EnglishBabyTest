@@ -60,17 +60,34 @@ def switch_version(d, target_version):
     if not clicked:
         return False
     time.sleep(1.5)
-    # 版本选择页：点目标版本（匹配前缀，如"湘少版"匹配"湘少版(2024审定)"或"湘少版（2024审定）"）
+    # 版本选择页：点目标版本。★ 完全相等优先（避免"人教版"误匹配"人教版(PEP)"），
+    #   无完全相等时退回前缀匹配（兼容"湘少版"→"湘少版(2024审定)"）
+    #   ★ 找不到时下滑翻页再找（版本列表可能不止一屏，如教科版在底部）
     picked = False
-    for e in d.xpath('//*[@text!=""]').all():
-        t = (e.text or '').strip()
-        if t.startswith(target_version) and ('版' in t or '审定' in t):
+    for _page in range(5):
+        exact = None
+        prefix = None
+        for e in d.xpath('//*[@text!=""]').all():
+            t = (e.text or '').strip()
+            if t == target_version:
+                exact = e
+                break
+            if prefix is None and t.startswith(target_version) and ('版' in t or '审定' in t):
+                prefix = e
+        pick = exact or prefix
+        if pick is not None:
             try:
-                e.click()
+                pick.click()
             except Exception:
-                b = e.bounds
+                b = pick.bounds
                 d.click((b[0]+b[2])//2, (b[1]+b[3])//2)
             picked = True
+            break
+        # 本屏没找到 → 下滑翻页
+        try:
+            d.swipe(540, 1800, 540, 700, duration=0.4)
+            time.sleep(0.7)
+        except Exception:
             break
     time.sleep(1.2)
     # 关闭设置面板 + 回主页
@@ -147,14 +164,14 @@ def get_grades_from_app(d, max_pages=5):
         _back_home(d)
     if not _is_home(d):
         return []
-    # 打开切换课本页（验证页面出现年级格子才继续，最多重试2次）
+    # 打开切换课本页（验证页面出现"切换课本"标题才继续，最多重试2次）
     opened = False
     for _ in range(2):
         try:
             d.click(321, 275)
             time.sleep(2.2)
             xml = d.dump_hierarchy()
-            if '年级' in xml and ('上册' in xml or '下册' in xml):
+            if '切换课本' in xml:
                 opened = True
                 break
         except Exception:
@@ -168,8 +185,8 @@ def get_grades_from_app(d, max_pages=5):
             xml = d.dump_hierarchy()
         except Exception:
             break
-        # 解析年级格子：形如「五年级上册」「三年级下册」（排除标题/说明等长文本）
-        for m in _re.finditer(r'text="([^"]*年级(?:上|下)册[^"]*)"', xml):
+        # 解析年级：提取文本中"X年级上/下册"子串（兼容"人教版   五年级下册"整行文本）
+        for m in _re.finditer(r'([一二三四五六]年级(?:上|下)册)', xml):
             t = m.group(1).strip()
             if t and t not in grades:
                 grades.append(t)

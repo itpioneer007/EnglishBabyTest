@@ -159,8 +159,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
         <em>"帮我检测湘少版五年级上册的听力专项U1的难点突破和口语训练U1"</em><br>
         <em>"测一下单元自检U1-U3和知识过关的U1重点词汇"</em>
       </div>
-      <textarea id="orderInput" 
-        placeholder="在这里输入你的检测需求，或粘贴任务清单…&#10;&#10;未来上传 Word / Excel 清单也可直接解析。"
+      <textarea id="orderInput" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();tryParseOrder()}"
+        placeholder="在这里输入你的检测需求，或粘贴任务清单…&#10;&#10;例如：帮我检测湘少版五年级上册的听力专项U1难点突破和口语训练U1&#10;回车或点按钮：自动识别 版本/年级/模块/单元 并开始"
         rows="5"></textarea>
     </div>
     <div class="file-hint" onclick="$('fileOrder').click()">📎 或上传任务清单文件（.txt / .docx / .xlsx）</div>
@@ -173,9 +173,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
     <div class="config-body open">
       <div class="config-grid">
         <div class="field">
-          <label>教材版本</label>
-          <select id="setupVersion" onchange="loadGrades(this.value)">
-            <option selected>湘少版</option><option>湘鲁版</option><option>人教PEP版</option><option>教科版</option>
+          <label>教材版本<span id="versionLoading" style="font-size:11px;color:var(--gray)"></span></label>
+          <select id="setupVersion" onchange="renderGrades(this.value)">
+            <option selected>湘少版</option><option>湘少版(2024审定)</option><option>人教版</option><option>人教版(PEP)</option><option>外研版(三起)</option><option>外研版(一起)</option><option>湘鲁版</option><option>冀教版</option><option>教科版</option><option>陕旅版</option><option>新概念青少版</option><option>通用</option>
           </select>
         </div>
         <div class="field">
@@ -323,9 +323,17 @@ function uploadOrder(e){
 
 // ====== 开始检测（多模块执行） ======
 async function startCooking(){
+  const orderText=($('orderInput').value||'').trim()
+  // ★ 自然语言自动拆分：输入一段话（含 版本/年级/模块/单元）→ 自动应用配置
+  if(orderText && /(年级[上下]册|U\d+|单元|听力专项|口语训练|单元自检|知识过关|巧记单词|语音评测)/.test(orderText)){
+    const applied=applyOrder(orderText)
+    if(!applied && !orderText.includes('清空')){
+      // 没识别出东西也继续（可能只有模块名没有版本年级）
+    }
+    addLog('info','📋 已按描述自动配置，可直接开始')
+  }
   const version=$('setupVersion').value
   const grade=$('setupGrade').value
-  const orderText=($('orderInput').value||'').trim()
 
   // 收集已选模块 + 各自单元范围（空=全部）
   const moduleConfigs=[]
@@ -454,12 +462,52 @@ function renderServe(data){
   addLog('success',`✅ 全部完成！${names.length}个模块，${okN}个成功，累计${totalQ}题`)
 }
 
-// ====== 动态年级：切换版本 → 后端从 App 实时读取年级列表（与 App 实际内容一致） ======
+// ====== 版本×年级配置表：页面加载一次拉取，切换版本纯前端秒查（不再动态读 App） ======
+let GRADE_TABLE=null   // {版本名: {grades:[...], current:"", raw:""}}
 let gradesLoaded=false
-async function loadGrades(version){
+
+async function loadGradeTable(){
+  try{
+    const r=await fetch('/api/version-grades')
+    const d=await r.json()
+    if(r.ok && d.table){
+      GRADE_TABLE=d.table
+      const gl=document.getElementById('gradeLoading')
+      if(gl) gl.textContent=' 配置表就绪'
+      renderGrades($('setupVersion').value, true)
+      return
+    }
+    throw new Error(d.error||'无配置表')
+  }catch(e){
+    // 配置表不可用 → 动态读当前版本（兜底）
+    addLog('warning','⚠ 配置表未加载，改用动态读取: '+e.message)
+    loadGrades('', true)
+  }
+}
+
+function renderGrades(version, silent){
+  const sel=document.getElementById('setupGrade')
+  const gl=document.getElementById('gradeLoading')
+  if(GRADE_TABLE && GRADE_TABLE[version]){
+    const info=GRADE_TABLE[version]||{}
+    const grades=info.grades||[]
+    if(grades.length){
+      sel.innerHTML=grades.map(g=>`<option${g===info.current?' selected':''}>${g}</option>`).join('')
+      if(gl) gl.textContent=` ✓${grades.length}个`
+      gradesLoaded=true
+      return true
+    }
+  }
+  // 配置表没有该版本 → 动态读取兜底
+  loadGrades(version, silent)
+  return false
+}
+
+// 动态读取（兜底：配置表缺失的版本 / 配置表加载失败时）
+async function loadGrades(version, silent){
   const gl=document.getElementById('gradeLoading')
   const sel=document.getElementById('setupGrade')
-  if(gl) gl.textContent=' 读取中…'
+  if(!silent && gl) gl.textContent=' 读取中…'
   sel.disabled=true
   try{
     const r=await fetch('/api/version-grades/current',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version:version||''})})
@@ -471,7 +519,6 @@ async function loadGrades(version){
     if(gl) gl.textContent=` 已同步App（${grades.length}个）`
     gradesLoaded=true
   }catch(e){
-    // 读取失败 → 回退默认年级，明确提示用户
     sel.innerHTML='<option selected>五年级上册</option><option>五年级下册</option><option>六年级上册</option><option>六年级下册</option><option>四年级下册</option><option>三年级下册</option>'
     if(gl) gl.textContent=' ⚠读取失败，用默认'
     addLog('warning','⚠ 动态年级读取失败: '+e.message)
@@ -480,11 +527,124 @@ async function loadGrades(version){
   }
 }
 
+// ====== 自然语言自动拆分：用户输入一段话 → 解析出版本/年级/模块/单元并应用 ======
+const MODULE_NAMES=['听力专项','口语训练','单元自检','知识过关','巧记单词','语音评测']
+const VERSION_ALIAS={  // 别名（含 App 带审定尾巴的写法）→ 配置表版本名（注意变体是独立条目）
+  '湘少版(2024审定)':'湘少版(2024审定)','湘少（2024审定）':'湘少版(2024审定)','湘少(2024审定)':'湘少版(2024审定)','湘少2024审定':'湘少版(2024审定)',
+  '湘少版':'湘少版','湘教':'湘少版','湘少':'湘少版',
+  '人教PEP':'人教版(PEP)','人教版(PEP)':'人教版(PEP)','人教PEP版':'人教版(PEP)',
+  '外研版(三起)':'外研版(三起)','外研三起':'外研版(三起)','外研版':'外研版(三起)',
+  '外研版(一起)':'外研版(一起)','外研一起':'外研版(一起)',
+  '人教版':'人教版','人教':'人教版',
+  '湘鲁':'湘鲁版','冀教':'冀教版','教科':'教科版','陕旅':'陕旅版','新概念':'新概念青少版','通用':'通用'
+}
+function parseOrder(text){
+  const res={version:'',grade:'',modules:[]}
+  if(!text) return res
+  // 版本：别名最长匹配优先
+  let bestV='',bestLen=0
+  for(const k in VERSION_ALIAS){
+    if(text.includes(k) && k.length>bestLen){bestLen=k.length;bestV=VERSION_ALIAS[k]}
+  }
+  res.version=bestV
+  // 年级
+  const gm=text.match(/([一二三四五六]年级[上下]册)/)
+  if(gm) res.grade=gm[1]
+  // 模块（含单元 U1/U1-3/第X单元 和听力专项 练习/测试/子模块）
+  const pos=[]   // {idx, name} 模块在文中位置
+  for(const name of MODULE_NAMES){
+    let p=text.indexOf(name)
+    while(p!==-1){pos.push({idx:p,name});p=text.indexOf(name,p+name.length)}
+  }
+  pos.sort((a,b)=>a.idx-b.idx)
+  const units=[]  // {idx, from, to} 单元 token
+  const ure=/U(\d+)(?:\s*[-到至]\s*(?:U)?(\d+))?|第\s*(\d+)\s*单元(?:\s*[-到至]\s*(?:第)?\s*(\d+))?/gi
+  let um
+  while((um=ure.exec(text))!==null){units.push({idx:um.index,from:um[1]||um[3],to:um[2]||um[4]})}
+  for(const p of pos){
+    const m={name:p.name,units:'',testUnits:'',sub:''}
+    // 该模块后最近的单元 token
+    let nearest=null
+    for(const u of units){
+      if(u.idx>p.idx && (!nearest||u.idx<nearest.idx)) nearest=u
+    }
+    if(nearest){
+      m.units=nearest.to?`${nearest.from}-${nearest.to}`:`${nearest.from}`
+    }
+    // 听力专项：练习/测试区分 + 子模块
+    if(p.name==='听力专项'){
+      const after=text.slice(p.idx)
+      if(/测试|测验/.test(after) && !/练习/.test(after)) {m.testUnits=m.units;m.units=''}
+      for(const s of ['基础巩固','综合进阶','难点突破']){
+        if(after.includes(s)){m.sub=s;break}
+      }
+    }
+    res.modules.push(m)
+  }
+  return res
+}
+function applyOrder(text){
+  const r=parseOrder(text)
+  if(!r.version && !r.grade && !r.modules.length){
+    addLog('warning','⚠ 未从描述中识别出版本/年级/模块，请检查表述')
+    return false
+  }
+  // 版本
+  if(r.version){
+    const sv=$('setupVersion')
+    if([...sv.options].some(o=>o.value===r.version)){
+      sv.value=r.version
+      renderGrades(r.version,true)
+      addLog('info','🔖 识别版本: '+r.version)
+    }else{
+      addLog('warning','⚠ 识别到版本但不在列表: '+r.version)
+    }
+  }
+  // 年级
+  if(r.grade){
+    const sg=$('setupGrade')
+    if([...sg.options].some(o=>o.value===r.grade)){
+      sg.value=r.grade
+      addLog('info','📚 识别年级: '+r.grade)
+    }else{
+      addLog('warning','⚠ 识别到年级但不在该版本列表: '+r.grade)
+    }
+  }
+  // 模块（取消全部勾选 → 勾选命中的）
+  if(r.modules.length){
+    document.querySelectorAll('.mod-sel').forEach(cb=>{cb.checked=false;cb.closest('.mod-tag').classList.remove('on')})
+    r.modules.forEach(m=>{
+      const cb=document.querySelector(`.mod-sel[value="${m.name}"]`)
+      if(!cb) return
+      cb.checked=true
+      cb.closest('.mod-tag').classList.add('on')
+      const tag=cb.closest('.mod-tag')
+      if(m.name==='听力专项' && tag){
+        const inputs=tag.querySelectorAll('.unit-range-input')
+        if(inputs[0]) inputs[0].value=m.units
+        if(inputs[1]) inputs[1].value=m.testUnits
+      }else{
+        const input=tag.querySelector('.unit-range-input')
+        if(input) input.value=m.units
+      }
+      addLog('info',`🎯 识别模块: ${m.name}${m.units?' U'+m.units:''}${m.testUnits?' 测试U'+m.testUnits:''}${m.sub?'（'+m.sub+'）':''}`)
+    })
+    refreshModuleSel()
+  }
+  return true
+}
+
 // ====== 启动 ======
+function tryParseOrder(){
+  const text=($('orderInput').value||'').trim()
+  if(!text){alert('请输入检测需求');return}
+  const ok=applyOrder(text)
+  addLog(ok?'success':'warning', ok?'✅ 已自动识别描述并配置好（版本/年级/模块/单元），确认后点「开始检测」':'⚠ 未能从描述中识别出有效内容')
+}
 pollStatus()
 pollLog()
 refreshModuleSel()
-loadGrades()
+loadGradeTable()
 
 // ====== 齿轮 ⚙️ 事件委托（捕获阶段，先于 label 默认行为拦截） ======
 document.addEventListener('click', function(ev){

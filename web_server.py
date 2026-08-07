@@ -1095,13 +1095,24 @@ def api_versions():
 
 @app.route("/api/version-grades")
 def api_version_grades():
-    """返回版本→年级映射表（已扫描的缓存数据）"""
+    """返回版本→年级配置表（scan_versions_grades.py 生成的缓存数据，秒回）"""
+    # 优先新版配置表 versions_grades.json（版本 → {grades, current}）
+    vg_file = PROJECT_ROOT / "outputs" / "web" / "versions_grades.json"
+    if vg_file.exists():
+        try:
+            with open(vg_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if data:
+                return jsonify({"table": data, "source": "table"})
+        except Exception:
+            pass
+    # 回退旧版 all_grades.json
     grades_file = PROJECT_ROOT / "outputs" / "web" / "all_grades.json"
     if grades_file.exists():
         with open(grades_file, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return jsonify(data)
-    return jsonify({"error": "尚未扫描年级数据，请先运行 grade_scanner.py"}), 404
+        return jsonify({"table": data, "source": "all_grades"})
+    return jsonify({"error": "尚未生成配置表，请先运行 scripts/scan_versions_grades.py 或扫描年级"}), 404
 
 
 @app.route("/api/version-grades/current", methods=["POST"])
