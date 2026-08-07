@@ -26,6 +26,7 @@ import sys, os, time, re
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import uiautomator2 as u2
+from common.logger import should_stop
 from common.tools import (
     S, S_swipe, S_h, S_w,
     close_ad, dismiss_global_popups, ensure_grade, scroll_and_find,
@@ -210,6 +211,10 @@ def _answer_loop(d, max_q=20):
     retry_count = 0  # 当前题答错次数
     idle = 0  # 连续空转计数（防空转死循环）
     while True:
+        # ★ 停止检查：web_server 收到停止请求 → 中断
+        if should_stop():
+            step_log("⏹ 收到停止请求，中断当前模块", "warning")
+            return q
         # 提交（关卡完成）→ 唯一正常退出
         if d(text="提交").exists(timeout=0.15):
             try:

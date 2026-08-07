@@ -61,6 +61,51 @@ task_status = {
 
 _last_screenshot = ""
 
+# ★ 协作式停止标志（多模块检测用）：前端点停止 → True → 模块循环/答题循环中断
+_STOP_REQUESTED = False
+_STOP_LOCK = threading.Lock()
+
+# ★ 当前活动任务线程 id（用于"立即停止"：停止时向该线程注入异常）
+_CURRENT_TASK_THREAD_ID = None
+_TASK_THREAD_LOCK = threading.Lock()
+
+
+def _register_task_thread():
+    """记录当前任务线程 id（各 run 接口启动线程时调用）"""
+    global _CURRENT_TASK_THREAD_ID
+    with _TASK_THREAD_LOCK:
+        _CURRENT_TASK_THREAD_ID = threading.get_ident()
+
+
+def _force_stop_thread():
+    """强制中断当前任务线程：向线程注入 SystemExit（立即停止，不再执行脚本内容）
+
+    Python 线程无法直接 kill，但可通过 PyThreadState_SetAsyncExc 向目标线程
+    注入异常——异常在线程下一条 Python 字节码处抛出（若阻塞在 HTTP/sleep，
+    则等待其返回后立即抛出，最长受 u2 HTTP_TIMEOUT=15s 限制）。
+    """
+    global _CURRENT_TASK_THREAD_ID
+    with _TASK_THREAD_LOCK:
+        tid = _CURRENT_TASK_THREAD_ID
+    if not tid:
+        return False
+    try:
+        import ctypes
+        res = ctypes.pythonapi.PyThreadState_SetAsyncExc(
+            ctypes.c_long(tid), ctypes.py_object(SystemExit))
+        if res > 1:  # 注入失败（异常被吞）时撤销
+            ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_long(tid), None)
+        return res == 1
+    except Exception:
+        return False
+
+
+def _is_stop_requested():
+    """线程安全读取停止标志（供 scheduler/engine/模块循环调用）"""
+    global _STOP_REQUESTED
+    with _STOP_LOCK:
+        return _STOP_REQUESTED
+
 # 模块坐标（从 uiautomator dump 获取的精确坐标）
 MODULE_COORDS = {
     # 教材精学 (人教版下的坐标)
@@ -162,8 +207,50 @@ def log_msg(msg: str, level: str = "info"):
 
 # 注入共享日志通道：让 scheduler 和模块内部的流程日志也能送到前端
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
-from common.logger import set_log_callback
+from common.logger import set_log_callback, set_stop_check
 set_log_callback(log_msg)
+# 注入停止检查：让 engine/模块答题循环能感知前端"停止"请求
+set_stop_check(lambda: _is_stop_requested())
+
+
+def _connect_device():
+    """连接当前选中的设备（带就绪检查 + 短超时）
+
+    - 设置 u2 全局超时（默认 300s，设备断连时每个操作挂 5 分钟 = 看起来卡死）
+    - 检查设备在线，未连接/离线 → 抛 RuntimeError（上层记 error 日志）
+    - 整个连接过程硬超时 20s：u2.connect 初始化（装ATX/起server）可能很慢
+    """
+    import threading
+    result = {}
+    def _do_connect():
+        try:
+            import uiautomator2 as u2
+            u2.HTTP_TIMEOUT = 15
+            u2.WAIT_FOR_DEVICE_TIMEOUT = 10
+            try:
+                from common.device import device_ok
+                if not device_ok():
+                    result["err"] = "设备未连接或离线，请先连接设备"
+                    return
+            except ImportError:
+                pass
+            d = u2.connect()
+            if not d.info:
+                result["err"] = "设备连接失败（u2 无响应）"
+                return
+            result["d"] = d
+        except SystemExit:
+            log_msg("⏹ 任务已被立即停止", "warning")
+        except Exception as e:
+            result["err"] = f"设备连接异常: {e}"
+    t = threading.Thread(target=_do_connect, daemon=True)
+    t.start()
+    t.join(timeout=20)
+    if t.is_alive():
+        raise RuntimeError("设备连接超时（20s），请检查设备 uiautomator2 服务是否正常")
+    if "err" in result:
+        raise RuntimeError(result["err"])
+    return result["d"]
 
 
 def clear_status():
@@ -243,6 +330,8 @@ def run_login_task():
         log_msg("✅ 登录完成！", "success")
         update_progress(6, 6, "登录成功")
 
+    except SystemExit:
+        log_msg("⏹ 任务已被立即停止", "warning")
     except Exception as e:
         log_msg(f"❌ 登录失败: {e}", "error")
     finally:
@@ -296,6 +385,8 @@ def run_version_detect_task():
         log_msg(f"✅ 检测到 {len(versions)} 个版本元素", "success")
         log_msg(f"  可用版本: {[v['text'] for v in versions]}")
 
+    except SystemExit:
+        log_msg("⏹ 任务已被立即停止", "warning")
     except Exception as e:
         log_msg(f"❌ 版本检测失败: {e}", "error")
     finally:
@@ -444,6 +535,8 @@ def run_full_task(version: str, grade: str, modules: list):
         log_msg(f"✅ 完成! {version} {grade} {len(modules)}模块", "success")
         adb.screenshot("99_complete.png")
 
+    except SystemExit:
+        log_msg("⏹ 任务已被立即停止", "warning")
     except Exception as e:
         log_msg(f"❌ 失败: {e}", "error")
         import traceback
@@ -467,6 +560,8 @@ def run_grade_scan_task():
             log_msg("✅ 全版本年级扫描完成", "success")
         else:
             log_msg(f"⚠ 扫描部分失败: {r.stderr[-200:]}", "warning")
+    except SystemExit:
+        log_msg("⏹ 任务已被立即停止", "warning")
     except Exception as e:
         log_msg(f"❌ 扫描失败: {e}", "error")
     finally:
@@ -621,6 +716,8 @@ def run_grade_scan_task():
         log_msg(f"✅ 全流程完成！版本={version}, 年级={grade}, 模块={len(modules)}个", "success")
         adb.screenshot("99_complete.png")
 
+    except SystemExit:
+        log_msg("⏹ 任务已被立即停止", "warning")
     except Exception as e:
         log_msg(f"❌ 流程失败: {e}", "error")
         import traceback
@@ -744,6 +841,8 @@ def run_inspect_loop():
             json.dump(questions, f, ensure_ascii=False, indent=2)
         log_msg(f"✅ 报告: {out.name} ({len(questions)}题)", "success")
 
+    except SystemExit:
+        log_msg("⏹ 任务已被立即停止", "warning")
     except Exception as e:
         log_msg(f"❌ 异常: {e}", "error")
         import traceback
@@ -888,6 +987,8 @@ def run_inspect_questions_task():
         log_msg(f"✅ 巡检完成: 共 {len(report['questions'])} 题", "success")
         log_msg(f"报告: {report_path}", "info")
 
+    except SystemExit:
+        log_msg("⏹ 任务已被立即停止", "warning")
     except Exception as e:
         log_msg(f"❌ 巡检失败: {e}", "error")
         import traceback
@@ -956,6 +1057,8 @@ def api_device_select():
         set_device(serial or None)
         ok = device_ok()
         return jsonify({"status": "ok", "serial": serial or "", "connected": ok})
+    except SystemExit:
+        log_msg("⏹ 任务已被立即停止", "warning")
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1716,6 +1819,8 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
                             question_type=script_q.type_2,
                             screenshot=shot_name,
                         ))
+                except SystemExit:
+                    log_msg("⏹ 任务已被立即停止", "warning")
                 except Exception as e:
                     log_msg(f"  审查异常: {e}", "warning")
 
@@ -1804,6 +1909,8 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
         set_done()
         log_msg(f"✅ 听力专项巡检完成! {len(questions_reviewed)}题", "success")
 
+    except SystemExit:
+        log_msg("⏹ 任务已被立即停止", "warning")
     except Exception as e:
         import traceback
         log_msg(f"❌ 巡检失败: {e}", "error")
@@ -1917,6 +2024,8 @@ def api_inspect_human_label():
             "feedback_stored": True,
             "stats": store.get_stats(),
         })
+    except SystemExit:
+        log_msg("⏹ 任务已被立即停止", "warning")
     except Exception as e:
         return jsonify({"success": True, "qid": qid, "feedback_error": str(e)})
 
@@ -2049,6 +2158,8 @@ def api_grades():
 
         return jsonify({"grades": grades, "book_grades": book_grades})
 
+    except SystemExit:
+        log_msg("⏹ 任务已被立即停止", "warning")
     except Exception as e:
         log_msg(f"❌ 年级检测失败: {e}", "error")
         return jsonify({"error": str(e), "grades": []})
@@ -2141,6 +2252,8 @@ def api_upload_docx():
             },
             "message": f"已导入 {stats.get('questions',0)} 题到知识库",
         })
+    except SystemExit:
+        log_msg("⏹ 任务已被立即停止", "warning")
     except Exception as e:
         return jsonify({"error": f"解析失败: {str(e)}"}), 500
 
@@ -2173,6 +2286,8 @@ def api_knowledge_status():
             "grades": [s["key"] for s in summary],
             "detail": summary,
         })
+    except SystemExit:
+        log_msg("⏹ 任务已被立即停止", "warning")
     except Exception as e:
         return jsonify({"total_entries": 0, "error": str(e)})
 
@@ -2212,6 +2327,8 @@ def api_review_run():
             "results": [r.to_dict() for r in results],
         }
         return jsonify(_review_results)
+    except SystemExit:
+        log_msg("⏹ 任务已被立即停止", "warning")
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
@@ -2235,6 +2352,8 @@ def api_review_export():
                 def ic(p): return "Y" if p else "N"
                 py_content += f"| Q{rr['idx']:02d} | {rr['type'][:10]} | {ic(rr['stem']['passed'])} | {ic(rr['content']['passed'])} | {ic(rr['image']['passed'])} | {ic(rr['answer']['passed'])} | {'PASS' if rr['overall_passed'] else 'FAIL'} ({rr['overall_score']}) |\n"
         return jsonify({"content": py_content})
+    except SystemExit:
+        log_msg("⏹ 任务已被立即停止", "warning")
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -2396,6 +2515,7 @@ def api_audio_run():
     test_units = data.get("test_units", units)
 
     def _run():
+        _register_task_thread()  # 记录线程 id，供"立即停止"注入异常
         try:
             set_running(f"听力专项[{mode}]")
             log_msg(f"启动听力专项 {mode} 模式: 练习单元{units} 测试单元{test_units}")
@@ -2404,7 +2524,7 @@ def api_audio_run():
             from common.tools import dismiss_global_popups, close_ad, ensure_grade
             import uiautomator2 as u2
 
-            d = u2.connect()
+            d = _connect_device()
             log_msg("设备已连接")
 
             # 关广告 + 确认年级
@@ -2426,6 +2546,8 @@ def api_audio_run():
 
             log_msg(f"✅ 听力专项全部完成: 练习{q1} + 测试{q2} = {q1+q2} 题")
             set_done()
+        except SystemExit:
+            log_msg("⏹ 任务已被立即停止", "warning")
         except Exception as e:
             log_msg(f"❌ 任务异常: {e}", "error")
             set_done()
@@ -2456,6 +2578,7 @@ def api_oral_run():
     units = data.get("units", [1])
 
     def _run():
+        _register_task_thread()  # 记录线程 id，供"立即停止"注入异常
         try:
             set_running(f"口语训练")
             log_msg(f"启动口语训练: 单元{units}")
@@ -2464,7 +2587,7 @@ def api_oral_run():
             from common.tools import dismiss_global_popups, close_ad, ensure_grade
             import uiautomator2 as u2
 
-            d = u2.connect()
+            d = _connect_device()
             log_msg("设备已连接")
 
             # 关广告 + 确认年级
@@ -2477,6 +2600,8 @@ def api_oral_run():
             q = run_module(d)
             log_msg(f"✅ 口语训练完成: {q} 题")
             set_done()
+        except SystemExit:
+            log_msg("⏹ 任务已被立即停止", "warning")
         except Exception as e:
             log_msg(f"❌ 任务异常: {e}", "error")
             set_done()
@@ -2506,6 +2631,7 @@ def api_unit_run():
     units = data.get("units", [1])
 
     def _run():
+        _register_task_thread()  # 记录线程 id，供"立即停止"注入异常
         try:
             set_running(f"单元自检")
             log_msg(f"启动单元自检: 单元{units}")
@@ -2514,7 +2640,7 @@ def api_unit_run():
             from common.tools import dismiss_global_popups, close_ad, ensure_grade
             import uiautomator2 as u2
 
-            d = u2.connect()
+            d = _connect_device()
             log_msg("设备已连接")
 
             # 关广告 + 确认年级
@@ -2527,6 +2653,8 @@ def api_unit_run():
             q = run_module(d)
             log_msg(f"✅ 单元自检完成: {q} 题")
             set_done()
+        except SystemExit:
+            log_msg("⏹ 任务已被立即停止", "warning")
         except Exception as e:
             log_msg(f"❌ 任务异常: {e}", "error")
             set_done()
@@ -2556,6 +2684,7 @@ def api_knowledge_run():
     units = data.get("units", [1])
 
     def _run():
+        _register_task_thread()  # 记录线程 id，供"立即停止"注入异常
         try:
             set_running(f"知识过关")
             log_msg(f"启动知识过关: 单元{units}")
@@ -2564,7 +2693,7 @@ def api_knowledge_run():
             from common.tools import dismiss_global_popups, close_ad, ensure_grade
             import uiautomator2 as u2
 
-            d = u2.connect()
+            d = _connect_device()
             log_msg("设备已连接")
 
             # 关广告 + 确认年级
@@ -2577,6 +2706,8 @@ def api_knowledge_run():
             q = run_module(d)
             log_msg(f"✅ 知识过关完成: {q} 题")
             set_done()
+        except SystemExit:
+            log_msg("⏹ 任务已被立即停止", "warning")
         except Exception as e:
             log_msg(f"❌ 任务异常: {e}", "error")
             set_done()
@@ -2601,6 +2732,7 @@ def api_voice_run():
         return jsonify({"error": "已有任务在运行"}), 409
 
     def _run():
+        _register_task_thread()  # 记录线程 id，供"立即停止"注入异常
         try:
             set_running(f"语音评测")
             log_msg(f"启动语音评测（题目未做好，仅进入）")
@@ -2609,7 +2741,7 @@ def api_voice_run():
             from common.tools import dismiss_global_popups, close_ad, ensure_grade
             import uiautomator2 as u2
 
-            d = u2.connect()
+            d = _connect_device()
             log_msg("设备已连接")
 
             for _ in range(3):
@@ -2621,6 +2753,8 @@ def api_voice_run():
             r = run_module(d)
             log_msg(f"✅ 语音评测进入完成: {r}")
             set_done()
+        except SystemExit:
+            log_msg("⏹ 任务已被立即停止", "warning")
         except Exception as e:
             log_msg(f"❌ 任务异常: {e}", "error")
             set_done()
@@ -2650,6 +2784,7 @@ def api_qiaoji_run():
     units = data.get("units", list(range(1, 10)))  # 默认全部单元
 
     def _run():
+        _register_task_thread()  # 记录线程 id，供"立即停止"注入异常
         try:
             set_running(f"巧记单词")
             log_msg(f"启动巧记单词: 单元{units}")
@@ -2658,7 +2793,7 @@ def api_qiaoji_run():
             from common.tools import dismiss_global_popups, close_ad, ensure_grade
             import uiautomator2 as u2
 
-            d = u2.connect()
+            d = _connect_device()
             log_msg("设备已连接")
 
             for _ in range(3):
@@ -2670,6 +2805,8 @@ def api_qiaoji_run():
             q = run_module(d)
             log_msg(f"✅ 巧记单词完成: {q} 题")
             set_done()
+        except SystemExit:
+            log_msg("⏹ 任务已被立即停止", "warning")
         except Exception as e:
             log_msg(f"❌ 任务异常: {e}", "error")
             set_done()
@@ -2710,16 +2847,19 @@ def api_setup():
         return jsonify({"error": "请填写版本和年级"}), 400
 
     def _run():
+        _register_task_thread()  # 记录线程 id，供"立即停止"注入异常
         try:
             log_msg(f"前提设置: 切换到 {version} {grade}")
             setup = _get_setup()
             import uiautomator2 as u2
-            d = u2.connect()
+            d = _connect_device()
             ok = setup.switch_version_grade(d, version, grade)
             if ok:
                 log_msg(f"切换成功: 当前 {version} {grade}", "success")
             else:
                 log_msg("切换失败，请重试", "error")
+        except SystemExit:
+            log_msg("⏹ 任务已被立即停止", "warning")
         except Exception as e:
             log_msg(f"切换异常: {e}", "error")
 
@@ -2732,6 +2872,23 @@ def api_setup():
 # 多模块检测：版本/年级 + 多个模块依次执行
 # ============================================================
 _LAST_MODULES_RESULT = None
+
+
+@app.route("/api/modules/stop", methods=["POST"])
+def api_modules_stop():
+    """立即停止正在运行的任务（注入异常强制中断线程，不再执行脚本内容）"""
+    global _STOP_REQUESTED
+    if not task_status["running"]:
+        return jsonify({"status": "idle", "message": "没有正在运行的任务"})
+    # 1. 设协作式标志（答题循环也感知）
+    with _STOP_LOCK:
+        _STOP_REQUESTED = True
+    # 2. 立即强制中断线程（无论脚本执行到哪，下一条字节码处抛出 SystemExit）
+    forced = _force_stop_thread()
+    log_msg("⏹ 收到停止请求，立即中断任务…", "warning")
+    if not forced:
+        log_msg("⚠ 强制中断未生效，任务将在当前步骤结束后停止", "warning")
+    return jsonify({"status": "stopping", "message": "停止信号已发送，任务已中断"})
 
 
 @app.route("/api/modules/run", methods=["POST"])
@@ -2770,7 +2927,28 @@ def api_modules_run():
     if not module_names:
         return jsonify({"error": "请至少选择一个模块"}), 400
 
+    # ★ 重置停止标志（新任务开始，清除上次的停止请求）
+    global _STOP_REQUESTED
+    with _STOP_LOCK:
+        _STOP_REQUESTED = False
+
+    # ★ 设备就绪检查：没连设备直接报错返回，不启动线程（避免 u2.connect 挂起卡住）
+    try:
+        sys.path.insert(0, str(Path(__file__).parent / "scripts"))
+        from common.device import device_ok as _dev_ok
+        cur_serial = os.environ.get("ANDROID_SERIAL") or ""
+        if not _dev_ok(cur_serial or None):
+            log_msg(f"❌ 设备未连接，无法开始检测（当前设备: {cur_serial or '未选择'}）", "error")
+            return jsonify({"error": f"设备未连接（当前设备: {cur_serial or '未选择'}），请先连接设备"}), 400
+        log_msg(f"✅ 设备就绪: {cur_serial or '(默认)'}", "success")
+    except SystemExit:
+        log_msg("⏹ 任务已被立即停止", "warning")
+    except Exception as e:
+        log_msg(f"❌ 设备检查失败: {e}", "error")
+        return jsonify({"error": f"设备检查失败: {e}"}), 500
+
     def _run():
+        _register_task_thread()  # 记录线程 id，供"立即停止"注入异常
         try:
             set_running("多模块检测")
             units_desc = f"（单元: {units}）" if units else ""
@@ -2779,8 +2957,17 @@ def api_modules_run():
             sys.path.insert(0, str(Path(__file__).parent / "scripts"))
             sched = importlib.import_module("scheduler")
             import uiautomator2 as u2
-            d = u2.connect()
-            results = sched.run_all(module_names, d, version=version, grade=grade, units=units)
+            # 线程内再次确认设备（防止入口检查后设备掉线）
+            try:
+                from common.device import device_ok as _dev_ok2
+                if not _dev_ok2():
+                    raise RuntimeError("设备已断开")
+            except RuntimeError:
+                raise
+            except Exception:
+                pass
+            d = _connect_device()
+            results = sched.run_all(module_names, d, version=version, grade=grade, units=units, stop_check=_is_stop_requested)
             # 保存结果供前端查询
             global _LAST_MODULES_RESULT
             _LAST_MODULES_RESULT = {
@@ -2794,10 +2981,20 @@ def api_modules_run():
                 status = "成功" if r.get("ok") else "失败"
                 lv = "success" if r.get("ok") else "error"
                 log_msg(f"  [{status}] {name}: {r['q']}题 {r['t']}s", lv)
-            log_msg(f"多模块检测完成: {len(results)} 个模块", "success")
+            if _is_stop_requested():
+                log_msg("⏹ 任务已被手动停止", "warning")
+            else:
+                log_msg(f"多模块检测完成: {len(results)} 个模块", "success")
+        except SystemExit:
+            # 前端"立即停止"注入的异常：记录并正常收尾
+            log_msg("⏹ 任务已被立即停止", "warning")
         except Exception as e:
             log_msg(f"多模块检测异常: {e}", "error")
         finally:
+            # 清理停止标志，供下次任务使用
+            global _STOP_REQUESTED
+            with _STOP_LOCK:
+                _STOP_REQUESTED = False
             set_done()
 
     _MODULES_RUNNER = threading.Thread(target=_run, daemon=True)

@@ -7,7 +7,7 @@ import uiautomator2 as u2
 import time, re
 from config import MODULE_CONFIG, GLOBAL_POPUPS, APP_PACKAGE, GRADE_LEVEL, BOOK_VERSION
 from common.tools import S, S_swipe, S_h, S_w
-from common.logger import step_log
+from common.logger import step_log, should_stop
 
 def close_ad(d):
     """关闭广告：多种策略按顺序尝试"""
@@ -721,6 +721,10 @@ def _answer_loop(d, config, module_name):
         return False
 
     while q < 50:
+        # ★ 停止检查：web_server 收到停止请求 → 立即中断当前模块
+        if should_stop():
+            step_log("⏹ 收到停止请求，中断当前模块", "warning")
+            return q
         if _need_dump:
             _xml = _dump()
             _need_dump = False
@@ -892,21 +896,48 @@ def run_single_module(d, module_name, config):
         if not sm: return
         print(f"  [子模块] {[s['name'] for s in sm]}")
         for i, sub in enumerate(sm):
+            # ★ 停止检查：前端停止 → 中断子模块循环
+            if should_stop():
+                step_log("⏹ 收到停止请求，中断子模块循环", "warning")
+                return
             name = f"{module_name}/{sub['name']}"
             print(f"  --- [{i+1}/{len(sm)}] {sub['name']} ---")
-            # 子模块切换：左滑直到页面上出现目标子模块名（继续练习后会重置回基础巩固）
+            # 子模块切换：固定规则（3个子模块固定顺序）
+            #   第1个（基础巩固）：不滑；第2个（综合进阶）：左滑1次；第3个（难点突破）：左滑2次
+            #   ★ 切换后读取页面当前子模块文字，展示"当前子模块: X"（用户要求知道测到哪了）
             act = sub.get("enter_action")
+            # 读取页面上所有子模块相关文字（横排可能同时显示多个）
+            def _sub_texts():
+                out = []
+                for e in (d.xpath('//*[@text!=""]').all() or []):
+                    t = (e.text or "").strip()
+                    if "Level" in t or "基础巩固" in t or "综合进阶" in t or "难点突破" in t or t.startswith("-"):
+                        out.append(t)
+                return out
             if act in ("swipe_left", "swipe_left_sub"):
-                target = sub["name"]   # 如"综合进阶"/"难点突破"
-                reached = False
-                for _ in range(6):    # 最多左滑6次（重置回基础巩固时最多滑2次）
-                    # 先看当前页是否已是目标
-                    if any(target in (e.text or "") for e in (d.xpath('//*[@text!=""]').all() or [])):
-                        reached = True
+                # 按固定次数左滑（i=1滑1次、i=2滑2次），每次滑完等页面稳定
+                swiped = 0
+                for _ in range(i):
+                    d.swipe_ext("left", scale=0.5)
+                    time.sleep(0.9)
+                    swiped += 1
+                # 如果目标名未出现在任一子模块文字中（上次遗留位置不同），补滑1次（最多补2次）
+                for _ in range(2):
+                    cur_texts = _sub_texts()
+                    if any(sub["name"] in t for t in cur_texts):
                         break
                     d.swipe_ext("left", scale=0.5)
-                    time.sleep(0.8)
-                print(f"    👈 左滑 → {sub['name']}" + (" ✅" if reached else " ⚠ 未确认"))
+                    time.sleep(0.9)
+                    swiped += 1
+                cur_texts = _sub_texts()
+                shown = next((t for t in cur_texts if sub["name"] in t), cur_texts[0] if cur_texts else "")
+                step_log(f"📌 当前子模块: {shown or sub['name']}（第{i+1}/{len(sm)}个，左滑{swiped}次）", "step")
+                print(f"    👈 切到 {sub['name']}（左滑{swiped}次）→ 当前显示: {shown or '?'}")
+            else:
+                # 第1个子模块（不滑）：也读取展示
+                cur_texts = _sub_texts()
+                shown = next((t for t in cur_texts if sub["name"] in t), cur_texts[0] if cur_texts else "")
+                step_log(f"📌 当前子模块: {shown or sub['name']}（第{i+1}/{len(sm)}个，无需滑动）", "step")
             # 答题入口：必须找到"重新答题"或"开始答题"才能开始
             for retry in range(8):
                 if d(text="重新答题").exists(timeout=1) or d(text="开始答题").exists(timeout=1):
@@ -930,6 +961,10 @@ def run_single_module(d, module_name, config):
     # 单元遍历
     if units:
         for ui, unit_num in enumerate(units):
+            # ★ 停止检查：前端停止 → 中断单元循环
+            if should_stop():
+                step_log("⏹ 收到停止请求，中断单元循环", "warning")
+                return
             print(f"\n  {'='*40}")
             print(f"  🎯 Unit {unit_num} [{ui+1}/{len(units)}]")
             print(f"  {'='*40}")

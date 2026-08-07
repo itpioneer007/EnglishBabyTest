@@ -10,11 +10,26 @@ web_server 启动时需注入回调：
   set_log_callback(lambda msg,level: log_msg(msg,level))
 """
 _log_callback = None  # web_server 注入的日志函数
+_stop_check = None    # web_server 注入的停止检查函数（返回 True = 应停止）
 
 def set_log_callback(fn):
     """注入日志回调（web_server 启动时调用）"""
     global _log_callback
     _log_callback = fn
+
+def set_stop_check(fn):
+    """注入停止检查回调（web_server 启动时调用）"""
+    global _stop_check
+    _stop_check = fn
+
+def should_stop():
+    """供模块内部答题循环调用：收到停止请求返回 True"""
+    if _stop_check:
+        try:
+            return bool(_stop_check())
+        except Exception:
+            pass
+    return False
 
 def step_log(msg, level="info"):
     """模块内部打流程日志 → 前端实时可见"""

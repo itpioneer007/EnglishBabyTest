@@ -18,7 +18,7 @@ import sys, os, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import uiautomator2 as u2
-from common.logger import step_log
+from common.logger import step_log, should_stop
 from common.tools import (
     S, S_swipe, S_h, S_w,
     close_ad, dismiss_global_popups, ensure_grade,
@@ -182,6 +182,10 @@ def _answer_big_question(d, big_idx=0):
     """
     q = 0
     for _ in range(15):  # 最多15小题（包含若干道口语题）
+        # ★ 停止检查：web_server 收到停止请求 → 中断
+        if should_stop():
+            step_log("⏹ 收到停止请求，中断当前模块", "warning")
+            return q
         # 完成判断：练习报告页（交卷后出现，整单元结束）
         if d(text="练习报告").exists(timeout=0.1):
             print(f"    ✅ 练习报告页出现，单元结束")

@@ -24,7 +24,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 .main{display:grid;grid-template-columns:420px 1fr;gap:0;min-height:calc(100vh - 58px)}
 @media(max-width:960px){.main{grid-template-columns:1fr}}
 
-/* ===== 左栏 — 点菜区 ===== */
+/* ===== 左栏 — 任务配置区 ===== */
 .order{background:var(--white);padding:24px;overflow-y:auto;border-right:1px solid var(--border)}
 
 /* 清单输入 */
@@ -55,7 +55,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 .mod-tag{padding:7px 13px;border:1.5px solid var(--border);border-radius:20px;font-size:13px;cursor:pointer;transition:all .15s;user-select:none;background:var(--cream)}
 .mod-tag:hover{border-color:var(--green-light)}
 .mod-tag.on{border-color:var(--green);background:#f0fdf4;color:var(--green);font-weight:600}
-.mod-tag input{display:none}
+.mod-tag input.mod-sel{display:none}  /* 只隐藏勾选框，单元范围输入框保留显示 */
 .unit-toggle{font-size:11px;opacity:.5;margin-left:2px;cursor:pointer}
 .unit-toggle:hover{opacity:1}
 .unit-input-wrap{display:flex;align-items:center;gap:4px;font-size:12px;color:var(--gray);font-weight:400;margin-left:2px;padding:2px 0}
@@ -72,10 +72,15 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 .btn-cook:disabled{opacity:.6;cursor:not-allowed;transform:none}
 .btn-cook .emoji{font-size:20px}
 
-/* ===== 右栏 — 后厨 + 上菜 ===== */
+/* 停止按钮 */
+.stop-btn{padding:6px 14px;background:var(--red);color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;transition:all .15s;margin-left:auto}
+.stop-btn:hover{background:#a33b36;transform:translateY(-1px)}
+.stop-btn:disabled{opacity:.5;cursor:not-allowed}
+
+/* ===== 右栏 — 执行进度 + 结果 ===== */
 .kitchen{display:flex;flex-direction:column;background:var(--cream)}
 
-/* 后厨状态条 */
+/* 状态条 */
 .kitchen-bar{padding:16px 24px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border);background:var(--white)}
 .kitchen-bar .pulse{width:10px;height:10px;border-radius:50%;background:var(--gray)}
 .kitchen-bar .pulse.running{background:var(--red);animation:pulse .8s ease-in-out infinite}
@@ -98,7 +103,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 .log-clear{text-align:right;padding:0 24px 12px;font-size:12px;color:var(--gray);cursor:pointer}
 .log-clear:hover{color:var(--green)}
 
-/* 上菜区（结果） */
+/* 结果区 */
 .serve-wrap{padding:20px 24px;border-top:1px solid var(--border);background:var(--white);max-height:300px;overflow-y:auto}
 .serve-wrap:empty{display:none}
 .serve-hdr{font-size:15px;font-weight:700;color:var(--green);margin-bottom:12px;display:flex;align-items:center;gap:6px}
@@ -143,7 +148,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <!-- ====== 左右两栏 ====== -->
 <div class="main">
 
-  <!-- 📋 左栏：点菜下单 -->
+  <!-- 📋 左栏：任务配置 -->
   <div class="order">
 
     <!-- 订单输入 -->
@@ -183,32 +188,33 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 
       <div style="font-size:13px;color:var(--gray);margin-bottom:6px">要测的模块（可多选）<span style="font-size:11px">· 点⚙️可指定单元范围</span></div>
       <div class="module-tags">
-        <label class="mod-tag on"><input type="checkbox" class="mod-sel" value="听力专项" checked>听力专项<span class="unit-gear" onclick="toggleUnitConfig(event)">⚙️</span><span class="unit-input-wrap" style="display:none"><input type="text" class="unit-range-input" placeholder="1-5" size="4"></span></label>
-        <label class="mod-tag on"><input type="checkbox" class="mod-sel" value="口语训练" checked>口语训练<span class="unit-gear" onclick="toggleUnitConfig(event)">⚙️</span><span class="unit-input-wrap" style="display:none"><input type="text" class="unit-range-input" placeholder="1-4" size="4"></span></label>
-        <label class="mod-tag on"><input type="checkbox" class="mod-sel" value="单元自检" checked>单元自检<span class="unit-gear" onclick="toggleUnitConfig(event)">⚙️</span><span class="unit-input-wrap" style="display:none"><input type="text" class="unit-range-input" placeholder="1-4" size="4"></span></label>
-        <label class="mod-tag on"><input type="checkbox" class="mod-sel" value="知识过关" checked>知识过关<span class="unit-gear" onclick="toggleUnitConfig(event)">⚙️</span><span class="unit-input-wrap" style="display:none"><input type="text" class="unit-range-input" placeholder="1-9" size="4"></span></label>
-        <label class="mod-tag on"><input type="checkbox" class="mod-sel" value="语音评测" checked>语音评测<span class="unit-gear" onclick="toggleUnitConfig(event)">⚙️</span><span class="unit-input-wrap" style="display:none"><input type="text" class="unit-range-input" placeholder="—" size="4"></span></label>
-        <label class="mod-tag on"><input type="checkbox" class="mod-sel" value="巧记单词" checked>巧记单词<span class="unit-gear" onclick="toggleUnitConfig(event)">⚙️</span><span class="unit-input-wrap" style="display:none"><input type="text" class="unit-range-input" placeholder="1-9" size="4"></span></label>
+        <label class="mod-tag on"><input type="checkbox" class="mod-sel" value="听力专项" checked>听力专项<span class="unit-gear" title="指定单元范围">⚙️</span><span class="unit-input-wrap" style="display:none"><input type="text" class="unit-range-input" placeholder="1-5" size="4"></span></label>
+        <label class="mod-tag on"><input type="checkbox" class="mod-sel" value="口语训练" checked>口语训练<span class="unit-gear" title="指定单元范围">⚙️</span><span class="unit-input-wrap" style="display:none"><input type="text" class="unit-range-input" placeholder="1-4" size="4"></span></label>
+        <label class="mod-tag on"><input type="checkbox" class="mod-sel" value="单元自检" checked>单元自检<span class="unit-gear" title="指定单元范围">⚙️</span><span class="unit-input-wrap" style="display:none"><input type="text" class="unit-range-input" placeholder="1-4" size="4"></span></label>
+        <label class="mod-tag on"><input type="checkbox" class="mod-sel" value="知识过关" checked>知识过关<span class="unit-gear" title="指定单元范围">⚙️</span><span class="unit-input-wrap" style="display:none"><input type="text" class="unit-range-input" placeholder="1-9" size="4"></span></label>
+        <label class="mod-tag on"><input type="checkbox" class="mod-sel" value="语音评测" checked>语音评测<span class="unit-gear" title="指定单元范围">⚙️</span><span class="unit-input-wrap" style="display:none"><input type="text" class="unit-range-input" placeholder="—" size="4"></span></label>
+        <label class="mod-tag on"><input type="checkbox" class="mod-sel" value="巧记单词" checked>巧记单词<span class="unit-gear" title="指定单元范围">⚙️</span><span class="unit-input-wrap" style="display:none"><input type="text" class="unit-range-input" placeholder="1-9" size="4"></span></label>
         <span style="font-size:12px;color:var(--gray);margin-left:4px">已选 <b id="moduleSelCount">6</b></span>
       </div>
     </div>
 
-    <!-- 开始烹饪 -->
+    <!-- 开始检测 -->
     <button class="btn-cook" id="btnCook" onclick="startCooking()">
-      <span class="emoji">🔥</span> 解析清单并开始烹饪
+      <span class="emoji">🚀</span> 解析并开始检测
     </button>
     <div style="font-size:12px;color:var(--gray);text-align:center;margin-top:8px">
       点击后后台会分析你的清单，自动调用对应模块开始检测
     </div>
   </div>
 
-  <!-- 🔥 右栏：后厨 + 上菜 -->
+  <!-- 🔥 右栏：执行进度 -->
   <div class="kitchen" id="kitchenCol">
 
-    <!-- 后厨状态 -->
+    <!-- 状态 -->
     <div class="kitchen-bar">
       <span class="pulse" id="kitchenPulse"></span>
-      <span class="msg" id="kitchenMsg">后厨空闲，等待下单…</span>
+      <span class="msg" id="kitchenMsg">就绪，等待开始…</span>
+      <button class="stop-btn" id="btnStop" onclick="stopCooking()" style="display:none">⏹ 停止检测</button>
       <span class="sub" id="kitchenSub"></span>
     </div>
 
@@ -216,12 +222,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
     <div class="log-wrap" id="logWrap">
       <div class="log-empty">
         <span class="emoji">👨‍🍳</span>
-        还没有开始烹饪<br>在左侧下单后点"开始烹饪"吧
+        还没有开始检测<br>在左侧配置任务后点"开始检测"吧
       </div>
     </div>
     <div class="log-clear" onclick="clearLog()">清空日志</div>
 
-    <!-- 上菜区（结果） -->
+    <!-- 结果区（汇总） -->
     <div class="serve-wrap" id="serveWrap" style="display:none"></div>
   </div>
 </div>
@@ -244,12 +250,13 @@ async function pollStatus(){
       refreshDevSelect(dl.devices||[], s.device_serial||'')
     }
     const ts=s.task_status||{}
+    updateStopBtn(ts.running)
     if(ts.running){
       $('kitchenPulse').className='pulse running'
-      $('kitchenMsg').textContent='🔥 烹饪中… '+(ts.current_task||'')
+      $('kitchenMsg').textContent='🔄 检测中… '+(ts.current_task||'')
     }else if(!ts.current_task){
       $('kitchenPulse').className='pulse'
-      $('kitchenMsg').textContent='后厨空闲，等待下单…'
+      $('kitchenMsg').textContent='就绪，等待开始…'
       $('kitchenSub').textContent=''
     }
     $('taskBadge').textContent=ts.current_task||'空闲'
@@ -296,8 +303,10 @@ function clearLog(){
 }
 async function pollLog(){
   try{
+    // /api/log 返回的是数组（task_status["log"]），不是 {logs: [...]}
     const d=await(await fetch('/api/log')).json()
-    const logs=(d.logs||[]).slice(logLast)
+    const arr = Array.isArray(d) ? d : (d.logs||[])
+    const logs=arr.slice(logLast)
     if(logs.length) logLast+=logs.length
     logs.forEach(l=>addLog(l.level,l.msg))
   }catch(e){}
@@ -312,17 +321,7 @@ function uploadOrder(e){
   addLog('step','📋 注：清单文件解析功能即将上线，当前请使用文字描述')
 }
 
-// ====== 单元范围配置（⚙️ 展开/收起） ======
-function toggleUnitConfig(ev){
-  ev.stopPropagation()  // 防止触发 label 的勾选
-  const wrap=ev.target.closest('.mod-tag').querySelector('.unit-input-wrap')
-  if(!wrap) return
-  const show=wrap.style.display!=='flex'
-  wrap.style.display=show?'flex':'none'
-  if(show) wrap.querySelector('input').focus()
-}
-
-// ====== 开始烹饪（多模块检测） ======
+// ====== 开始检测（多模块执行） ======
 async function startCooking(){
   const version=$('setupVersion').value
   const grade=$('setupGrade').value
@@ -355,7 +354,7 @@ async function startCooking(){
   if(!confirm(confirmMsg)) return
 
   const btn=$('btnCook')
-  btn.disabled=true; btn.innerHTML='<span class="emoji">🔥</span> 烹饪中…'
+  btn.disabled=true; btn.innerHTML='<span class="emoji">🚀</span> 检测中…'
 
   // 如果用户写了清单文字，先记录
   if(orderText){
@@ -369,13 +368,34 @@ async function startCooking(){
     const body=hasUnits?{version,grade,modules,units:unitsMap}:{version,grade,modules}
     const r=await fetch('/api/modules/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
     const j=await r.json()
-    if(j.error){alert(j.error);btn.disabled=false;btn.innerHTML='<span class="emoji">🔥</span> 解析清单并开始烹饪';return}
-    addLog('success','✅ 已接单！开始烹饪 '+j.modules.length+' 道菜')
+    if(j.error){alert(j.error);btn.disabled=false;btn.innerHTML='<span class="emoji">🚀</span> 解析并开始检测';return}
+    addLog('success','✅ 任务已启动，共 '+j.modules.length+' 个模块')
     $('serveWrap').style.display='none'
     // 轮询结果
     pollCookResult(modules)
-  }catch(e){alert('启动失败: '+e.message);btn.disabled=false;btn.innerHTML='<span class="emoji">🔥</span> 解析清单并开始烹饪'}
-  finally{setTimeout(()=>{btn.disabled=false;btn.innerHTML='<span class="emoji">🔥</span> 解析清单并开始烹饪'},4000)}
+  }catch(e){alert('启动失败: '+e.message);btn.disabled=false;btn.innerHTML='<span class="emoji">🚀</span> 解析并开始检测'}
+  finally{setTimeout(()=>{btn.disabled=false;btn.innerHTML='<span class="emoji">🚀</span> 解析并开始检测'},4000)}
+}
+
+// ====== 停止检测（手动停止当前任务） ======
+async function stopCooking(){
+  const btn=$('btnStop')
+  if(btn) btn.disabled=true
+  try{
+    const r=await(await fetch('/api/modules/stop',{method:'POST'})).json()
+    if(r.message) addLog('warning','⏹ '+r.message)
+  }catch(e){
+    addLog('error','⏹ 停止请求发送失败: '+e.message)
+    if(btn) btn.disabled=false
+  }
+}
+
+// 运行中显示停止按钮，空闲隐藏
+function updateStopBtn(running){
+  const btn=$('btnStop')
+  if(!btn) return
+  btn.style.display = running ? 'inline-block' : 'none'
+  if(!running) btn.disabled = false
 }
 
 function pollCookResult(modules){
@@ -389,19 +409,19 @@ function pollCookResult(modules){
         renderServe(r)
       }else if(tried>600){
         clearInterval(timer)
-        addLog('warning','⏰ 烹饪超时（10分钟），请手动查看设备状态')
+        addLog('warning','⏰ 任务超时（10分钟），请手动查看设备状态')
       }
     }catch(e){}
   },2000)
 }
 
-// ====== 上菜（结果展示） ======
+// ====== 结果展示（汇总） ======
 function renderServe(data){
   const rs=data.results||{}
   const names=Object.keys(rs)
   const totalQ=names.reduce((s,n)=>s+(rs[n].q||0),0)
   const okN=names.filter(n=>rs[n].ok).length
-  let html='<div class="serve-hdr">🍲 出餐完成！</div><div class="serve-cards">'
+  let html='<div class="serve-hdr">📊 检测完成！</div><div class="serve-cards">'
   names.forEach(n=>{
     const r=rs[n]; const ok=r.ok
     html+=`<div class="serve-card ${ok?'ok':'fail'}">
@@ -411,20 +431,35 @@ function renderServe(data){
     </div>`
   })
   html+=`</div><div class="serve-summary">
-    ${names.length} 道菜 · 成功 <b style="color:var(--green)">${okN}</b> 道 · 
+    ${names.length} 个模块 · 成功 <b style="color:var(--green)">${okN}</b> 个 · 
     累计答题 <b style="color:var(--green)">${totalQ}</b> 题 · ${data.version||''} ${data.grade||''}
   </div>`
   const el=$('serveWrap')
   el.innerHTML=html
   el.style.display='block'
   el.scrollIntoView({behavior:'smooth'})
-  addLog('success',`🍲 全部出餐！${names.length}道菜，${okN}道成功，${totalQ}题`)
+  addLog('success',`✅ 全部完成！${names.length}个模块，${okN}个成功，累计${totalQ}题`)
 }
 
 // ====== 启动 ======
 pollStatus()
 pollLog()
 refreshModuleSel()
+
+// ====== 齿轮 ⚙️ 事件委托（捕获阶段，先于 label 默认行为拦截） ======
+document.addEventListener('click', function(ev){
+  const gear = ev.target.closest ? ev.target.closest('.unit-gear') : null
+  if(!gear) return
+  ev.preventDefault()   // 阻止 label 转发点击到 checkbox
+  ev.stopPropagation()
+  const tag = gear.closest('.mod-tag')
+  if(!tag) return
+  const wrap = tag.querySelector('.unit-input-wrap')
+  if(!wrap) return
+  const show = wrap.style.display !== 'flex'
+  wrap.style.display = show ? 'flex' : 'none'
+  if(show) wrap.querySelector('input').focus()
+}, true)
 </script>
 </body>
 </html>

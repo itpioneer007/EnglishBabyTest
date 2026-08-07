@@ -49,16 +49,42 @@ def _switch_if_needed(d, version, grade):
             print(f"  ⚠ 切换版本/年级异常: {e}")
 
 
-def run_all(module_names=None, d=None, version=None, grade=None, units=None):
+def run_all(module_names=None, d=None, version=None, grade=None, units=None, stop_check=None):
     """依次跑指定模块（默认全部），返回 {模块: {q, t, ok}}
 
     version/grade: 目标教材版本+年级，执行前自动切换（已正确则跳过）
     units: 每个模块的单元范围映射，如 {"听力专项": "1-3", "单元自检": "1-5"}
           未指定的模块跑默认全部单元
+    stop_check: 可选回调，每次模块循环前调用；返回 True 表示收到停止请求 → 中断
     """
+    # ★ 全局 u2 操作超时：默认 300s，设备断连时每个操作挂 5 分钟 = 看起来"卡死"
+    #   设为 15s，设备异常时快速失败并报错
+    try:
+        import uiautomator2 as _u2
+        _u2.HTTP_TIMEOUT = 15
+        _u2.WAIT_FOR_DEVICE_TIMEOUT = 10
+    except Exception:
+        pass
+
     if d is None:
+        # ★ 设备就绪检查：u2.connect 在没设备时可能长时间挂起，先快速检测
+        try:
+            from common.device import device_ok
+            if not device_ok():
+                raise RuntimeError("设备未连接或离线")
+        except ImportError:
+            pass
         d = u2.connect()
         print("设备已连接")
+
+    # ★ 无论 d 是否传入，都做一次快速设备探活（u2 操作失败会挂起，不如提前检查）
+    try:
+        info = d.info
+        if not info:
+            raise RuntimeError("设备离线")
+    except Exception as e:
+        step_log(f"❌ 设备不可用: {e}，请先连接设备再开始", "error")
+        return {name: {"q": 0, "t": 0, "ok": False, "error": f"设备不可用: {e}"} for name in (module_names or MODULE_MAP.keys())}
 
     if module_names is None:
         module_names = list(MODULE_MAP.keys())
@@ -69,7 +95,7 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None):
     units = units or {}
 
     # 0. 重启 App 回主页（保证干净起点，避免停留在上个模块的答题页）
-    step_log("🔄 重启 App，准备开始烹饪...", "step")
+    step_log("🔄 重启 App，准备开始检测...", "step")
     try:
         d.press("home"); time.sleep(0.4)
         d.app_stop(APP_PACKAGE); time.sleep(0.8)
@@ -93,6 +119,10 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None):
 
     results = {}
     for i, name in enumerate(module_names):
+        # ★ 停止检查：web_server 收到停止请求后注入的回调返回 True → 中断
+        if stop_check is not None and stop_check():
+            step_log("⏹ 收到停止请求，中断剩余模块", "warning")
+            break
         if name not in MODULE_MAP:
             print(f"未知模块: {name}（可选: {list(MODULE_MAP.keys())}）")
             results[name] = {"q": 0, "t": 0, "ok": False, "error": "未知模块"}
@@ -101,7 +131,7 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None):
         # 该模块的单元范围（未指定 → None = 默认全部）
         module_units = units.get(name)
         units_desc = f"{module_units}" if module_units else "全部"
-        step_log(f"🍳 开始烹饪第 {i+1}/{len(module_names)} 道菜: {name}（单元: {units_desc}）", "step")
+        step_log(f"▶ 开始检测第 {i+1}/{len(module_names)} 个模块: {name}（单元: {units_desc}）", "step")
         t0 = time.time()
         try:
             mod = importlib.import_module(MODULE_MAP[name])
@@ -115,16 +145,16 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None):
         except Exception as e:
             elapsed = round(time.time() - t0)
             results[name] = {"q": 0, "t": elapsed, "ok": False, "error": str(e)}
-            step_log(f"❌ {name} 烹饪失败: {e}", "error")
+            step_log(f"❌ {name} 检测失败: {e}", "error")
 
         # 模块间回到主页（保证下一模块干净起点；★ 不再切换年级，调度器只在开头切一次）
-        step_log(f"↩ {name} 完成，返回主页准备下一道菜…", "info")
+        step_log(f"↩ {name} 完成，返回主页准备下一个模块…", "info")
         time.sleep(0.8)
 
     # 汇总
     total_q = sum(r.get("q", 0) for r in results.values())
     ok_n = sum(1 for r in results.values() if r.get("ok"))
-    step_log(f"🍲 全部烹饪完成！{len(results)} 道菜, {ok_n} 道成功, 累计 {total_q} 题", "success")
+    step_log(f"✅ 全部检测完成！{len(results)} 个模块, {ok_n} 个成功, 累计 {total_q} 题", "success")
     return results
 
 
