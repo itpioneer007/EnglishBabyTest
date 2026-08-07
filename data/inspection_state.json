@@ -1,88 +1,61 @@
 {
-  "current_question_idx": 4,
-  "questions": {
-    "quick-Q02": {
-      "idx": 2,
-      "total": 15,
-      "question_type": "听音选择词汇",
-      "screenshot": "q02.png",
-      "progress": "2/15",
-      "ai_stem": false,
-      "ai_content": false,
-      "ai_image": true,
-      "ai_answer": false,
-      "ai_audio": false,
-      "ai_post_error": true,
-      "overall_passed": false,
-      "overall_score": 0.33,
-      "stem_reason": "",
-      "content_reason": "",
-      "image_reason": "⏭ 非配图题",
-      "answer_reason": "",
-      "audio_reason": "",
-      "post_error_reason": "⏭ 非首题，跳过答错后检查",
-      "script_answer": "C",
-      "stem": "",
-      "note": "",
-      "human_label": null,
-      "human_note": "",
-      "timestamp": "2026-08-03T17:19:16.628084"
+  "current_question_idx": 0,
+  "questions": {},
+  "workflow_steps": [
+    {
+      "step": "1.启动APP",
+      "status": "done",
+      "detail": "",
+      "updated": "2026-08-05T13:38:53.007691"
     },
-    "quick-Q03": {
-      "idx": 3,
-      "total": 15,
-      "question_type": "听音选择词汇",
-      "screenshot": "q03.png",
-      "progress": "3/15",
-      "ai_stem": false,
-      "ai_content": false,
-      "ai_image": true,
-      "ai_answer": false,
-      "ai_audio": false,
-      "ai_post_error": true,
-      "overall_passed": false,
-      "overall_score": 0.33,
-      "stem_reason": "",
-      "content_reason": "",
-      "image_reason": "⏭ 非配图题",
-      "answer_reason": "",
-      "audio_reason": "",
-      "post_error_reason": "⏭ 非首题，跳过答错后检查",
-      "script_answer": "A",
-      "stem": "",
-      "note": "",
-      "human_label": null,
-      "human_note": "",
-      "timestamp": "2026-08-03T17:19:27.426780"
+    {
+      "step": "0.回到首页",
+      "status": "done",
+      "detail": "",
+      "updated": "2026-08-05T13:38:45.194311"
     },
-    "quick-Q04": {
-      "idx": 4,
-      "total": 15,
-      "question_type": "听音选择词汇",
-      "screenshot": "q04.png",
-      "progress": "4/15",
-      "ai_stem": false,
-      "ai_content": false,
-      "ai_image": true,
-      "ai_answer": false,
-      "ai_audio": false,
-      "ai_post_error": true,
-      "overall_passed": false,
-      "overall_score": 0.33,
-      "stem_reason": "",
-      "content_reason": "",
-      "image_reason": "⏭ 非配图题",
-      "answer_reason": "",
-      "audio_reason": "",
-      "post_error_reason": "⏭ 非首题，跳过答错后检查",
-      "script_answer": "C",
-      "stem": "",
-      "note": "",
-      "human_label": null,
-      "human_note": "",
-      "timestamp": "2026-08-03T17:21:30.721797"
+    {
+      "step": "1.5关闭教程",
+      "status": "done",
+      "detail": "",
+      "updated": "2026-08-05T13:38:55.702863"
+    },
+    {
+      "step": "2.关闭广告",
+      "status": "done",
+      "detail": "",
+      "updated": "2026-08-05T13:39:00.961196"
+    },
+    {
+      "step": "3.英语Tab",
+      "status": "done",
+      "detail": "",
+      "updated": "2026-08-05T13:39:05.750923"
+    },
+    {
+      "step": "3.5版本检查",
+      "status": "done",
+      "detail": "五年级上册",
+      "updated": "2026-08-05T13:39:09.365740"
+    },
+    {
+      "step": "4.专项突破",
+      "status": "done",
+      "detail": "",
+      "updated": "2026-08-05T13:39:20.541681"
+    },
+    {
+      "step": "5.听力专项",
+      "status": "error",
+      "detail": "听力专项",
+      "updated": "2026-08-05T13:40:54.029846"
+    },
+    {
+      "step": "6.逐题巡检",
+      "status": "running",
+      "detail": "",
+      "updated": "2026-08-05T13:42:26.875946"
     }
-  },
-  "workflow_steps": [],
+  ],
   "docx": ""
 }

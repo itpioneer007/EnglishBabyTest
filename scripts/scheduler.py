@@ -41,7 +41,7 @@ def _switch_if_needed(d, version, grade):
             print(f"  ⚠ 切换版本/年级异常: {e}")
 
 
-def run_all(module_names=None, d=None, version=None, grade=None):
+def run_all(module_names=None, d=None, version=None, grade=None, unit_from=0, unit_to=0):
     """依次跑指定模块（默认全部），返回 {模块: {q, t, ok}}
 
     version/grade: 目标教材版本+年级，执行前自动切换（已正确则跳过）
@@ -56,6 +56,10 @@ def run_all(module_names=None, d=None, version=None, grade=None):
         version = DEFAULT_VERSION
     if grade is None:
         grade = DEFAULT_GRADE
+    if unit_from:
+        os.environ["YYB_UNIT_FROM"] = str(unit_from)
+    if unit_to:
+        os.environ["YYB_UNIT_TO"] = str(unit_to)
 
     # 0. 重启 App 回主页（保证干净起点，避免停留在上个模块的答题页）
     try:

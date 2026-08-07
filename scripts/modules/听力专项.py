@@ -12,6 +12,7 @@
 
 批量调用：from modules.听力专项 import run_module; run_module(d)
 """
+import os
 import sys, os, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -27,8 +28,19 @@ APP_PACKAGE = "com.dinoenglish.yyb"
 GRADE_LEVEL = "五年级上册"
 BOOK_VERSION = "湘少版"
 
-UNITS = [1]  # 练习部分：U1-U9；测试先跑 U1
-TEST_UNITS = [1]  # 测试部分：U1-U5；测试先跑 U1
+
+def _env_units():
+    """从环境变量读取单元范围 (scheduler 设置); 未设置时默认 Unit 1"""
+    f = os.environ.get("YYB_UNIT_FROM", "")
+    t = os.environ.get("YYB_UNIT_TO", "")
+    if f.isdigit():
+        f = int(f)
+        t = int(t) if t.isdigit() else f
+        return list(range(f, t + 1))
+    return [1]
+
+UNITS = _env_units()  # 练习部分：U1-U9；测试先跑 U1
+TEST_UNITS = _env_units()  # 测试部分：U1-U5；测试先跑 U1
 
 CONFIG = {
     "entry_text": "听力专项",

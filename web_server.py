@@ -1160,6 +1160,16 @@ def run_inspect_questions_task():
 # Flask 路由
 # ============================================================
 
+
+@app.after_request
+def _no_cache(resp):
+    """禁用页面缓存：确保浏览器始终加载最新 HTML/JS"""
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
+
+
 @app.route("/")
 def index():
     """前端页面"""
@@ -2388,6 +2398,25 @@ def _get_current_version_from_config() -> str:
 UPLOAD_DIR = PROJECT_ROOT / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 
+
+@app.route("/api/upload", methods=["POST"])
+def api_upload():
+    """上传 DOCX/DOC 脚本文件（仅保存到 uploads 目录，供审查智能体使用）
+
+    前端 uploadFile() 调用此接口上传文件
+    """
+    if "file" not in request.files:
+        return jsonify({"error": "未选择文件"}), 400
+    file = request.files["file"]
+    ext = file.filename.lower().rsplit(".", 1)[-1] if "." in file.filename else ""
+    if ext not in ("docx", "doc"):
+        return jsonify({"error": "仅支持 .docx / .doc 文件"}), 400
+    save_path = UPLOAD_DIR / file.filename
+    file.save(str(save_path))
+    log_msg(f"📤 已上传脚本: {file.filename}", "success")
+    return jsonify({"success": True, "filename": file.filename})
+
+
 @app.route("/api/upload-docx", methods=["POST"])
 def api_upload_docx():
     """上传 DOCX/DOC 脚本文件, 自动导入知识库"""
@@ -3019,6 +3048,8 @@ def api_modules_run():
     data = request.get_json() or {}
     version = (data.get("version") or "湘少版").strip()
     grade = (data.get("grade") or "五年级上册").strip()
+    unit_from = int(data.get("unit_from") or 0)
+    unit_to = int(data.get("unit_to") or 0)
     modules = data.get("modules") or []
     if not modules:
         return jsonify({"error": "请至少选择一个模块"}), 400
@@ -3032,7 +3063,26 @@ def api_modules_run():
             sched = importlib.import_module("scheduler")
             import uiautomator2 as u2
             d = u2.connect()
-            results = sched.run_all(modules, d, version=version, grade=grade)
+
+            # ---- 定时截图循环: 每3秒截一张到 outputs/web/live.png (前端实时预览) ----
+            shot_dir = PROJECT_ROOT / "outputs" / "web"
+            shot_dir.mkdir(parents=True, exist_ok=True)
+            _stop_shot = {"v": False}
+            def _shot_loop():
+                while not _stop_shot["v"]:
+                    try:
+                        d.screenshot(str(shot_dir / "live.png"))
+                    except Exception:
+                        pass
+                    time.sleep(3)
+            _shot_thread = threading.Thread(target=_shot_loop, daemon=True)
+            _shot_thread.start()
+            log_msg("📸 截图预览已开启（每3秒刷新）", "info")
+
+            try:
+                results = sched.run_all(modules, d, version=version, grade=grade, unit_from=unit_from, unit_to=unit_to)
+            finally:
+                _stop_shot["v"] = True
             # 保存结果供前端查询
             global _LAST_MODULES_RESULT
             _LAST_MODULES_RESULT = {

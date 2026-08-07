@@ -554,7 +554,7 @@ textarea{font-family:inherit}
           <div class="upload-area" id="dropZone">
             <div class="icon">+</div>
             <div class="txt">拖拽 DOCX 或 DOC 文件到此处，或点下方按钮选择</div>
-            <input type="file" id="fileInput" accept=".docx,.doc" style="display:none">
+            <input type="file" id="fileInput" accept=".docx,.doc" style="display:none" onchange="uploadViaFileInput()">
             <button class="btn btn-outline" onclick="document.getElementById('fileInput').click()">选择文件 (.docx / .doc)</button>
           </div>
           <div id="uploadStatus" style="font-size:14px;color:#64748b;margin-bottom:8px;margin-top:6px"></div>
@@ -638,6 +638,7 @@ function $(id){return document.getElementById(id)}
 async function init(){
   pollStatus()
   loadUploadList()
+  startShotPolling()
 }
 init()
 
@@ -726,6 +727,21 @@ async function uploadFile(){
   const f=$('uploadInput').files[0]; if(!f) return
   const fd=new FormData(); fd.append('file',f)
   await fetch('/api/upload',{method:'POST',body:fd})
+  loadUploadList()
+}
+
+
+async function uploadViaFileInput(){
+  const f=$('fileInput').files[0]; if(!f) return
+  const fd=new FormData(); fd.append('file',f)
+  try{
+    const r=await fetch('/api/upload',{method:'POST',body:fd})
+    const j=await r.json().catch(()=>({}))
+    if(!r.ok){alert(j.error||'上传失败 ('+r.status+')');$('fileInput').value='';return}
+    if(typeof addLog==='function')addLog('success','📤 已上传脚本: '+f.name)
+    alert('✅ 上传成功: '+f.name)
+  }catch(e){alert('上传失败: '+e.message)}
+  $('fileInput').value=''
   loadUploadList()
 }
 
@@ -942,7 +958,7 @@ async function startModules(){
   btn.disabled=true; btn.textContent='检测中...'
   try{
     const r=await fetch('/api/modules/run',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({version,grade,modules})})
+      body:JSON.stringify({version,grade,modules,unit_from:$('planUnitFrom')?parseInt($('planUnitFrom').value):0,unit_to:$('planUnitTo')?parseInt($('planUnitTo').value):0})})
     const j=await r.json()
     if(j.error){alert(j.error);return}
     addLog('info',`多模块检测已启动: ${version} ${grade} → ${modules.join('、')}`)
@@ -953,7 +969,7 @@ async function startModules(){
 }
 
 // ====== 多模块检测：结果轮询与汇总展示 ======
-function pollModulesResult(modules){
+async function pollModulesResult(modules){
   let tried=0
   const timer=setInterval(async()=>{
     tried++
@@ -997,6 +1013,42 @@ function renderSummary(data){
 }
 
 setInterval(pollLog,2000)
+
+async function runReview(){
+  const docx=$('reviewDocx')?$('reviewDocx').value:'';
+  const unit=$('reviewUnit')?$('reviewUnit').value:'';
+  if(!docx||docx===''||docx==='— 尚未上传 —'){alert('请先选择脚本文件');return}
+  $('reviewResult').innerHTML='<span style="color:#64748b">🤖 审查中...（AI逐题审查，请稍候）</span>';
+  try{
+    const r=await(await fetch('/api/review/run',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({docx:docx,unit:unit?parseInt(unit):0})})).json();
+    if(r.error){$('reviewResult').innerHTML='<span style="color:#ef4444">❌ '+r.error+'</span>';return}
+    let total=0,passed=0;
+    if(r.results&&Array.isArray(r.results)){total=r.results.length;passed=r.results.filter(x=>x.overall_passed).length;}
+    else{total=r.total||0;passed=r.passed!==undefined?r.passed:0;}
+    $('reviewResult').innerHTML='<span style="color:#16a34a">✅ 审查完成: 共'+total+'题, 通过'+passed+'题</span>';
+    if(total>0&&typeof loadReviewResults==='function')loadReviewResults();
+  }catch(e){$('reviewResult').innerHTML='<span style="color:#ef4444">❌ 审查失败: '+e.message+'</span>'}
+}
+
+// ====== 截图实时预览轮询 (每2秒) ======
+let _shotTimer=null
+async function pollShot(){
+  try{
+    const t=Date.now()
+    const r=await fetch('/api/screenshot/latest?t='+t)
+    if(r.ok){
+      const blob=await r.blob()
+      const url=URL.createObjectURL(blob)
+      $('screenshotArea').innerHTML=`<img src="${url}" alt="实时截图">`
+    }
+  }catch(e){}
+}
+function startShotPolling(){
+  if(_shotTimer) clearInterval(_shotTimer)
+  _shotTimer=setInterval(pollShot,2000)
+  pollShot()
+}
 </script>
 </body>
 </html>

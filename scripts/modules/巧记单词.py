@@ -308,7 +308,8 @@ def _answer_loop(d, max_q=20):
             continue
         # 未知题型：截图保存，稍等
         d.screenshot(f"unknown_qiaoji_{q}.png")
-        print(f"    ⚠ 未知: {[e.text for e in (d.xpath('//*[@text!=\"\"]').all() or []) if e.text][:4]}")
+        _unk = [e.text for e in (d.xpath('//*[@text!=""]').all() or []) if e.text]
+        print(f"    ⚠ 未知: {_unk[:4]}")
         time.sleep(2)
     return q
 
