@@ -682,111 +682,132 @@ def _get_qno(d):
 
 def _answer_loop(d, config, module_name):
     """答题循环（内部复用），返回题目数。
-
-    原则：
-      1. 有选项就直接点（选择题点A/B/C，判断题点T/F）
-      2. 点"检查"
-      3. 答对 → App 自动进下一题（无需操作）
-      4. 答错 → 出现"下一题"按钮 → 点击进入真正的下一题
-      5. 最后一题 → 出现"练习报告" → 处理并返回
+    
+    ★ 性能优化：每轮循环只 dump 一次 XML（≈200ms），后续所有文本判断/坐标获取
+      都在内存做字符串匹配，消灭每次循环 ~20 次设备 HTTP 交互（exists/xpath）。
+      只在执行 click 改变页面后重新 dump。
     """
     q = 0
+    _xml = ""  # 当前 UI 缓存
+    _need_dump = True  # 需要在下一轮重新 dump
+
+    # ── 缓存辅助函数 ──
+    def _dump():
+        return d.dump_hierarchy()
+    def _has(text):
+        return f'text="{text}"' in _xml
+    def _click_text(text, allow_miss=False):
+        """从缓存 XML 拿坐标点击，找不到就返回 False"""
+        m = re.search(r'text="'+re.escape(text)+r'"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', _xml)
+        if m:
+            d.click((int(m.group(1))+int(m.group(3)))//2, (int(m.group(2))+int(m.group(4)))//2)
+            return True
+        return False
+    def _multi_has(*texts):
+        """多文本中任一存在"""
+        for t in texts:
+            if _has(t): return True
+        return False
+    def _find_opt():
+        """找第一个选项 A/B/C/T/F"""
+        for opt in ("A","B","C","T","F"):
+            if _has(opt):
+                return opt
+        return None
+    # 题型关键词扫描（基于缓存 XML）
+    def _has_keywords(*kws):
+        for kw in kws:
+            if kw in _xml: return True
+        return False
+
     while q < 50:
-        # 弹窗检测（"继续练习"+"先走一步"同时出现=中途弹窗）
-        if d(text="继续练习").exists(timeout=0.6) and d(text="先走一步").exists(timeout=0.4):
-            d(text="继续练习").click()
+        if _need_dump:
+            _xml = _dump()
+            _need_dump = False
+
+        # 弹窗检测
+        if _has("继续练习") and _has("先走一步"):
+            _click_text("继续练习")
             print("      → 关弹窗")
             time.sleep(0.4)
-            continue
+            _need_dump = True; continue
 
-        # ★ 完成判定优先：练习报告 / 下一题 必须先于题型识别！
-        #   否则最后一题（如匹配题）答完后的反馈页残留题干文字（"匹配"等），
-        #   会被 _detect_question_type 误判成同题型 → 在反馈页死循环
-        if d(text="练习报告").exists(timeout=0.15):
-            d(text="练习报告").click()
+        # ★ 完成判定优先于题型识别
+        if _has("练习报告"):
+            _click_text("练习报告")
             print(f"      → 练习报告（最后一题）")
             step_log(f"📊 练习报告（子模块完成，共{q}题）", "success")
-            time.sleep(0.4)
+            time.sleep(0.4); _xml = _dump()
             if not config.get('_is_last_sub', False):
                 for _ in range(8):
-                    if d(text="继续练习").exists(timeout=0.8):
-                        d(text="继续练习").click()
+                    if _has("继续练习"):
+                        _click_text("继续练习")
                         print(f"      → 继续练习")
                         time.sleep(0.4)
                         break
-                    time.sleep(0.5)
+                    time.sleep(0.5); _xml = _dump()
             print(f"      → 本子模块完成，返回")
             return q
-        # 答错后出现"下一题"按钮 → 点击进入真正下一题
-        if d(text="下一题").exists(timeout=0.15):
-            d(text="下一题").click()
+        if _has("下一题"):
+            _click_text("下一题")
             print(f"      → 下一题（答错）")
             step_log(f"  第{q}题: 答错 → 下一题", "warning")
-            time.sleep(0.4)
-            continue
+            time.sleep(0.4); _need_dump = True; continue
 
-        # 题型识别：排序/匹配走专用处理
-        qtype = _detect_question_type(d, config)
+        # 题型识别：基于缓存的字符串匹配（不再调 xpath）
+        qtype = _detect_question_type_cached(_xml, config)
         if qtype == "sort_questions":
-            # ★ 排序题分流（与听力专项测试部分 _test_answer_loop 保持统一）：
-            #   CheckBox 整行句子（宽>800 带文本，圆圈排序题特征）≥3 → 句子圆圈排序
-            #   （直接点句子，序号自动填）；否则 → 方框排序（点方框激活+点序号）
             _has_circle = 0
-            try:
-                _xml = d.dump_hierarchy()
-                for _m in re.finditer(r'<node[^>]*class="android\.widget\.CheckBox"[^>]*/?>', _xml):
-                    _tag = _m.group(0)
-                    _tm = re.search(r'text="([^"]{6,})"', _tag)
-                    _bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', _tag)
-                    if not (_tm and _bm):
-                        continue
-                    _x1, _y1, _x2, _y2 = int(_bm.group(1)), int(_bm.group(2)), int(_bm.group(3)), int(_bm.group(4))
-                    if (_x2 - _x1) > 800 and 700 < _y1 < 1900:
-                        _has_circle += 1
-            except Exception:
-                pass
+            for _m in re.finditer(r'<node[^>]*class="android\.widget\.CheckBox"[^>]*/?>', _xml):
+                _tag = _m.group(0)
+                _tm = re.search(r'text="([^"]{6,})"', _tag)
+                _bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', _tag)
+                if not (_tm and _bm): continue
+                _x1, _y1 = int(_bm.group(1)), int(_bm.group(2))
+                if (int(_bm.group(3)) - _x1) > 800 and 700 < _y1 < 1900:
+                    _has_circle += 1
             if _has_circle >= 3:
                 _handle_sentence_sort(d, config)
             else:
                 _handle_sort_question(d, config)
-            time.sleep(0.4)
-            continue
+            time.sleep(0.4); _need_dump = True; continue
         elif qtype == "match_questions":
             _handle_match_question(d, config)
-            time.sleep(0.4)
-            continue
+            time.sleep(0.4); _need_dump = True; continue
 
-        # 新题：计数
+        # 新题
         q += 1
         print(f"    📸 第{q}题")
         step_log(f"📸 第{q}题", "step")
+        time.sleep(0.3); _xml = _dump()
 
-        # 等渲染 + 选答案
-        time.sleep(0.3)
-        answered = False
-        for opt in ("A","B","C","T","F"):
-            try:
-                if d(text=opt).exists(timeout=0.1):
-                    d(text=opt).click()
-                    print(f"      → 选 {opt}")
-                    step_log(f"  第{q}题: 选 {opt} → 检查", "info")
-                    time.sleep(0.5)
-                    answered = True
-                    break
-            except Exception: pass
-        if not answered:
+        opt = _find_opt()
+        if opt:
+            _click_text(opt)
+            print(f"      → 选 {opt}")
+            step_log(f"  第{q}题: 选 {opt} → 检查", "info")
+            time.sleep(0.5); _xml = _dump()
+            if _has("检查"):
+                _click_text("检查")
+                print(f"      → 检查")
+                time.sleep(0.5); _need_dump = True
             continue
 
-        # 点检查
-        try:
-            d(text="检查").click(timeout=1.5)
-            print(f"      → 检查")
-        except Exception:
-            continue
-        time.sleep(0.5)
-        # 回到循环开头：答对自动跳转/答错出下一题/最后一题出练习报告，都在上面处理
+        # 兜底：无选项 → 下轮重试
+        time.sleep(0.3); _need_dump = True
 
     return q
+
+
+def _detect_question_type_cached(_xml, config):
+    """基于缓存 XML 做题型识别（纯字符串匹配，无设备交互）"""
+    qt = config.get("question_types", {})
+    if not qt: return None
+    for qtype, qcfg in qt.items():
+        for kw in qcfg.get("detect_text", []):
+            if kw in _xml:
+                return qcfg["action"]
+    return None
 
 
 def _handle_report(d, config, sub_name="", is_last=False):

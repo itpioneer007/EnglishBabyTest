@@ -2738,7 +2738,8 @@ _LAST_MODULES_RESULT = None
 def api_modules_run():
     """多模块检测：切换版本/年级后依次执行多个模块
 
-    请求: {"version": "湘少版", "grade": "五年级上册", "modules": ["听力专项", "口语训练"]}
+    请求: {"version": "湘少版", "grade": "五年级上册", "modules": ["听力专项", "口语训练"],
+           "units": {"听力专项": "1-3", "单元自检": "1-5"}}   # units 可选，指定各模块单元范围
     返回: {"status": "started", "modules": [...]}
     """
     global _MODULES_RUNNER
@@ -2749,19 +2750,37 @@ def api_modules_run():
     version = (data.get("version") or "湘少版").strip()
     grade = (data.get("grade") or "五年级上册").strip()
     modules = data.get("modules") or []
-    if not modules:
+    units = data.get("units") or {}  # 可选：{模块名: 单元范围}
+
+    # ★ 兼容两种 modules 格式：
+    #   旧: ["听力专项", "口语训练"]
+    #   新: [{"name": "听力专项", "units": "1-5"}, {"name": "口语训练", "units": ""}]
+    module_names = []
+    for m in modules:
+        if isinstance(m, dict):
+            name = (m.get("name") or "").strip()
+            m_units = (m.get("units") or "").strip()
+            if name:
+                module_names.append(name)
+                if m_units:
+                    units.setdefault(name, m_units)
+        else:
+            module_names.append(str(m).strip())
+    module_names = [n for n in module_names if n]
+    if not module_names:
         return jsonify({"error": "请至少选择一个模块"}), 400
 
     def _run():
         try:
             set_running("多模块检测")
-            log_msg(f"多模块检测启动: {version} {grade} → {'、'.join(modules)}")
+            units_desc = f"（单元: {units}）" if units else ""
+            log_msg(f"多模块检测启动: {version} {grade} → {'、'.join(module_names)}{units_desc}")
             import importlib
             sys.path.insert(0, str(Path(__file__).parent / "scripts"))
             sched = importlib.import_module("scheduler")
             import uiautomator2 as u2
             d = u2.connect()
-            results = sched.run_all(modules, d, version=version, grade=grade)
+            results = sched.run_all(module_names, d, version=version, grade=grade, units=units)
             # 保存结果供前端查询
             global _LAST_MODULES_RESULT
             _LAST_MODULES_RESULT = {
@@ -2783,7 +2802,7 @@ def api_modules_run():
 
     _MODULES_RUNNER = threading.Thread(target=_run, daemon=True)
     _MODULES_RUNNER.start()
-    return jsonify({"status": "started", "version": version, "grade": grade, "modules": modules})
+    return jsonify({"status": "started", "version": version, "grade": grade, "modules": module_names})
 
 
 @app.route("/api/modules/result", methods=["GET"])

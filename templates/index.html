@@ -56,6 +56,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 .mod-tag:hover{border-color:var(--green-light)}
 .mod-tag.on{border-color:var(--green);background:#f0fdf4;color:var(--green);font-weight:600}
 .mod-tag input{display:none}
+.unit-toggle{font-size:11px;opacity:.5;margin-left:2px;cursor:pointer}
+.unit-toggle:hover{opacity:1}
+.unit-input-wrap{display:flex;align-items:center;gap:4px;font-size:12px;color:var(--gray);font-weight:400;margin-left:2px;padding:2px 0}
+.unit-input-wrap input{width:56px;padding:3px 6px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:var(--white);color:#3d3226}
+.unit-input-wrap input:focus{outline:none;border-color:var(--green-light)}
+.unit-tag{font-size:10px;background:var(--green);color:#fff;border-radius:4px;padding:1px 5px;margin-left:2px}
+.mod-tag .unit-gear{font-size:11px;opacity:.55;margin-left:3px;cursor:pointer}
+.mod-tag .unit-gear:hover{opacity:1}
 
 /* 解析并开始按钮 */
 .btn-cook{width:100%;padding:16px;background:linear-gradient(135deg,var(--green),var(--green-light));color:#fff;border:none;border-radius:12px;font-size:17px;font-weight:700;cursor:pointer;transition:all .2s;box-shadow:0 4px 16px rgba(45,106,79,.25)}
@@ -173,14 +181,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
         </div>
       </div>
 
-      <div style="font-size:13px;color:var(--gray);margin-bottom:6px">要测的模块（可多选）</div>
+      <div style="font-size:13px;color:var(--gray);margin-bottom:6px">要测的模块（可多选）<span style="font-size:11px">· 点⚙️可指定单元范围</span></div>
       <div class="module-tags">
-        <label class="mod-tag on"><input type="checkbox" class="mod-sel" value="听力专项" checked>听力专项</label>
-        <label class="mod-tag on"><input type="checkbox" class="mod-sel" value="口语训练" checked>口语训练</label>
-        <label class="mod-tag on"><input type="checkbox" class="mod-sel" value="单元自检" checked>单元自检</label>
-        <label class="mod-tag on"><input type="checkbox" class="mod-sel" value="知识过关" checked>知识过关</label>
-        <label class="mod-tag on"><input type="checkbox" class="mod-sel" value="语音评测" checked>语音评测</label>
-        <label class="mod-tag on"><input type="checkbox" class="mod-sel" value="巧记单词" checked>巧记单词</label>
+        <label class="mod-tag on"><input type="checkbox" class="mod-sel" value="听力专项" checked>听力专项<span class="unit-gear" onclick="toggleUnitConfig(event)">⚙️</span><span class="unit-input-wrap" style="display:none"><input type="text" class="unit-range-input" placeholder="1-5" size="4"></span></label>
+        <label class="mod-tag on"><input type="checkbox" class="mod-sel" value="口语训练" checked>口语训练<span class="unit-gear" onclick="toggleUnitConfig(event)">⚙️</span><span class="unit-input-wrap" style="display:none"><input type="text" class="unit-range-input" placeholder="1-4" size="4"></span></label>
+        <label class="mod-tag on"><input type="checkbox" class="mod-sel" value="单元自检" checked>单元自检<span class="unit-gear" onclick="toggleUnitConfig(event)">⚙️</span><span class="unit-input-wrap" style="display:none"><input type="text" class="unit-range-input" placeholder="1-4" size="4"></span></label>
+        <label class="mod-tag on"><input type="checkbox" class="mod-sel" value="知识过关" checked>知识过关<span class="unit-gear" onclick="toggleUnitConfig(event)">⚙️</span><span class="unit-input-wrap" style="display:none"><input type="text" class="unit-range-input" placeholder="1-9" size="4"></span></label>
+        <label class="mod-tag on"><input type="checkbox" class="mod-sel" value="语音评测" checked>语音评测<span class="unit-gear" onclick="toggleUnitConfig(event)">⚙️</span><span class="unit-input-wrap" style="display:none"><input type="text" class="unit-range-input" placeholder="—" size="4"></span></label>
+        <label class="mod-tag on"><input type="checkbox" class="mod-sel" value="巧记单词" checked>巧记单词<span class="unit-gear" onclick="toggleUnitConfig(event)">⚙️</span><span class="unit-input-wrap" style="display:none"><input type="text" class="unit-range-input" placeholder="1-9" size="4"></span></label>
         <span style="font-size:12px;color:var(--gray);margin-left:4px">已选 <b id="moduleSelCount">6</b></span>
       </div>
     </div>
@@ -304,18 +312,45 @@ function uploadOrder(e){
   addLog('step','📋 注：清单文件解析功能即将上线，当前请使用文字描述')
 }
 
+// ====== 单元范围配置（⚙️ 展开/收起） ======
+function toggleUnitConfig(ev){
+  ev.stopPropagation()  // 防止触发 label 的勾选
+  const wrap=ev.target.closest('.mod-tag').querySelector('.unit-input-wrap')
+  if(!wrap) return
+  const show=wrap.style.display!=='flex'
+  wrap.style.display=show?'flex':'none'
+  if(show) wrap.querySelector('input').focus()
+}
+
 // ====== 开始烹饪（多模块检测） ======
 async function startCooking(){
   const version=$('setupVersion').value
   const grade=$('setupGrade').value
-  const modules=[...document.querySelectorAll('.mod-sel')].filter(b=>b.checked).map(b=>b.value)
   const orderText=($('orderInput').value||'').trim()
 
-  if(!modules.length){alert('请至少选择一个模块（或在清单中说明）');return}
+  // 收集已选模块 + 各自单元范围（空=全部）
+  const moduleConfigs=[]
+  document.querySelectorAll('.mod-sel:checked').forEach(cb=>{
+    const name=cb.value
+    const input=cb.closest('.mod-tag')?cb.closest('.mod-tag').querySelector('.unit-range-input'):null
+    const units=input?input.value.trim():''
+    moduleConfigs.push({name,units})
+  })
+  if(!moduleConfigs.length){alert('请至少选择一个模块（或在清单中说明）');return}
+
+  // 构建提交数据：兼容旧格式 modules 数组 + 新格式 units 映射
+  const modules=moduleConfigs.map(m=>m.name)
+  const unitsMap={}
+  moduleConfigs.forEach(m=>{if(m.units) unitsMap[m.name]=m.units})
+  const hasUnits=Object.keys(unitsMap).length>0
 
   let confirmMsg = '确认启动多模块检测？\n'
   confirmMsg += `版本: ${version} | 年级: ${grade}\n`
   confirmMsg += `模块: ${modules.join('、')} (共${modules.length}个)`
+  if(hasUnits){
+    confirmMsg += '\n单元范围: '
+    confirmMsg += moduleConfigs.filter(m=>m.units).map(m=>`${m.name}=${m.units}`).join(', ')
+  }
   if(orderText) confirmMsg += `\n清单描述: "${orderText.substring(0,80)}${orderText.length>80?'…':''}"`
   if(!confirm(confirmMsg)) return
 
@@ -328,9 +363,11 @@ async function startCooking(){
   }
   addLog('step','📋 开始分析清单 → 准备调用模块: '+modules.join('、'))
   addLog('info','版本/年级: '+version+' '+grade)
+  if(hasUnits) addLog('info','📌 单元范围: '+JSON.stringify(unitsMap))
 
   try{
-    const r=await fetch('/api/modules/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version,grade,modules})})
+    const body=hasUnits?{version,grade,modules,units:unitsMap}:{version,grade,modules}
+    const r=await fetch('/api/modules/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
     const j=await r.json()
     if(j.error){alert(j.error);btn.disabled=false;btn.innerHTML='<span class="emoji">🔥</span> 解析清单并开始烹饪';return}
     addLog('success','✅ 已接单！开始烹饪 '+j.modules.length+' 道菜')

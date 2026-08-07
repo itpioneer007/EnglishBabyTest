@@ -1,81 +1,152 @@
-"""版本/年级切换前提功能"""
+"""版本/年级切换前提功能
+
+版本切换：主页 → 底部「我」→ 点年级栏 → 「英语所学教材版本」→ 选版本 → 回主页
+年级切换：主页顶部「版本+年级」文字栏 → 切换课本页 → 下滑找目标年级 → 点击
+（用户确认：年级切换必须走主页顶部栏，"我的"里的年级无效，只切版本）
+"""
 import time
+import re as _re
 
 def _is_home(d):
-    return d(text='教材精学').exists(timeout=0.8) or d(text='专项突破').exists(timeout=0.8)
+    """判断是否在英语主页：顶部「版本+年级」栏(switch_textbook_tv)是主页独有标志
+    （旧版主页有'教材精学/专项突破'，新版主页改版后没有，用 switch_textbook_tv 更可靠）"""
+    try:
+        xml = d.dump_hierarchy()
+    except Exception:
+        return False
+    if 'switch_textbook_tv' in xml:
+        return True
+    return d(text='教材精学').exists(timeout=0.3) or d(text='专项突破').exists(timeout=0.3)
 
 def _back_home(d):
-    for _ in range(3):
+    """back 回主页（处理中途退出的确认弹窗）"""
+    for _ in range(5):
+        # 处理退出确认弹窗（答题中 back 会弹"确定退出/退出/继续答题"）
+        try:
+            if d(text="确定退出").exists(timeout=0.3):
+                d(text="确定退出").click(); time.sleep(0.8)
+            elif d(text="退出").exists(timeout=0.3) and d(text="继续答题").exists(timeout=0.3):
+                d(text="退出").click(); time.sleep(0.8)
+            elif d(text="继续答题").exists(timeout=0.3):
+                d(text="继续答题").click(); time.sleep(0.8)
+        except Exception:
+            pass
+        if _is_home(d):
+            return True
         d.press('back'); time.sleep(0.6)
-        if _is_home(d): return True
     return False
+
 
 def switch_version(d, target_version):
     """切换教材版本（如'湘少版'）
 
-    流程：主页 → 我（底栏）→ 右上> → 英语所学教材版本 → 选版本 → back×2 → 英语（底栏）→ 主页
+    流程：主页 → 底部「我」→ 点年级栏(250,300) → 设置面板「英语所学教材版本」→
+          版本选择页 → 点目标版本 → back → 底部「英语」回主页
     """
     if not _is_home(d): _back_home(d)
-    d.click(972, 2220); time.sleep(1.2)  # 底部「我」
-    d.click(999, 285); time.sleep(1.2)   # 右上「>」
+    d.click(972, 2220); time.sleep(1.2)   # 底部「我」
+    d.click(250, 300); time.sleep(1.5)    # 「我的」页年级栏（领五/五年级 那行）→ 设置面板
     # 找「英语所学教材版本」点进入
     clicked = False
     for e in d.xpath('//*[@text!=""]').all():
         if '英语所学教材版本' in (e.text or ''):
-            e.click(); clicked = True; break
-    if not clicked: return False
-    time.sleep(1.2)
-    # 选版本（匹配目标版本前缀，如"湘少版"匹配"湘少版(2024审定)"）
+            try:
+                e.click()
+            except Exception:
+                b = e.bounds
+                d.click((b[0]+b[2])//2, (b[1]+b[3])//2)
+            clicked = True
+            break
+    if not clicked:
+        return False
+    time.sleep(1.5)
+    # 版本选择页：点目标版本（匹配前缀，如"湘少版"匹配"湘少版(2024审定)"或"湘少版（2024审定）"）
+    picked = False
     for e in d.xpath('//*[@text!=""]').all():
         t = (e.text or '').strip()
-        if t.startswith(target_version) and ('版' in t):
-            e.click(); break
+        if t.startswith(target_version) and ('版' in t or '审定' in t):
+            try:
+                e.click()
+            except Exception:
+                b = e.bounds
+                d.click((b[0]+b[2])//2, (b[1]+b[3])//2)
+            picked = True
+            break
     time.sleep(1.2)
-    # back×2 回「我」+ 点「英语」回主页
+    # 关闭设置面板 + 回主页
     d.press('back'); time.sleep(0.6)
     d.press('back'); time.sleep(0.6)
-    d.click(108, 2233); time.sleep(1.2)  # 底部「英语」
-    return _is_home(d)
+    if d(text='英语').exists(timeout=1.5):
+        d(text='英语').click(); time.sleep(1.2)
+    return _is_home(d) or picked
+
 
 def switch_grade(d, target_grade):
     """切换年级（如'五年级上册'）
 
-    流程：主页点版本+年级栏 → 选年级 → 自动退回主页
+    流程：主页点顶部「版本+年级」栏(321,275) → 「切换课本」页 → 下滑逐屏找
+          目标年级文字（如"五年级上册"）→ 点击 → 自动回主页
     """
     if not _is_home(d): _back_home(d)
-    d.click(321, 275); time.sleep(1.2)  # 主页年级栏
-    # 找目标年级点（按文字匹配）
-    for e in d.xpath('//*[@text!=""]').all():
-        if (e.text or '').strip() == target_grade:
-            e.click(); time.sleep(1.2); return True
-    # 可能需要下滑（年级靠后）
-    d.swipe(540, 1500, 540, 800, 0.4); time.sleep(0.4)
-    for e in d.xpath('//*[@text!=""]').all():
-        if (e.text or '').strip() == target_grade:
-            e.click(); time.sleep(1.2); return True
+    d.click(321, 275); time.sleep(2)      # 主页顶部版本+年级栏 → 切换课本页
+    # 下滑逐屏找目标年级文字（可见区域才点）
+    for _ in range(6):
+        xml = d.dump_hierarchy()
+        for m in _re.finditer(
+            r'text="' + _re.escape(target_grade) + r'"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
+            xml
+        ):
+            x1, y1, x2, y2 = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+            if 300 < y1 < 2000:  # 可见区域
+                d.click((x1 + x2) // 2, (y1 + y2) // 2)
+                time.sleep(2.5)
+                return True
+        d.swipe(540, 1700, 540, 700, 0.4); time.sleep(0.6)
     return False
 
+
 def check_current(d, version, grade):
-    """快速判断当前是否已是目标版本+年级（是则返回 True，无需切换）"""
+    """快速判断当前是否已是目标版本+年级（是则返回 True，无需切换）
+
+    主页顶部栏节点 resource-id=switch_textbook_tv，text 形如
+    「湘少版（2024审定）   五年级上册」
+    """
     if not _is_home(d):
         return False
-    # 主页顶部版本+年级文本栏（如「湘少版（2024审定）   五年级上册」）
+    try:
+        xml = d.dump_hierarchy()
+    except Exception:
+        return False
+    for m in _re.finditer(r'<node[^>]*resource-id="[^"]*switch_textbook_tv"[^>]*>', xml):
+        tag = m.group(0)
+        tm = _re.search(r'text="([^"]*)"', tag)
+        if not tm:
+            continue
+        t = tm.group(1)
+        if version in t and grade in t:
+            return True
+    # 兜底：xpath 遍历（兼容无 switch_textbook_tv 的版本）
     for e in d.xpath('//*[@text!=""]').all():
         t = (e.text or '').strip()
-        if '版' in t and ('年级' in t) and ('上册' in t or '下册' in t):
+        if '版' in t and ('上册' in t or '下册' in t):
             if version in t and grade in t:
                 return True
     return False
 
+
 def switch_version_grade(d, version, grade, skip_if_ok=True):
-    """一站式切换版本+年级（skip_if_ok: 已是目标则跳过）"""
+    """一站式切换版本+年级（skip_if_ok: 已是目标则跳过）
+
+    顺序：先切版本（"我的"页），再切年级（主页顶部栏）
+    """
     print(f"  切换前提: {version} {grade}")
     if skip_if_ok and check_current(d, version, grade):
         print(f"    已是 {version} {grade}，跳过切换")
         return True
     if not switch_version(d, version):
         print("    版本切换失败")
-        return False
+    else:
+        print(f"    版本: {version} OK")
     if not switch_grade(d, grade):
         print("    年级切换失败")
         return False

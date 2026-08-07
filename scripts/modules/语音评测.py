@@ -23,7 +23,7 @@ GRADE_LEVEL = "五年级上册"
 BOOK_VERSION = "湘少版"
 
 # 主页「语音评测」卡片位置（教材精学第一行第 3 张）
-VOICE_CARD = (877, 1192)  # 基准坐标，使用时 S(d, *VOICE_CARD)
+VOICE_CARD = (876, 441)  # 新版主页教材精学第一行第3张卡片  # 基准坐标，使用时 S(d, *VOICE_CARD)
 
 
 def _enter_voice_eval(d):
@@ -45,8 +45,8 @@ def _enter_voice_eval(d):
     return False
 
 
-def run_module(d):
-    """核心入口：进入语音评测模块"""
+def run_module(d, units=None):
+    """核心入口：进入语音评测模块（units 参数保留兼容，不使用）"""
     t0 = time.time()
     print(f"\n📋 语音评测 · 进入模块")
     if not _enter_voice_eval(d):

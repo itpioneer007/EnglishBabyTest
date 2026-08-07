@@ -42,6 +42,26 @@ BOOK_VERSION = "湘少版"
 
 UNITS = [1]  # U1 验证；打通后 list(range(1, 10))
 
+def _resolve_units(units, default_units):
+    """把外部传入的单元范围解析为列表；None 则用默认全部单元"""
+    if units is None:
+        return list(default_units)
+    if isinstance(units, list):
+        return list(units)
+    if isinstance(units, int):
+        return [units]
+    import re as _re
+    result = []
+    for part in str(units).split(','):
+        part = part.strip()
+        m = _re.match(r'^(\d+)\s*-\s*(\d+)$', part)
+        if m:
+            result.extend(range(int(m.group(1)), int(m.group(2)) + 1))
+        elif part.isdigit():
+            result.append(int(part))
+    return result or list(default_units)
+
+
 
 def _answer_loop(d, max_q=120):
     """知识过关答题循环：所有题型统一处理
@@ -219,7 +239,23 @@ def _answer_loop(d, max_q=120):
         if title_text == "sentence_sort":
             print(f"    🧩 连词成句 → 调用排序处理")
             try:
-                _handle_sort_question(d, {})
+                # ★ CheckBox 圆圈分流（与 engine/单元自检统一）：整行句子 CheckBox ≥3 → 直接点句子
+                _has_circle = 0
+                _xml2 = d.dump_hierarchy()
+                for _m in _re.finditer(r'<node[^>]*class="android\.widget\.CheckBox"[^>]*/?>', _xml2):
+                    _tag = _m.group(0)
+                    _tm = _re.search(r'text="([^"]{6,})"', _tag)
+                    _bm = _re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', _tag)
+                    if not (_tm and _bm):
+                        continue
+                    _x1, _y1 = int(_bm.group(1)), int(_bm.group(2))
+                    if (int(_bm.group(3)) - _x1) > 800 and 700 < _y1 < 1900:
+                        _has_circle += 1
+                if _has_circle >= 3:
+                    from engine import _handle_sentence_sort
+                    _handle_sentence_sort(d, {})
+                else:
+                    _handle_sort_question(d, {})
             except Exception:
                 pass
             q += 1
@@ -363,8 +399,7 @@ def _answer_loop(d, max_q=120):
         # 未知
         try:
             _shot_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "screenshots")
-            os.makedirs(_shot_dir, exist_ok=True)
-            d.screenshot(os.path.join(_shot_dir, f"unknown_kp_{q}.png"))
+            shot_to_file(d, os.path.join(_shot_dir, f"unknown_kp_{q}.jpg"), width=640)
         except Exception:
             pass
         print(f"    ⚠ 未知: {texts[:5]}")
@@ -397,7 +432,34 @@ def _enter_unit(d, unit_num):
         d(text="知识过关").click()
         time.sleep(1.6)
 
-    # 找单元文本框（按 y 排序，第 unit_num 个）
+    # ★ 方式1：按 "Unit N " 开头文字精确定位目标单元（不受列表顺序影响）
+    import re as _re
+    target_pat = _re.compile(rf"^Unit\s*{unit_num}[^\d]")
+    for _ in range(8):
+        elements = (d.xpath('//*[@text!=""]').all() or [])
+        target = None
+        for e in elements:
+            t = (e.text or "").strip()
+            if target_pat.match(t):
+                target = e
+                break
+        if target:
+            try:
+                target.click()
+            except Exception:
+                d.click((target.bounds[0]+target.bounds[2])//2, (target.bounds[1]+target.bounds[3])//2)
+            print(f"    ✅ 点 U{unit_num}")
+            time.sleep(1.6)
+            # 收到了，马上去过关
+            if d(text="收到了，马上去过关").exists(timeout=5):
+                d(text="收到了，马上去过关").click()
+                print(f"    ✅ 收到了，马上去过关")
+                time.sleep(1.6)
+            return True
+        S_swipe(d, 540, 1800, 540, 600, 0.4)
+        time.sleep(0.4)
+
+    # 方式2（兜底）：按 y 排序第 unit_num 个（原逻辑）
     for _ in range(3):
         units = []
         for e in (d.xpath('//*[@text!=""]').all() or []):
@@ -499,11 +561,15 @@ def _run_one_unit(d, unit_num):
     return total
 
 
-def run_module(d):
-    """核心入口：跑完知识过关全部单元"""
+def run_module(d, units=None):
+    """核心入口：跑完知识过关指定单元
+
+    units: 单元范围，如 [1,2] 或 '1-2'；None=默认全部
+    """
     t0 = time.time()
     total = 0
-    print(f"\n📋 知识过关 · 单元 {UNITS[0]}-{UNITS[-1]} · {len(UNITS)}个单元")
+    _units = _resolve_units(units, UNITS)
+    print(f"\n📋 知识过关 · 单元 {_units[0]}-{_units[-1]} · {len(_units)}个单元")
 
     # 确认在主页（下滑找知识过关）
     for _ in range(5):

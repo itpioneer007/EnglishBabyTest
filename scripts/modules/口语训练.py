@@ -30,6 +30,26 @@ BOOK_VERSION = "湘少版"
 
 UNITS = [1]  # U1 验证；打通后 list(range(1, 5))
 
+def _resolve_units(units, default_units):
+    """把外部传入的单元范围解析为列表；None 则用默认全部单元"""
+    if units is None:
+        return list(default_units)
+    if isinstance(units, list):
+        return list(units)
+    if isinstance(units, int):
+        return [units]
+    import re as _re
+    result = []
+    for part in str(units).split(','):
+        part = part.strip()
+        m = _re.match(r'^(\d+)\s*-\s*(\d+)$', part)
+        if m:
+            result.extend(range(int(m.group(1)), int(m.group(2)) + 1))
+        elif part.isdigit():
+            result.append(int(part))
+    return result or list(default_units)
+
+
 
 def _close_bottom_ad(d):
     """关闭界面底部广告：找 ❌ 按钮点击"""
@@ -162,6 +182,13 @@ def _answer_big_question(d, big_idx=0):
     """
     q = 0
     for _ in range(15):  # 最多15小题（包含若干道口语题）
+        # 完成判断：练习报告页（交卷后出现，整单元结束）
+        if d(text="练习报告").exists(timeout=0.1):
+            print(f"    ✅ 练习报告页出现，单元结束")
+            step_log("📊 练习报告（单元完成）", "success")
+            time.sleep(0.8)
+            return q
+
         # 完成判断：交卷（最后一题）
         if d(text="交卷").exists(timeout=0.1):
             d(text="交卷").click()
@@ -228,8 +255,37 @@ def _run_one_unit(d, unit_num, is_retry):
     #   - 答题中退出（未完成）："继续答题"
     # 优先"重新答题"（从头开始，每道题都有麦克风），其次"继续答题"，最后"开始答题"
     btn_candidates = ["重新答题", "继续答题", "开始答题"]
-    # 需要定位到该单元的按钮（按顺序：U1 第一个，U2 第二个...）
-    # 等待+滚动重试（页面加载可能慢）
+
+    # 方式1：按 "口语训练湘少五上U{unit_num}" 标题文字匹配，定位该行按钮
+    import re as _re
+    title_pat = _re.compile(rf"[Uu]nits?\s*{unit_num}\b|U{unit_num}\b|{unit_num}")
+    for _ in range(8):
+        elements = (d.xpath('//*[@text!=""]').all() or [])
+        row = None
+        for e in elements:
+            t = (e.text or "").strip()
+            # 单元标题特征：包含"湘少五上"和单元号
+            if "口语训练" in t or "U" in t or "Unit" in t:
+                if title_pat.search(t):
+                    row = e
+                    break
+        if row:
+            row_y = row.bounds[1]
+            for e in elements:
+                t = (e.text or "").strip()
+                if t in btn_candidates:
+                    if abs(e.bounds[1] - row_y) < 300:
+                        try:
+                            e.click()
+                        except Exception:
+                            d.click((e.bounds[0]+e.bounds[2])//2, (e.bounds[1]+e.bounds[3])//2)
+                        print(f"    ✅ 点击 {t} (U{unit_num})")
+                        time.sleep(1.2)
+                        _after_unit_enter(d)
+                        return _run_unit_questions(d, unit_num)
+        S_swipe(d, 540, 1800, 540, 600, 0.3); time.sleep(0.4)
+
+    # 方式2（兜底）：按第 unit_num 个答题按钮（原逻辑）
     btns = []
     idx = unit_num - 1
     chosen_btn = None
@@ -243,7 +299,6 @@ def _run_one_unit(d, unit_num, is_retry):
                 break
         if chosen_btn:
             break
-        # 可能需下滑
         S_swipe(d, 540, 1800, 540, 600, 0.3); time.sleep(0.4)
     if not chosen_btn:
         print(f"    ❌ 找不到 U{unit_num} 的答题按钮（已找：{'/'.join(btn_candidates)}）")
@@ -251,19 +306,25 @@ def _run_one_unit(d, unit_num, is_retry):
     btns[idx].click()
     print(f"    ✅ 点击 {chosen_btn} (U{unit_num})")
     time.sleep(1.2)
+    _after_unit_enter(d)
+    return _run_unit_questions(d, unit_num)
 
-    # 弹窗"好的，我知道啦~"
+
+def _after_unit_enter(d):
+    """进入单元后的公共处理：弹窗 + 开始答题"""
     if d(text="好的，我知道啦~").exists(timeout=3):
         d(text="好的，我知道啦~").click()
         print(f"    ✅ 好的，我知道啦~")
         time.sleep(0.8)
-    # 开始答题
     if d(text="开始答题").exists(timeout=3):
         d(text="开始答题").click()
         print(f"    ✅ 开始答题")
         time.sleep(1.6)
+    return True
 
-    # 答题循环（多个大题）
+
+def _run_unit_questions(d, unit_num):
+    """进入单元后的答题循环（多个大题）"""
     total = 0
     for big in range(1, 10):
         # 大题切换后等待页面稳定（倒计时结束/录音按钮出现），最多15s
@@ -280,18 +341,22 @@ def _run_one_unit(d, unit_num, is_retry):
             step_log(f"📝 开始第{big}大题", "step")
         q = _answer_big_question(d, big_idx=big)
         total += q
-        # 若交卷了则退出
-        if d(text="确定交卷").exists(timeout=1) or d(text="练习报告").exists(timeout=1):
+        # 若交卷/练习报告了则退出（交卷后出现练习报告页）
+        if d(text="确定交卷").exists(timeout=0.8) or d(text="练习报告").exists(timeout=0.8):
             break
         time.sleep(0.4)
     return total
 
 
-def run_module(d):
-    """核心入口：跑完口语训练全部单元，返回题数"""
+def run_module(d, units=None):
+    """核心入口：跑完口语训练指定单元，返回题数
+
+    units: 单元范围，如 [1,2] 或 '1-2'；None=默认全部
+    """
     t0 = time.time()
     total = 0
-    print(f"\n📋 口语训练 · 单元 {UNITS[0]}-{UNITS[-1]} · {len(UNITS)}个单元")
+    _units = _resolve_units(units, UNITS)
+    print(f"\n📋 口语训练 · 单元 {_units[0]}-{_units[-1]} · {len(_units)}个单元")
 
     # ① 先确保在主页（口语训练入口在主页专项突破区，直接可见，不需要滑动）
     for _ in range(4):
@@ -310,7 +375,7 @@ def run_module(d):
     _close_bottom_ad(d)
 
     # 逐单元执行
-    for ui, unit_num in enumerate(UNITS):
+    for ui, unit_num in enumerate(_units):
         # U1 已训练过（重新答题），U2+ 开始答题
         is_retry = (unit_num == 1)
         q = _run_one_unit(d, unit_num, is_retry)

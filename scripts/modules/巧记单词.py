@@ -39,7 +39,30 @@ BOOK_VERSION = "湘少版"
 LEVELS_PER_UNIT = 6
 
 # 主页「巧记单词」卡片位置（教材精学第一行第 2 张）
-QIAOJI_CARD = (540, 1192)  # 基准坐标，使用时 S(d, *QIAOJI_CARD)
+QIAOJI_CARD = (540, 441)  # 新版主页教材精学第一行第2张卡片  # 基准坐标，使用时 S(d, *QIAOJI_CARD)
+
+
+UNITS = [1]  # U1 验证；打通后 list(range(1, 10))
+
+
+def _resolve_units(units, default_units):
+    """把外部传入的单元范围解析为列表；None 则用默认全部单元"""
+    if units is None:
+        return list(default_units)
+    if isinstance(units, list):
+        return list(units)
+    if isinstance(units, int):
+        return [units]
+    import re as _re
+    result = []
+    for part in str(units).split(','):
+        part = part.strip()
+        m = _re.match(r'^(\d+)\s*-\s*(\d+)$', part)
+        if m:
+            result.extend(range(int(m.group(1)), int(m.group(2)) + 1))
+        elif part.isdigit():
+            result.append(int(part))
+    return result or list(default_units)
 
 
 def _enter_qiaoji(d):
@@ -141,11 +164,36 @@ def _enter_level(d, level_no):
     d.click(*pos)
     print(f"    ✅ 点关卡 {level_no} @{pos}")
     time.sleep(1.2)
-    # 单词浏览页 → 马上闯关
-    if d(text="马上闯关").exists(timeout=3):
-        d(text="马上闯关").click()
-        print(f"    ✅ 点马上闯关")
-        time.sleep(1.2)
+    # 单词浏览页 → 先点单词卡片（"点击显示释义"，解锁马上闯关）→ 点马上闯关
+    for _ in range(8):
+        if d(text="马上闯关").exists(timeout=1):
+            # 先点单词卡片（浏览页 5 个单词卡片，点第一个解锁即可）
+            try:
+                if d(text="点击显示释义").exists(timeout=0.5):
+                    el = d(text="点击显示释义")
+                    el.click()
+                    time.sleep(0.5)
+            except Exception:
+                pass
+            d(text="马上闯关").click()
+            print(f"    ✅ 点马上闯关")
+            time.sleep(1.2)
+            # 确认进入答题（出现 原音/提交/第N关 数字 等答题特征）
+            try:
+                xml = d.dump_hierarchy()
+                if '原音' in xml or '提交' in xml or '马上闯关' in xml:
+                    # 马上闯关还在=没进入，继续
+                    if '马上闯关' in xml:
+                        continue
+                    return True
+            except Exception:
+                pass
+            return True
+        # 也可能直接进入答题（无浏览页）
+        if d(text="提交").exists(timeout=0.5) or d(text="原音").exists(timeout=0.5):
+            return True
+        time.sleep(0.5)
+    print(f"    ⚠ 未出现马上闯关，可能直接进入答题")
     return True
 
 
@@ -160,7 +208,35 @@ def _answer_loop(d, max_q=20):
     """
     q = 0
     retry_count = 0  # 当前题答错次数
-    for _ in range(max_q):
+    idle = 0  # 连续空转计数（防空转死循环）
+    while True:
+        # 提交（关卡完成）→ 唯一正常退出
+        if d(text="提交").exists(timeout=0.15):
+            try:
+                d(text="提交").click()
+            except Exception:
+                pass
+            print(f"    ✅ 提交！关卡完成")
+            time.sleep(0.8)
+            return q
+        # 弹窗处理：退出确认弹窗（带"温馨提示"标题才是真弹窗；正常答题页的
+        # "退出/继续答题"是页面按钮，不能误点！）
+        try:
+            if d(text="温馨提示").exists(timeout=0.15) or d(textContains="本次闯关尚未完成").exists(timeout=0.15):
+                if d(text="继续答题").exists(timeout=0.15):
+                    d(text="继续答题").click()
+                    print(f"    → 关退出弹窗（继续答题）")
+                    time.sleep(0.5)
+                    idle = 0
+                    continue
+            if d(text="确定").exists(timeout=0.15) and d(text="取消").exists(timeout=0.15):
+                # 提交确认弹窗 → 点确定
+                d(text="确定").click()
+                print(f"    ✅ 确定提交")
+                time.sleep(0.8)
+                continue
+        except Exception:
+            pass
         # 下一题（答对/录音答完/跳过后的下一步）
         if d(text="下一题").exists(timeout=0.15):
             try:
@@ -170,16 +246,8 @@ def _answer_loop(d, max_q=20):
             print(f"    ➡ 下一题")
             time.sleep(0.6)
             retry_count = 0
+            idle = 0
             continue
-        # 提交（最后一题答完）
-        if d(text="提交").exists(timeout=0.15):
-            try:
-                d(text="提交").click()
-            except Exception:
-                pass
-            print(f"    ✅ 提交！关卡完成")
-            time.sleep(0.8)
-            return q
         # 跳过（二次答错）
         if d(text="跳过").exists(timeout=0.15):
             try:
@@ -190,6 +258,8 @@ def _answer_loop(d, max_q=20):
             time.sleep(0.6)
             retry_count = 0
             q += 1
+            idle = 0
+            idle = 0
             continue
         # 重新答题（一次答错）
         if d(text="重新答题").exists(timeout=0.15):
@@ -260,6 +330,8 @@ def _answer_loop(d, max_q=20):
                         break
                 time.sleep(0.4)
                 q += 1
+                idle = 0
+                idle = 0
                 retry_count = 0
                 continue
         # 选项（A/B/C 或 T/F）
@@ -304,17 +376,22 @@ def _answer_loop(d, max_q=20):
             except Exception:
                 pass
             q += 1
+            idle = 0
+            idle = 0
             retry_count = 0
             continue
-        # 未知题型：截图保存，稍等
+        # 未知题型：截图保存，稍等（连续 5 次未知说明页面异常，退出防空转）
         try:
             _shot_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "screenshots")
-            os.makedirs(_shot_dir, exist_ok=True)
-            d.screenshot(os.path.join(_shot_dir, f"unknown_qiaoji_{q}.png"))
+            shot_to_file(d, os.path.join(_shot_dir, f"unknown_qiaoji_{q}.jpg"), width=640)
         except Exception:
             pass
         print(f"    ⚠ 未知: {[e.text for e in (d.xpath('//*[@text!=\"\"]').all() or []) if e.text][:4]}")
+        idle += 1
         time.sleep(0.8)
+        if idle >= 5:
+            print(f"    ⚠ 连续 {idle} 次未知，退出循环")
+            return q
     return q
 
 
@@ -323,7 +400,7 @@ def _run_one_level(d, level_no):
     print(f"\n  🎮 关卡 {level_no}")
     if not _enter_level(d, level_no):
         return 0
-    q = _answer_loop(d)
+    q = _answer_loop(d, max_q=40)  # 关卡15+题，max_q 要够大（含重试轮次）
     print(f"  ✅ 关卡 {level_no} 完成: {q} 题")
     # 报告页/答题页 → back 回地图（最多 3 次）
     for _ in range(3):
@@ -361,11 +438,15 @@ def _run_one_unit(d, unit_no, start_level):
     return total
 
 
-def run_module(d):
-    """核心入口：跑完巧记单词全部单元"""
+def run_module(d, units=None):
+    """核心入口：跑完巧记单词指定单元
+
+    units: 单元范围，如 [1,2] 或 '1-2'；None=默认全部
+    """
     t0 = time.time()
     total = 0
-    print(f"\n📋 巧记单词 · 单词同步闯关")
+    _units = _resolve_units(units, UNITS)
+    print(f"\n📋 巧记单词 · 单词同步闯关（单元 {_units[0]}-{_units[-1]} · {len(_units)}个）")
 
     # 1. 进入巧记单词
     if not _enter_qiaoji(d):
@@ -376,14 +457,14 @@ def run_module(d):
 
     # 3. 逐单元闯关（关卡序号连续递增）
     # U1: 关卡 1-6(boss)，U2: 7-12，U3: 13-18 ...
-    unit_no = 1
-    start_level = 1
-    while start_level <= 54:  # 9 单元 × 6 关
+    for unit_no in _units:
+        start_level = 1 + (unit_no - 1) * LEVELS_PER_UNIT
+        if start_level > 54:
+            print(f"  ⚠ Unit {unit_no} 超出范围（仅支持1-9），跳过")
+            continue
         print(f"\n🏫 Unit {unit_no}（关卡 {start_level}~{start_level+5}）")
         q = _run_one_unit(d, unit_no, start_level)
         total += q
-        unit_no += 1
-        start_level += LEVELS_PER_UNIT
 
     print(f"✅ 巧记单词完成: {total} 题, 耗时 {time.time()-t0:.0f}s")
     return total

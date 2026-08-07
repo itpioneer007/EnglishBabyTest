@@ -5,8 +5,11 @@
   python scheduler.py                # 跑全部模块
   python scheduler.py 听力专项 口语训练  # 只跑指定模块
   python scheduler.py --version 湘少版 --grade 五年级上册 听力专项 单元自检
+  python scheduler.py --units "听力专项:1-3,单元自检:1-5"   # 指定单元范围
+  python scheduler.py 听力专项 --units "听力专项:1-3"        # 指定模块+单元
 
-每个模块文件暴露 run_module(d) -> 题数，供本调度器统一调用。
+每个模块文件暴露 run_module(d, units=None) -> 题数，供本调度器统一调用。
+units 支持格式：'1-3'（区间）、'1,3,5'（枚举）、[1,2]（列表）；None=默认全部。
 多模块检测时：先切版本/年级（已正确则跳过），再依次执行各模块，最后汇总。
 """
 import sys, os, time, importlib
@@ -46,10 +49,12 @@ def _switch_if_needed(d, version, grade):
             print(f"  ⚠ 切换版本/年级异常: {e}")
 
 
-def run_all(module_names=None, d=None, version=None, grade=None):
+def run_all(module_names=None, d=None, version=None, grade=None, units=None):
     """依次跑指定模块（默认全部），返回 {模块: {q, t, ok}}
 
     version/grade: 目标教材版本+年级，执行前自动切换（已正确则跳过）
+    units: 每个模块的单元范围映射，如 {"听力专项": "1-3", "单元自检": "1-5"}
+          未指定的模块跑默认全部单元
     """
     if d is None:
         d = u2.connect()
@@ -61,6 +66,7 @@ def run_all(module_names=None, d=None, version=None, grade=None):
         version = DEFAULT_VERSION
     if grade is None:
         grade = DEFAULT_GRADE
+    units = units or {}
 
     # 0. 重启 App 回主页（保证干净起点，避免停留在上个模块的答题页）
     step_log("🔄 重启 App，准备开始烹饪...", "step")
@@ -92,11 +98,17 @@ def run_all(module_names=None, d=None, version=None, grade=None):
             results[name] = {"q": 0, "t": 0, "ok": False, "error": "未知模块"}
             continue
 
-        step_log(f"🍳 开始烹饪第 {i+1}/{len(module_names)} 道菜: {name}", "step")
+        # 该模块的单元范围（未指定 → None = 默认全部）
+        module_units = units.get(name)
+        units_desc = f"{module_units}" if module_units else "全部"
+        step_log(f"🍳 开始烹饪第 {i+1}/{len(module_names)} 道菜: {name}（单元: {units_desc}）", "step")
         t0 = time.time()
         try:
             mod = importlib.import_module(MODULE_MAP[name])
-            q = mod.run_module(d)
+            if module_units:
+                q = mod.run_module(d, units=module_units)
+            else:
+                q = mod.run_module(d)
             elapsed = round(time.time() - t0)
             results[name] = {"q": q, "t": elapsed, "ok": True}
             step_log(f"✅ {name} 完成: {q} 题, 耗时 {elapsed}s", "success")
@@ -120,21 +132,37 @@ def main():
     args = sys.argv[1:]
     version, grade = DEFAULT_VERSION, DEFAULT_GRADE
     names = []
+    units_map = {}
     i = 0
     while i < len(args):
         if args[i] == "--version" and i + 1 < len(args):
             version = args[i + 1]; i += 2
         elif args[i] == "--grade" and i + 1 < len(args):
             grade = args[i + 1]; i += 2
+        elif args[i] == "--units" and i + 1 < len(args):
+            # 格式: 模块名:1-3,模块名:1-5
+            raw = args[i + 1]; i += 2
+            for item in raw.split(","):
+                item = item.strip()
+                if ":" not in item:
+                    continue
+                mod_name, unit_range = item.split(":", 1)
+                mod_name = mod_name.strip()
+                unit_range = unit_range.strip()
+                if mod_name in MODULE_MAP and unit_range:
+                    units_map[mod_name] = unit_range
         else:
             names.append(args[i]); i += 1
+
+    if units_map:
+        print(f"📌 单元范围: {units_map}")
 
     d = u2.connect()
     # 重启 App 回主页（保证干净起点）
     d.press("home"); time.sleep(0.4)
     d.app_stop(APP_PACKAGE); time.sleep(0.8)
     d.app_start(APP_PACKAGE); time.sleep(3)
-    run_all(names if names else None, d, version=version, grade=grade)
+    run_all(names if names else None, d, version=version, grade=grade, units=units_map)
     return 0
 
 

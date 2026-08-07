@@ -37,6 +37,27 @@ BOOK_VERSION = "湘少版"
 UNITS = [1]  # 练习部分：U1-U9；测试先跑 U1
 TEST_UNITS = [1]  # 测试部分：U1-U5；测试先跑 U1
 
+
+def _resolve_units(units, default_units):
+    """把外部传入的单元范围解析为列表；None 则用默认全部单元"""
+    if units is None:
+        return list(default_units)
+    if isinstance(units, list):
+        return list(units)
+    if isinstance(units, int):
+        return [units]
+    # 字符串：'1-3' / '1,3,5' / '1' 或列表字符串
+    import re as _re
+    result = []
+    for part in str(units).split(","):
+        part = part.strip()
+        m = _re.match(r"^(\d+)\s*-\s*(\d+)$", part)
+        if m:
+            result.extend(range(int(m.group(1)), int(m.group(2)) + 1))
+        elif part.isdigit():
+            result.append(int(part))
+    return result or list(default_units)
+
 CONFIG = {
     "entry_text": "听力专项",
     "units": UNITS,
@@ -72,11 +93,17 @@ CONFIG = {
 }
 
 
-def run_module(d):
-    """第一部分：练习模块——跑完听力专项全部单元+子模块，返回题数"""
+def run_module(d, units=None):
+    """第一部分：练习模块——跑完听力专项指定单元+子模块，返回题数
+
+    units: 单元范围，如 [1,2,3] 或 '1-3'；None=默认全部
+    """
     t0 = time.time()
-    print(f"\n📋 听力专项·练习 · 单元 {UNITS[0]}-{UNITS[-1]} · {len(UNITS)}个单元")
-    q = run_single_module(d, "听力专项", CONFIG)
+    _units = _resolve_units(units, UNITS)
+    _cfg = dict(CONFIG)
+    _cfg["units"] = _units
+    print(f"\n📋 听力专项·练习 · 单元 {_units[0]}-{_units[-1]} · {len(_units)}个单元")
+    q = run_single_module(d, "听力专项", _cfg)
     print(f"✅ 练习部分完成: {q} 题, 耗时 {time.time()-t0:.0f}s")
     return q
 
@@ -213,11 +240,15 @@ def _test_answer_loop(d, max_q=30):
     return q
 
 
-def run_test_module(d):
-    """第二部分：测试模块——测试 tab 遍历单元，返回题数"""
+def run_test_module(d, test_units=None):
+    """第二部分：测试模块——测试 tab 遍历指定单元，返回题数
+
+    test_units: 单元范围，如 [1,2] 或 '1-2'；None=默认全部
+    """
     t0 = time.time()
     total = 0
-    print(f"\n📋 听力专项·测试 · 单元 {TEST_UNITS[0]}-{TEST_UNITS[-1]} · {len(TEST_UNITS)}个单元")
+    _tunits = _resolve_units(test_units, TEST_UNITS)
+    print(f"\n📋 听力专项·测试 · 单元 {_tunits[0]}-{_tunits[-1]} · {len(_tunits)}个单元")
 
     # 确认在听力专项页 → 点"测试" tab
     if not d(text="测试").exists(timeout=3):
@@ -229,8 +260,8 @@ def run_test_module(d):
     d(text="测试").click(); time.sleep(1.2)
     print("  ✅ 已进入测试 tab")
 
-    for ui, unit_num in enumerate(TEST_UNITS):
-        print(f"\n  🎯 测试 Unit {unit_num} [{ui+1}/{len(TEST_UNITS)}]")
+    for ui, unit_num in enumerate(_tunits):
+        print(f"\n  🎯 测试 Unit {unit_num} [{ui+1}/{len(_tunits)}]")
         # 在测试列表找该单元的"去答题"
         found = False
         for _ in range(10):

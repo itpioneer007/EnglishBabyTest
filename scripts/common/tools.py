@@ -228,60 +228,19 @@ def scroll_and_find(d, text, max_swipes=5) -> bool:
 def ensure_grade(d, grade_level, book_version=""):
     """
     确保当前年级匹配。不匹配则自动切换。
-    流程：先回主页 → 检测主页版本文字 → 不匹配则点版本号 → 选年级 → 确认
+    ★ 统一委托 common.setup.switch_version_grade（走主页顶部版本+年级栏切换，
+      用户确认：年级切换必须在英语主页顶部栏，不能在"我的"里切）
     """
-    # ① 先确保在主页（避免在别的页面误判年级不匹配 → 误点版本号/乱滑动）
-    for _ in range(4):
-        if d(text="教材精学").exists(timeout=1) or d(text="专项突破").exists(timeout=1):
-            break
-        d.press("back"); time.sleep(0.6)
-
-    # ② 主页版本号如 "湘少版（2024审定）五年级上册"
+    try:
+        from common.setup import switch_version_grade
+    except Exception:
+        switch_version_grade = None
+    if switch_version_grade:
+        return switch_version_grade(d, book_version or "湘少版", grade_level, skip_if_ok=True)
+    # 兜底（无 setup 时）：判断主页版本文字
     if d(textContains=grade_level).exists(timeout=3):
-        if d(text="教材精学").exists(timeout=1):
-            print(f"✅ 已确认 {book_version} {grade_level}")
-            return True
-
-    # 不匹配 → 打开年级切换弹层
-    print(f"🔄 切换年级 → {book_version} {grade_level}")
-    try:
-        d(textContains="审定").click(timeout=3)
-    except Exception:
-        print("❌ 找不到版本号入口")
-        return False
-    time.sleep(0.8)
-
-    # 在弹层中找年级（可能需要向上滑）
-    for _ in range(8):
-        if d(text=grade_level).exists(timeout=1):
-            break
-        d.swipe(500, 1400, 500, 400, duration=0.3)
-        time.sleep(0.4)
-
-    try:
-        d(text=grade_level).click(timeout=3)
-    except Exception:
-        print(f"❌ 弹层中找不到 {grade_level}")
-        d.press("back")
-        return False
-    time.sleep(0.8)
-
-    # 确认按钮
-    for btn in ("确定", "确认", "完成", "好的"):
-        try:
-            if d(text=btn).exists(timeout=1):
-                d(text=btn).click()
-                break
-        except Exception:
-            pass
-    time.sleep(1.2)
-
-    ok = d(textContains=grade_level).exists(timeout=3)
-    if ok:
-        print(f"✅ 已切换至 {book_version} {grade_level}")
-    else:
-        print("❌ 年级切换失败")
-    return ok
+        return True
+    return False
 
 def back_to_home(d, grade_level):
     """从模块内部回到年级主页：按 back 直到看到年级文字"""
