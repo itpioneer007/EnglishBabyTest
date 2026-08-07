@@ -688,6 +688,7 @@ def _answer_loop(d, config, module_name):
       只在执行 click 改变页面后重新 dump。
     """
     q = 0
+    _idle = 0  # 连续空转计数（无选项且无题型匹配），防倒计时被误计/死循环
     _xml = ""  # 当前 UI 缓存
     _need_dump = True  # 需要在下一轮重新 dump
 
@@ -733,6 +734,7 @@ def _answer_loop(d, config, module_name):
         if _has("继续练习") and _has("先走一步"):
             _click_text("继续练习")
             print("      → 关弹窗")
+            _idle = 0
             time.sleep(0.4)
             _need_dump = True; continue
 
@@ -755,6 +757,7 @@ def _answer_loop(d, config, module_name):
         if _has("下一题"):
             _click_text("下一题")
             print(f"      → 下一题（答错）")
+            _idle = 0
             step_log(f"  第{q}题: 答错 → 下一题", "warning")
             time.sleep(0.4); _need_dump = True; continue
 
@@ -774,31 +777,38 @@ def _answer_loop(d, config, module_name):
                 _handle_sentence_sort(d, config)
             else:
                 _handle_sort_question(d, config)
+            _idle = 0
             time.sleep(0.4); _need_dump = True; continue
         elif qtype == "match_questions":
             _handle_match_question(d, config)
+            _idle = 0
             time.sleep(0.4); _need_dump = True; continue
 
-        # 新题
+        # 新题：★ 先找选项，找到才计题（倒计时3、2、1/页面加载中无选项 → 不计题！）
+        opt = _find_opt()
+        if not opt:
+            # 无选项 → 倒计时/加载中/异常页：不计数，空转保护防死循环
+            _idle += 1
+            if _idle >= 15:
+                step_log(f"⚠ 连续 {_idle} 轮无有效题目（可能停在非答题页/倒计时异常），退出答题循环", "warning")
+                return q
+            time.sleep(0.3); _need_dump = True
+            continue
+        _idle = 0
         q += 1
         print(f"    📸 第{q}题")
         step_log(f"📸 第{q}题", "step")
         time.sleep(0.3); _xml = _dump()
 
-        opt = _find_opt()
-        if opt:
-            _click_text(opt)
-            print(f"      → 选 {opt}")
-            step_log(f"  第{q}题: 选 {opt} → 检查", "info")
-            time.sleep(0.5); _xml = _dump()
-            if _has("检查"):
-                _click_text("检查")
-                print(f"      → 检查")
-                time.sleep(0.5); _need_dump = True
-            continue
-
-        # 兜底：无选项 → 下轮重试
-        time.sleep(0.3); _need_dump = True
+        _click_text(opt)
+        print(f"      → 选 {opt}")
+        step_log(f"  第{q}题: 选 {opt} → 检查", "info")
+        time.sleep(0.5); _xml = _dump()
+        if _has("检查"):
+            _click_text("检查")
+            print(f"      → 检查")
+            time.sleep(0.5); _need_dump = True
+        continue
 
     return q
 
@@ -934,7 +944,14 @@ def run_single_module(d, module_name, config):
                 step_log(f"📌 当前子模块: {shown or sub['name']}（第{i+1}/{len(sm)}个，左滑{swiped}次）", "step")
                 print(f"    👈 切到 {sub['name']}（左滑{swiped}次）→ 当前显示: {shown or '?'}")
             else:
-                # 第1个子模块（不滑）：也读取展示
+                # 第1个子模块：先右滑回最左（基础巩固），处理上次遗留位置（可能停在 Level 3）
+                for _ in range(4):
+                    cur_texts = _sub_texts()
+                    if any("基础巩固" in t for t in cur_texts):
+                        break
+                    d.swipe_ext("right", scale=0.5)
+                    time.sleep(0.9)
+                # 读取展示
                 cur_texts = _sub_texts()
                 shown = next((t for t in cur_texts if sub["name"] in t), cur_texts[0] if cur_texts else "")
                 step_log(f"📌 当前子模块: {shown or sub['name']}（第{i+1}/{len(sm)}个，无需滑动）", "step")

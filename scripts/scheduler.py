@@ -135,10 +135,28 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
         t0 = time.time()
         try:
             mod = importlib.import_module(MODULE_MAP[name])
-            if module_units:
-                q = mod.run_module(d, units=module_units)
+            # ★ 听力专项特殊：练习+测试两部分
+            #   units["听力专项"] = 练习单元，units["听力专项_测试"] = 测试单元（可分开）
+            if name == "听力专项" and hasattr(mod, "run_test_module"):
+                practice_units = units.get("听力专项")
+                test_units = units.get("听力专项_测试")
+                if practice_units and test_units:
+                    step_log(f"📌 听力专项: 练习单元{practice_units} + 测试单元{test_units} 分开检测", "step")
+                    q1 = mod.run_module(d, units=practice_units)
+                    step_log(f"✅ 听力专项·练习 完成: {q1} 题", "success")
+                    q2 = mod.run_test_module(d, test_units=test_units)
+                    step_log(f"✅ 听力专项·测试 完成: {q2} 题", "success")
+                    q = q1 + q2
+                else:
+                    q = mod.run_module(d, units=module_units) if module_units else mod.run_module(d)
+                    q2 = mod.run_test_module(d, test_units=module_units) if module_units else mod.run_test_module(d)
+                    q = q + q2
+                    step_log(f"📌 听力专项: 练习+测试 全部完成（{q} 题）", "info")
             else:
-                q = mod.run_module(d)
+                if module_units:
+                    q = mod.run_module(d, units=module_units)
+                else:
+                    q = mod.run_module(d)
             elapsed = round(time.time() - t0)
             results[name] = {"q": q, "t": elapsed, "ok": True}
             step_log(f"✅ {name} 完成: {q} 题, 耗时 {elapsed}s", "success")

@@ -1104,6 +1104,74 @@ def api_version_grades():
     return jsonify({"error": "尚未扫描年级数据，请先运行 grade_scanner.py"}), 404
 
 
+@app.route("/api/version-grades/current", methods=["POST"])
+def api_version_grades_current():
+    """★ 实时从 App 读取当前版本的年级列表（前端切换版本后联动年级下拉）
+
+    与 App 实际内容保持一致：打开「切换课本」页 dump 解析，而非写死。
+    body: {"version": "湘少版"}（可选；传入且与当前不同 → 先在 App 内切版本再读）
+    返回: {"version": "湘少版", "grades": ["五年级上册", ...], "current_grade": "五年级上册"}
+    """
+    data = request.get_json(silent=True) or {}
+    target = (data.get("version") or "").strip()
+    if task_status["running"]:
+        return jsonify({"error": "已有任务在运行"}), 409
+    try:
+        d = _connect_device()
+    except Exception as e:
+        return jsonify({"error": f"设备未连接: {e}"}), 400
+    try:
+        import importlib
+        sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+        setup = importlib.import_module("common.setup")
+
+        def _homebar_text():
+            """主页顶部版本+年级栏文本（resource-id=switch_textbook_tv，属性顺序不固定）"""
+            try:
+                _xml = d.dump_hierarchy()
+                _m = re.search(r'<node[^>]*resource-id="[^"]*switch_textbook_tv"[^>]*>', _xml)
+                if _m:
+                    _tm = re.search(r'text="([^"]*)"', _m.group(0))
+                    if _tm:
+                        return _tm.group(1)
+            except Exception:
+                pass
+            return ""
+
+        # 1) 当前版本（主页顶部栏文本，取"X版"部分）
+        homebar = _homebar_text()
+        cur_version = ""
+        vm = re.search(r'([\u4e00-\u9fa5]+版)', homebar) if homebar else None
+        if vm:
+            cur_version = vm.group(1)
+        # 2) 指定版本且与当前不同 → 先切版本（走"我的"页路径）
+        if target and target not in (homebar or ""):
+            log_msg(f"🔄 切换版本 → {target}", "step")
+            if not setup.switch_version(d, target):
+                log_msg("❌ 版本切换失败", "error")
+                return jsonify({"error": f"版本切换失败: {target}"}), 500
+            time.sleep(1)
+        # 3) 打开「切换课本」页实时读取年级列表
+        grades = setup.get_grades_from_app(d)
+        if not grades:
+            return jsonify({"error": "未能从 App 读取年级列表（请确认设备已连接且在主页）"}), 500
+        # 4) 当前年级（主页栏文本中提取 X年级上/下册）
+        homebar = _homebar_text()
+        cur_grade = ""
+        gm = re.search(r'([一二三四五六]年级(?:上|下)册)', homebar) if homebar else None
+        if gm:
+            cur_grade = gm.group(1)
+        if not cur_version:
+            vm2 = re.search(r'([\u4e00-\u9fa5]+版)', homebar) if homebar else None
+            if vm2:
+                cur_version = vm2.group(1)
+        log_msg(f"✅ 实时读取年级列表: {len(grades)} 个（当前: {cur_grade or '未知'}）", "success")
+        return jsonify({"version": target or cur_version, "grades": grades, "current_grade": cur_grade})
+    except Exception as e:
+        log_msg(f"❌ 读取年级列表异常: {e}", "error")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/version-grades/scan", methods=["POST"])
 def api_scan_grades():
     """触发全版本年级扫描（慢，约3分钟）"""

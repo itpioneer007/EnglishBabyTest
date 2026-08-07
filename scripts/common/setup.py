@@ -134,6 +134,64 @@ def check_current(d, version, grade):
     return False
 
 
+def get_grades_from_app(d, max_pages=5):
+    """从 App「切换课本」页实时读取当前版本下的年级列表（与 App 实际内容一致）
+
+    流程：主页点顶部「版本+年级」栏(321,275) → 「切换课本」页 → dump 解析年级
+          （X年级上册/下册 网格）→ 下滑翻页收集 → back 关闭（不选中任何年级）→ 返回去重列表
+    返回: ["五年级上册", "五年级下册", ...]（空列表表示读取失败）
+    ★ 注意：下滑必须从网格下方空白区（y=1900）起滑，避免起点落在年级格子上
+            被系统识别为点击 → 误切年级
+    """
+    if not _is_home(d):
+        _back_home(d)
+    if not _is_home(d):
+        return []
+    # 打开切换课本页（验证页面出现年级格子才继续，最多重试2次）
+    opened = False
+    for _ in range(2):
+        try:
+            d.click(321, 275)
+            time.sleep(2.2)
+            xml = d.dump_hierarchy()
+            if '年级' in xml and ('上册' in xml or '下册' in xml):
+                opened = True
+                break
+        except Exception:
+            break
+    if not opened:
+        return []
+    grades = []
+    prev_n = -1
+    for page in range(max_pages):
+        try:
+            xml = d.dump_hierarchy()
+        except Exception:
+            break
+        # 解析年级格子：形如「五年级上册」「三年级下册」（排除标题/说明等长文本）
+        for m in _re.finditer(r'text="([^"]*年级(?:上|下)册[^"]*)"', xml):
+            t = m.group(1).strip()
+            if t and t not in grades:
+                grades.append(t)
+        # 页面无新内容且已滑过 → 结束
+        if len(grades) == prev_n and page > 0:
+            break
+        prev_n = len(grades)
+        try:
+            # 从网格下方空白区起滑，长距离慢速，避免误触选中年级
+            d.swipe(540, 1900, 540, 500, duration=0.5)
+            time.sleep(0.7)
+        except Exception:
+            break
+    # 关闭弹窗回主页（不选中任何年级 → back = 取消，保持原年级）
+    try:
+        d.press('back')
+        time.sleep(0.8)
+    except Exception:
+        pass
+    return grades
+
+
 def switch_version_grade(d, version, grade, skip_if_ok=True):
     """一站式切换版本+年级（skip_if_ok: 已是目标则跳过）
 

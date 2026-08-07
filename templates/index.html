@@ -174,12 +174,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
       <div class="config-grid">
         <div class="field">
           <label>教材版本</label>
-          <select id="setupVersion">
+          <select id="setupVersion" onchange="loadGrades(this.value)">
             <option selected>湘少版</option><option>湘鲁版</option><option>人教PEP版</option><option>教科版</option>
           </select>
         </div>
         <div class="field">
-          <label>年级</label>
+          <label>年级<span id="gradeLoading" style="font-size:11px;color:var(--gray)"></span></label>
           <select id="setupGrade">
             <option selected>五年级上册</option><option>五年级下册</option><option>六年级上册</option><option>六年级下册</option><option>四年级下册</option><option>三年级下册</option>
           </select>
@@ -188,7 +188,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 
       <div style="font-size:13px;color:var(--gray);margin-bottom:6px">要测的模块（可多选）<span style="font-size:11px">· 点⚙️可指定单元范围</span></div>
       <div class="module-tags">
-        <label class="mod-tag on"><input type="checkbox" class="mod-sel" value="听力专项" checked>听力专项<span class="unit-gear" title="指定单元范围">⚙️</span><span class="unit-input-wrap" style="display:none"><input type="text" class="unit-range-input" placeholder="1-5" size="4"></span></label>
+        <label class="mod-tag on"><input type="checkbox" class="mod-sel" value="听力专项" checked>听力专项<span class="unit-gear" title="指定单元范围">⚙️</span><span class="unit-input-wrap" style="display:none"><span style="font-size:10px;color:var(--gray)">练</span><input type="text" class="unit-range-input" placeholder="1-5" size="4" title="练习单元范围"><span style="font-size:10px;color:var(--gray)">测</span><input type="text" class="unit-range-input" placeholder="1-5" size="4" title="测试单元范围"></span></label>
         <label class="mod-tag on"><input type="checkbox" class="mod-sel" value="口语训练" checked>口语训练<span class="unit-gear" title="指定单元范围">⚙️</span><span class="unit-input-wrap" style="display:none"><input type="text" class="unit-range-input" placeholder="1-4" size="4"></span></label>
         <label class="mod-tag on"><input type="checkbox" class="mod-sel" value="单元自检" checked>单元自检<span class="unit-gear" title="指定单元范围">⚙️</span><span class="unit-input-wrap" style="display:none"><input type="text" class="unit-range-input" placeholder="1-4" size="4"></span></label>
         <label class="mod-tag on"><input type="checkbox" class="mod-sel" value="知识过关" checked>知识过关<span class="unit-gear" title="指定单元范围">⚙️</span><span class="unit-input-wrap" style="display:none"><input type="text" class="unit-range-input" placeholder="1-9" size="4"></span></label>
@@ -331,16 +331,29 @@ async function startCooking(){
   const moduleConfigs=[]
   document.querySelectorAll('.mod-sel:checked').forEach(cb=>{
     const name=cb.value
-    const input=cb.closest('.mod-tag')?cb.closest('.mod-tag').querySelector('.unit-range-input'):null
-    const units=input?input.value.trim():''
-    moduleConfigs.push({name,units})
+    const tag=cb.closest('.mod-tag')
+    // 听力专项特殊：两个输入框 = 练习单元 + 测试单元
+    if(name==='听力专项' && tag){
+      const inputs=tag.querySelectorAll('.unit-range-input')
+      const pUnits=inputs[0]?inputs[0].value.trim():''
+      const tUnits=inputs[1]?inputs[1].value.trim():''
+      moduleConfigs.push({name,units:pUnits,testUnits:tUnits})
+    }else{
+      const input=tag?tag.querySelector('.unit-range-input'):null
+      const units=input?input.value.trim():''
+      moduleConfigs.push({name,units})
+    }
   })
   if(!moduleConfigs.length){alert('请至少选择一个模块（或在清单中说明）');return}
 
   // 构建提交数据：兼容旧格式 modules 数组 + 新格式 units 映射
   const modules=moduleConfigs.map(m=>m.name)
   const unitsMap={}
-  moduleConfigs.forEach(m=>{if(m.units) unitsMap[m.name]=m.units})
+  moduleConfigs.forEach(m=>{
+    if(m.units) unitsMap[m.name]=m.units
+    // 听力专项测试单元 → 独立 key（听力专项_测试）
+    if(m.testUnits) unitsMap['听力专项_测试']=m.testUnits
+  })
   const hasUnits=Object.keys(unitsMap).length>0
 
   let confirmMsg = '确认启动多模块检测？\n'
@@ -441,10 +454,37 @@ function renderServe(data){
   addLog('success',`✅ 全部完成！${names.length}个模块，${okN}个成功，累计${totalQ}题`)
 }
 
+// ====== 动态年级：切换版本 → 后端从 App 实时读取年级列表（与 App 实际内容一致） ======
+let gradesLoaded=false
+async function loadGrades(version){
+  const gl=document.getElementById('gradeLoading')
+  const sel=document.getElementById('setupGrade')
+  if(gl) gl.textContent=' 读取中…'
+  sel.disabled=true
+  try{
+    const r=await fetch('/api/version-grades/current',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version:version||''})})
+    const d=await r.json()
+    if(!r.ok) throw new Error(d.error||'读取失败')
+    const grades=d.grades||[]
+    if(!grades.length) throw new Error('App 返回空年级列表')
+    sel.innerHTML=grades.map(g=>`<option${g===d.current_grade?' selected':''}>${g}</option>`).join('')
+    if(gl) gl.textContent=` 已同步App（${grades.length}个）`
+    gradesLoaded=true
+  }catch(e){
+    // 读取失败 → 回退默认年级，明确提示用户
+    sel.innerHTML='<option selected>五年级上册</option><option>五年级下册</option><option>六年级上册</option><option>六年级下册</option><option>四年级下册</option><option>三年级下册</option>'
+    if(gl) gl.textContent=' ⚠读取失败，用默认'
+    addLog('warning','⚠ 动态年级读取失败: '+e.message)
+  }finally{
+    sel.disabled=false
+  }
+}
+
 // ====== 启动 ======
 pollStatus()
 pollLog()
 refreshModuleSel()
+loadGrades()
 
 // ====== 齿轮 ⚙️ 事件委托（捕获阶段，先于 label 默认行为拦截） ======
 document.addEventListener('click', function(ev){
