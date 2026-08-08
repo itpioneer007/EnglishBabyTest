@@ -151,8 +151,8 @@ class ConsistencyChecker:
         }
         dims = {}
         report = ConsistencyReport(
-            question_id=f"Q{q.idx}",
-            question_type=getattr(q, 'type_2', q.question_type),
+            question_id=f"Q{getattr(q, 'global_idx', getattr(q, 'idx', 0))}",
+            question_type=getattr(q, 'type_2', '') or getattr(q, 'type_1', ''),
             total_runs=runs,
         )
 
@@ -212,7 +212,10 @@ class ConsistencyChecker:
     def summary(self) -> dict:
         """生成所有题目的一致性汇总统计"""
         if not self.reports:
-            return {"total_questions": 0}
+            return {"total_questions": 0, "stable_questions": 0,
+                    "unstable_questions": 0, "needs_human_review": 0,
+                    "overall_stability": 0.0, "dim_avg_agreement": {},
+                    "dim_unstable_count": {}, "reports": []}
 
         total = len(self.reports)
         stable = sum(1 for r in self.reports if r.overall_stable)
