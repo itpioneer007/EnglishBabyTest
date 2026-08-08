@@ -23,8 +23,19 @@ APP_PACKAGE = "com.dinoenglish.yyb"
 GRADE_LEVEL = "五年级上册"
 BOOK_VERSION = "湘少版"
 
-# 单元遍历范围：1-9 全跑；测试可改 [1] 只跑第一单元
-UNITS = [1]  # 测试先跑 U1，打通后改回 list(range(1, 10))
+# 单元遍历范围: 由环境变量 YYB_UNIT_FROM/TO 控制 (scheduler设置), 默认 Unit 1
+
+def _env_units():
+    """从环境变量读取单元范围 (由 scheduler 设置); 未设置时默认 Unit 1"""
+    f = os.environ.get("YYB_UNIT_FROM", "")
+    t = os.environ.get("YYB_UNIT_TO", "")
+    if f.isdigit():
+        f = int(f)
+        t = int(t) if t.isdigit() else f
+        return list(range(f, t + 1))
+    return [1]
+
+UNITS = _env_units()
 
 MODULE_CONFIG = {
     "entry_text": "听力专项",

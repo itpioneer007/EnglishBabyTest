@@ -350,13 +350,97 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
   </main>
 </div>
 
+<!-- 列3（右侧面板）：脚本上传 / 知识库 / 审查智能体 → 来自 bunana 分支 -->
+<div class="col" id="rightPanel" style="display:none">
+  <!-- 脚本上传 -->
+  <div class="card">
+    <div class="card-hdr">脚本上传</div>
+    <div class="card-body">
+      <div style="font-size:13px;color:#64748b;line-height:1.7;margin-bottom:12px">
+        上传公司提供的<strong style="color:#334155">DOCX / DOC 脚本文件</strong>（如"260717新湘鲁六上听力专项.docx"），系统自动解析并导入知识库，审查时用这些内容核验题目是否正确。
+      </div>
+      <div class="upload-area" id="dropZone">
+        <div class="icon">+</div>
+        <div class="txt">拖拽 DOCX 或 DOC 文件到此处，或点下方按钮选择</div>
+        <input type="file" id="fileInput" accept=".docx,.doc" style="display:none" onchange="uploadViaFileInput()">
+        <button class="btn btn-outline" onclick="document.getElementById('fileInput').click()">选择文件 (.docx / .doc)</button>
+      </div>
+      <div id="uploadStatus" style="font-size:14px;color:#64748b;margin-bottom:8px;margin-top:6px"></div>
+      <div class="file-list" id="uploadList2"></div>
+    </div>
+  </div>
+
+  <!-- 知识库 -->
+  <div class="card">
+    <div class="card-hdr">知识库</div>
+    <div class="card-body">
+      <div style="font-size:13px;color:#64748b;line-height:1.7;margin-bottom:10px">
+        教材知识点仓库，存储所有已上传脚本中的<strong style="color:#334155">词汇、句型、语法</strong>。审查时 AI 自动查证题目内容是否在教材范围内。
+      </div>
+      <div id="kbContent">
+        <div class="info-row"><span class="key">总知识点数</span><span class="val" id="kbTotal">加载中</span></div>
+        <div class="info-row"><span class="key">覆盖年级</span><span class="val" id="kbGrades">—</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 审查智能体 -->
+  <div class="card">
+    <div class="card-hdr">审查智能体</div>
+    <div class="card-body">
+      <div style="font-size:13px;color:#64748b;line-height:1.7;margin-bottom:12px">
+        选择已上传的脚本文件，指定单元后一键审查。<br>
+        <strong style="color:#334155">审查流程</strong>：AI 逐题做六维检查 → 结果保存在中栏 → 可人工标注 → 智能体自动学习。
+      </div>
+      <div class="form-row">
+        <span class="form-label">脚本文件</span>
+        <span class="form-hint">选择要对照审查的 DOCX</span>
+        <select id="reviewDocx" style="margin-top:4px"></select>
+      </div>
+      <div class="form-row">
+        <span class="form-label">单元编号</span>
+        <span class="form-hint">0=审查整个脚本，6-9=指定 Unit</span>
+        <div style="display:flex;gap:8px;margin-top:4px">
+          <input type="number" id="reviewUnit" placeholder="例: 6 (0=全部)">
+          <button class="btn btn-primary" onclick="runReview()">审查</button>
+        </div>
+      </div>
+      <div id="reviewResult" style="margin-top:10px;font-size:14px;color:#64748b"></div>
+    </div>
+  </div>
+
+  <!-- 智能体学习状态 -->
+  <div class="card">
+    <div class="card-hdr">智能体学习状态</div>
+    <div class="card-body">
+      <div style="font-size:13px;color:#64748b;line-height:1.7;margin-bottom:10px">
+        人工标注数据统计：AI 判断 vs 人工判定<strong style="color:#334155">一致越多</strong>，智能体越准确。
+        在中栏题目卡片底部点击「通过 / 不通过」即可标注。
+      </div>
+      <div id="agentStats">
+        <div class="info-row"><span class="key">反馈样本数</span><span class="val" id="fbTotal">0</span></div>
+        <div class="info-row"><span class="key">AI准确率</span><span class="val" id="fbAccuracy">—</span></div>
+        <div class="info-row"><span class="key">已人工标注</span><span class="val" id="fbLabeled">0</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 截图预览 -->
+  <div class="card">
+    <div class="card-hdr">截图预览</div>
+    <div class="card-body">
+      <div style="font-size:13px;color:#64748b;line-height:1.7;margin-bottom:10px">最近一题的 APP 真实截图，供肉眼核验 AI 判断是否准确。</div>
+      <div class="screenshot-box" id="screenshotArea"><div class="ph">等待巡检截图...</div></div>
+    </div>
+  </div>
+</div>
+
 <!-- ===== 使用指南弹层 ===== -->
 <div class="guide-mask" id="guideMask" onclick="closeGuide()">
   <div class="guide" onclick="event.stopPropagation()">
     <div class="flex items-center justify-between px-5 py-3 bg-gradient-to-r from-[#1b4332] to-[#2d6a4f] text-white">
       <h2 class="font-bold text-[15px]">界面使用指南</h2>
       <button class="bg-white/20 hover:bg-white/35 rounded-lg px-3 py-1 text-[12px] transition" onclick="closeGuide()">关闭</button>
-    </div>
     <div class="guide-body">
       <div class="g-tip"><b>一句话总览：</b>左边配置"要测什么"，右边看"跑的过程和审的结果"。自动化点击和逐题审查都记录在右侧<b>同一条日志流</b>里，按时间排。</div>
 
@@ -402,12 +486,139 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
 const $=id=>document.getElementById(id)
 let logLast=0,_devListTs=0,_lastLogs=0
 
+<<<<<<< HEAD
 /* ========== 使用指南 ========== */
 function openGuide(){document.getElementById('guideMask').classList.add('open')}
 function closeGuide(){document.getElementById('guideMask').classList.remove('open')}
+=======
+// ====== 初始化 ======
+async function init(){
+  pollStatus()
+  loadUploadList()
+  startShotPolling()
+}
+init()
+>>>>>>> origin/bunana
 
 /* ========== 设备轮询 ========== */
 async function pollStatus(){
+<<<<<<< HEAD
+=======
+  while(true){
+    try{
+      const s=await(await fetch('/api/status')).json()
+      const on=s.device_connected
+      $('devStatus').textContent=on?'已连接':'离线'
+      $('devStatus').style.color=on?'#22c55e':'#ef4444'
+      $('devDot').className='dot '+(on?'on':'off')
+      $('devChip').className='chip '+(on?'on':'idle')
+      $('devChip').innerHTML='<span class="c-dot"></span>设备: '+(on?'已连接':'离线')
+
+      // 批量状态
+      const bs=await(await fetch('/api/batch/status')).json()
+      updateBatchUI(bs)
+      updateTaskChip(bs)
+    }catch(e){}
+    await new Promise(r=>setTimeout(r,2000))
+  }
+}
+
+// ====== 自动化任务状态 chip ======
+function updateTaskChip(bs){
+  const chip=$('taskChip')
+  if(bs.running||bs.paused){
+    chip.className='chip run'
+    chip.innerHTML='<span class="c-dot"></span>当前任务: '+(bs.paused?'已暂停':'运行中')
+  }else{
+    chip.className='chip idle'
+    chip.innerHTML='<span class="c-dot"></span>当前任务: 空闲'
+  }
+}
+
+// ====== 批量UI更新 (B实现) ======
+function updateBatchUI(bs){
+  if(!bs.running && !bs.paused){
+    $('btnStart').style.display=''; $('btnCancel').style.display='none'; $('btnPause').style.display='none'
+    $('progressCard').style.display='none'; $('moduleListCard').style.display='none'
+    return
+  }
+  $('btnStart').style.display='none'; $('btnCancel').style.display=''; $('btnPause').style.display=''
+  $('progressCard').style.display=''; $('moduleListCard').style.display=''
+
+  const total=bs.completed.length+(bs.pending?.length||0)
+  const done=bs.completed.length
+  $('progressFill').style.width=(done/Math.max(total,1)*100)+'%'
+  $('statDone').textContent=done; $('statTotal').textContent=total
+  $('batchBadge').textContent=bs.paused?'已暂停':'运行中'
+  $('batchBadge').className='badge '+(bs.paused?'badge-idle':'badge-running')
+  $('statEta').textContent=bs.eta_remaining||'--'
+  $('currentModule').textContent=bs.current?`U${bs.current.unit} ${bs.current.stage}`:'--'
+
+  // 模块列表
+  const items=[]
+  bs.completed.forEach(m=>items.push({name:`U${m.unit} ${m.stage}`,status:'done',detail:`${m.questions||0}题`}))
+  if(bs.current) items.push({name:`U${bs.current.unit} ${bs.current.stage}`,status:'running',detail:bs.current.question||''})
+  bs.pending.forEach(m=>items.push({name:`U${m.unit} ${m.stage}`,status:'pending',detail:''}))
+  bs.failed_modules.forEach(m=>items.push({name:`U${m.unit} ${m.stage}`,status:'failed',detail:m.reason||'失败'}))
+  $('moduleList').innerHTML=items.map((m,i)=>
+    `<div class="module-item">
+      <div class="idx ${m.status}">${m.status==='done'?'√':m.status==='running'?'›':m.status==='failed'?'×':i+1}</div>
+      <div class="name">${m.name}</div>
+      <div class="stat">${m.detail}</div>
+    </div>`
+  ).join('')
+
+  // 统计
+  let tp=0,tf=0
+  bs.completed.forEach(m=>{tp+=m.passed||0;tf+=m.failed||0})
+  $('statPassed').textContent=tp; $('statFailed').textContent=tf
+
+  // 完成后显示
+  if(!bs.running && done===total && total>0){
+    $('progressFill').style.width='100%'
+    $('btnStart').style.display=''; $('btnCancel').style.display='none'; $('btnPause').style.display='none'
+    $('batchBadge').textContent='已完成'; $('batchBadge').className='badge badge-idle'
+    addLog('success',`全部完成! ${tp}题通过, ${tf}题出错 → 查看 <a href="/trace" style="color:#4ade80">错误溯源</a>`)
+  }
+}
+
+// ====== 文件上传 ======
+async function uploadFile(){
+  const f=$('uploadInput').files[0]; if(!f) return
+  const fd=new FormData(); fd.append('file',f)
+  await fetch('/api/upload',{method:'POST',body:fd})
+  loadUploadList()
+}
+
+
+async function uploadViaFileInput(){
+  const f=$('fileInput').files[0]; if(!f) return
+  const fd=new FormData(); fd.append('file',f)
+  try{
+    const r=await fetch('/api/upload',{method:'POST',body:fd})
+    const j=await r.json().catch(()=>({}))
+    if(!r.ok){alert(j.error||'上传失败 ('+r.status+')');$('fileInput').value='';return}
+    if(typeof addLog==='function')addLog('success','📤 已上传脚本: '+f.name)
+    alert('✅ 上传成功: '+f.name)
+  }catch(e){alert('上传失败: '+e.message)}
+  $('fileInput').value=''
+  loadUploadList()
+}
+
+async function loadUploadList(){
+  const d=await(await fetch('/api/upload/list')).json()
+  $('planDocx').innerHTML=(d.files||[]).map(f=>`<option>${f.name}</option>`).join('')
+  $('uploadList').innerHTML=(d.files||[]).length
+    ? d.files.map(f=>`<div>${f.name} (${(f.size/1024).toFixed(0)}KB)</div>`).join('')
+    : '<span>暂无上传 — 可跳过，AI将自动生成答案</span>'
+}
+
+// ====== 自然语言解析 ======
+async function parseNL(){
+  const text=$('nlInput').value.trim()
+  if(!text){$('nlResult').textContent='请先输入描述';return}
+  $('nlResult').textContent='解析中...'
+>>>>>>> origin/bunana
   try{
     const s=await(await fetch('/api/status')).json()
     const on=s.device_connected
@@ -497,6 +708,7 @@ function clearLog(){
 }
 async function pollLog(){
   try{
+<<<<<<< HEAD
     const d=await(await fetch('/api/log')).json()
     const arr = Array.isArray(d) ? d : (d.logs||[])
     const logs=arr.slice(logLast)
@@ -593,6 +805,21 @@ function updateStopBtn(running){
 }
 
 function pollCookResult(modules){
+=======
+    const r=await fetch('/api/modules/run',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({version,grade,modules,unit_from:$('planUnitFrom')?parseInt($('planUnitFrom').value):0,unit_to:$('planUnitTo')?parseInt($('planUnitTo').value):0})})
+    const j=await r.json()
+    if(j.error){alert(j.error);return}
+    addLog('info',`多模块检测已启动: ${version} ${grade} → ${modules.join('、')}`)
+    // 启动结果轮询
+    pollModulesResult(modules)
+  }catch(e){alert('启动失败: '+e.message)}
+  finally{btn.disabled=false; btn.textContent='开始检测'}
+}
+
+// ====== 多模块检测：结果轮询与汇总展示 ======
+async function pollModulesResult(modules){
+>>>>>>> origin/bunana
   let tried=0
   const timer=setInterval(async()=>{
     tried++
@@ -635,6 +862,7 @@ function renderServe(data){
   addLog('success','全部完成！'+names.length+'个模块，'+okN+'个成功，累计'+totalQ+'题')
 }
 
+<<<<<<< HEAD
 /* ========== 版本×年级配置表 ========== */
 let GRADE_TABLE=null, gradesLoaded=false
 async function loadGradeTable(){
@@ -1036,6 +1264,45 @@ loadGradeTable()
 loadUL()
 loadKB()
 loadVersions()
+=======
+setInterval(pollLog,2000)
+
+async function runReview(){
+  const docx=$('reviewDocx')?$('reviewDocx').value:'';
+  const unit=$('reviewUnit')?$('reviewUnit').value:'';
+  if(!docx||docx===''||docx==='— 尚未上传 —'){alert('请先选择脚本文件');return}
+  $('reviewResult').innerHTML='<span style="color:#64748b">🤖 审查中...（AI逐题审查，请稍候）</span>';
+  try{
+    const r=await(await fetch('/api/review/run',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({docx:docx,unit:unit?parseInt(unit):0})})).json();
+    if(r.error){$('reviewResult').innerHTML='<span style="color:#ef4444">❌ '+r.error+'</span>';return}
+    let total=0,passed=0;
+    if(r.results&&Array.isArray(r.results)){total=r.results.length;passed=r.results.filter(x=>x.overall_passed).length;}
+    else{total=r.total||0;passed=r.passed!==undefined?r.passed:0;}
+    $('reviewResult').innerHTML='<span style="color:#16a34a">✅ 审查完成: 共'+total+'题, 通过'+passed+'题</span>';
+    if(total>0&&typeof loadReviewResults==='function')loadReviewResults();
+  }catch(e){$('reviewResult').innerHTML='<span style="color:#ef4444">❌ 审查失败: '+e.message+'</span>'}
+}
+
+// ====== 截图实时预览轮询 (每2秒) ======
+let _shotTimer=null
+async function pollShot(){
+  try{
+    const t=Date.now()
+    const r=await fetch('/api/screenshot/latest?t='+t)
+    if(r.ok){
+      const blob=await r.blob()
+      const url=URL.createObjectURL(blob)
+      $('screenshotArea').innerHTML=`<img src="${url}" alt="实时截图">`
+    }
+  }catch(e){}
+}
+function startShotPolling(){
+  if(_shotTimer) clearInterval(_shotTimer)
+  _shotTimer=setInterval(pollShot,2000)
+  pollShot()
+}
+>>>>>>> origin/bunana
 </script>
 </body>
 </html>

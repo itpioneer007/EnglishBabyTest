@@ -26,6 +26,7 @@
 
 批量调用：from modules.知识过关 import run_module; run_module(d)
 """
+import os
 import sys, os, time, re
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -40,7 +41,18 @@ APP_PACKAGE = "com.dinoenglish.yyb"
 GRADE_LEVEL = "五年级上册"
 BOOK_VERSION = "湘少版"
 
-UNITS = [1]  # U1 验证；打通后 list(range(1, 10))
+
+def _env_units():
+    """从环境变量读取单元范围 (scheduler 设置); 未设置时默认 Unit 1"""
+    f = os.environ.get("YYB_UNIT_FROM", "")
+    t = os.environ.get("YYB_UNIT_TO", "")
+    if f.isdigit():
+        f = int(f)
+        t = int(t) if t.isdigit() else f
+        return list(range(f, t + 1))
+    return [1]
+
+UNITS = _env_units()  # U1 验证；打通后 list(range(1, 10))
 
 def _resolve_units(units, default_units):
     """把外部传入的单元范围解析为列表；None 则用默认全部单元"""
