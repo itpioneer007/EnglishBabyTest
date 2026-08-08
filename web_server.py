@@ -2592,23 +2592,7 @@ def run_quick_inspect_task(docx_file: str = "", unit: int = 0):
         set_done()
 
 
-
-
 # ===== 快速检查(从当前页开始) =====
-@app.route("/api/inspect/quick-run", methods=["POST"])
-def api_inspect_quick_run():
-    """⚡ 快速检查：从当前页面直接开始逐题巡检 (跳过导航)"""
-    if task_status["running"]:
-        return jsonify({"error": "已有任务在运行"}), 409
-    data = request.get_json() or {}
-    docx_file = data.get("docx", "")
-    unit = data.get("unit", 0)
-    t = threading.Thread(target=run_quick_inspect_task,
-                         args=(docx_file, unit), daemon=True)
-    t.start()
-    return jsonify({"status": "started", "task": "quick_inspect",
-                    "docx": docx_file, "unit": unit})
-
 @app.route("/api/inspect/state", methods=["GET"])
 def api_inspect_state():
     """获取当前巡检状态 (流式)"""
