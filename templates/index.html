@@ -780,7 +780,7 @@ async function pollModulesResult(modules){
 }
 
 /* ========== 结果展示 ========== */
-function renderServe(data){
+async function renderServe(data){
   const rs=data.results||{}
   const names=Object.keys(rs)
   const totalQ=names.reduce((s,n)=>s+(rs[n].q||0),0)
@@ -794,15 +794,32 @@ function renderServe(data){
       <div class="sc-detail">${ok?'完成':'失败'} · ${r.t||0}s${r.error?' · '+r.error:''}</div>
     </div>`
   })
-  html+=`</div><div class="serve-summary">
+  html+=`</div><div class="serve-summary" id="serveSummary">
     ${names.length} 个模块 · 成功 <b style="color:var(--ok-ink)">${okN}</b> 个 ·
     累计答题 <b style="color:var(--ok-ink)">${totalQ}</b> 题 · ${data.version||''} ${data.grade||''}
+    <span id="errSummary"><span class="animate-pulse inline-block ml-2" style="color:var(--gray)">加载错题…</span></span>
   </div>`
   const el=$('serveWrap')
   el.innerHTML=html
   el.style.display='block'
   el.scrollIntoView({behavior:'smooth'})
   addLog('success','全部完成！'+names.length+'个模块，'+okN+'个成功，累计'+totalQ+'题')
+
+  // 异步加载错题汇总
+  try{
+    const er=await(await fetch('/api/errors/summary')).json()
+    const es=document.getElementById('errSummary')
+    if(!es) return
+    if(er.error){
+      es.innerHTML='<span class="ml-2" style="color:var(--gray);font-size:11px">错题数据不可用</span>'
+    }else if(er.has_errors){
+      es.innerHTML=`<span class="ml-2" style="color:var(--red);font-weight:600;font-size:12px">
+        不通过 <b>${er.failed_count}/${er.total_questions}</b> 题</span>
+        <a href="/trace" target="_blank" class="ml-2 text-[11px] px-2 py-0.5 rounded-lg border border-[#bc4742] text-[#bc4742] hover:bg-[#fce4e4] no-underline" style="font-weight:500">查看错题详情 →</a>`
+    }else{
+      es.innerHTML=`<span class="ml-2" style="color:var(--ok-ink);font-weight:600;font-size:12px">全部通过 ✓</span>`
+    }
+  }catch(e){ /* 静默处理 */ }
 }
 
 /* ========== 版本×年级配置表 ========== */

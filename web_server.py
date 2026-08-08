@@ -1350,6 +1350,47 @@ def api_login():
     return jsonify({"status": "started", "task": "login"})
 
 
+@app.route("/api/errors/summary", methods=["GET"])
+def api_errors_summary():
+    """返回当前检测中的错题汇总（供前端 renderServe 展示）"""
+    state_path = PROJECT_ROOT / "data" / "inspection_state.json"
+    if not state_path.exists():
+        return jsonify({"error": "暂无检测数据"}), 404
+    try:
+        with open(state_path, "r", encoding="utf-8") as f:
+            state = json.load(f)
+        questions = state.get("questions", {})
+        if isinstance(questions, list):
+            questions_list = questions
+        else:
+            questions_list = list(questions.values())
+
+        failed = []
+        dim_keys = [
+            ("题干", "stem"), ("内容", "content"), ("配图", "image"),
+            ("作答", "answer"), ("答错后", "post_error"), ("音频", "audio")
+        ]
+        for q in questions_list:
+            if not q.get("overall_passed", True):
+                failed_dims = [label for label, key in dim_keys
+                               if not q.get(f"ai_{key[:3]}", True)]
+                failed.append({
+                    "qid": q.get("qid", ""),
+                    "idx": q.get("idx", 0),
+                    "question_type": q.get("question_type", ""),
+                    "overall_score": q.get("overall_score", 0),
+                    "failed_dims": failed_dims,
+                })
+
+        return jsonify({
+            "total_questions": len(questions_list),
+            "failed_count": len(failed),
+            "failed_items": failed,
+            "has_errors": len(failed) > 0,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 @app.route("/api/versions/available")
 def api_versions_available():
