@@ -1,12 +1,11 @@
 {
-  "_架构": "统一走阿里云百炼 API（新 key）",
+  "_架构": "统一走阿里云百炼 API",
   "_策略": "纯文本用 qwen-plus，看图用 qwen3.7-plus（百炼视觉模型）",
+  "_安全": "密钥已迁移到 .env 文件，请勿在此文件中存放敏感信息",
 
-  "api_key": "sk-ws-H.EIDYIRX.kx6w.MEQCIFNYgvtVGhRYoPns6f4hIQjk7LJtU7-dtASAOprG6xvSAiBDbMLjF8zDI6z4gM0UFHWI9d5nZkfMMABhRefrv0UIzg",
   "model": "qwen-plus",
   "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
 
-  "vision_api_key": "sk-ws-H.EIDYIRX.kx6w.MEQCIFNYgvtVGhRYoPns6f4hIQjk7LJtU7-dtASAOprG6xvSAiBDbMLjF8zDI6z4gM0UFHWI9d5nZkfMMABhRefrv0UIzg",
   "vision_model": "qwen3.7-plus",
   "vision_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
 

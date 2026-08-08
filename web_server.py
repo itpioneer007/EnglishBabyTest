@@ -1817,6 +1817,16 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
             elements = adb.dump_ui(retries=2)
             all_texts = [(e.text or '').strip() for e in elements]
 
+            # ★ 实时题型识别（不依赖脚本，从 UI 元素判断当前是什么题）
+            detected = None
+            try:
+                from src.type_detector import TypeDetector
+                detected = TypeDetector(verbose=False).detect(elements)
+                if detected and detected.type_1 != "未知":
+                    log_msg(f"  🔍 实时题型: {detected.describe()} (conf={detected.confidence:.0%})", "info")
+            except Exception:
+                detected = None
+
             # ====== 检测是否在结果页 (有"正确答案"文本) ======
             if any('正确答案' in t for t in all_texts):
                 log_msg("[结果页] 刚答完一题, 找'下一题'", "info")
@@ -1869,7 +1879,7 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
                     if script_q:
                         # 从UI dump提取屏幕文字 (供文字题走文本模型加速)
                         ui_texts = [e.text or '' for e in elements if e.text and e.text.strip()]
-                        r = agent._review_one(script_q, shot_path, ui_texts=ui_texts)
+                        r = agent._review_one(script_q, shot_path, ui_texts=ui_texts, detected=detected)
                         review_result = {
                             "stem": "✅" if r.stem_check.passed else "❌",
                             "content": "✅" if r.content_check.passed else "❌",
@@ -1885,12 +1895,13 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
 
                         # ====== 发送每题结果到后端 ======
                         qid = f"{version_label}-U{unit}-Q{cur:02d}"
+                        det_type = (detected.full_type if detected and detected.full_type else script_q.type_2)
                         record_q_result(
                             qid,
                             idx=cur,
                             total=total_q,
-                            question_type=script_q.type_2,
-                            stem=script_q.stem[:40] + "..." if len(script_q.stem) > 40 else script_q.stem,
+                            question_type=det_type,
+                            stem=(detected.stem if detected and detected.stem else script_q.stem)[:40] + "..." if len((detected.stem if detected and detected.stem else script_q.stem)) > 40 else (detected.stem if detected and detected.stem else script_q.stem),
                             recording=script_q.recording,
                             script_answer=script_q.answer,
                             ai_stem=r.stem_check.passed,
@@ -2136,6 +2147,17 @@ def run_quick_inspect_task(docx_file: str = "", unit: int = 0):
             update_progress(idx, total_q or 40, f"Q{idx}")
             q_count += 1
 
+            # ★ 实时题型识别（从 UI 判断当前是什么题）
+            detected = None
+            try:
+                from src.type_detector import TypeDetector
+                q_els = adb.dump_ui(retries=2)
+                detected = TypeDetector(verbose=False).detect(q_els)
+                if detected and detected.type_1 != "未知":
+                    log_msg(f"  🔍 实时题型: {detected.describe()} (conf={detected.confidence:.0%})", "info")
+            except Exception:
+                detected = None
+
             # ====== AI 六维审查 (若有脚本) ======
             ai = {
                 "ai_stem": None, "ai_content": None, "ai_image": None,
@@ -2143,7 +2165,7 @@ def run_quick_inspect_task(docx_file: str = "", unit: int = 0):
                 "overall_passed": None, "overall_score": None,
                 "stem_reason": "", "content_reason": "", "image_reason": "",
                 "answer_reason": "", "audio_reason": "", "post_error_reason": "",
-                "question_type": "快速检查",
+                "question_type": detected.full_type if detected and detected.full_type else "快速检查",
                 "script_answer": "", "stem": "",
             }
             if agent:
@@ -2153,7 +2175,7 @@ def run_quick_inspect_task(docx_file: str = "", unit: int = 0):
                     matching = [q for q in agent.script_questions if q.global_idx == idx]
                     if matching:
                         script_q = matching[0]
-                        r = agent._review_one(script_q, shot_path)
+                        r = agent._review_one(script_q, shot_path, detected=detected)
                         ai = {
                             "ai_stem": r.stem_check.passed,
                             "ai_content": r.content_check.passed,
@@ -2169,9 +2191,9 @@ def run_quick_inspect_task(docx_file: str = "", unit: int = 0):
                             "answer_reason": r.answer_check.details[0][:100] if r.answer_check.details else "",
                             "audio_reason": r.audio_check.details[0][:100] if r.audio_check and r.audio_check.details else "",
                             "post_error_reason": r.post_error_check.details[0][:100] if r.post_error_check and r.post_error_check.details else "",
-                            "question_type": script_q.type_2 or "快速检查",
+                            "question_type": (detected.full_type if detected and detected.full_type else (script_q.type_2 or "快速检查")),
                             "script_answer": script_q.answer or "",
-                            "stem": script_q.stem[:60] if script_q.stem else "",
+                            "stem": (detected.stem if detected and detected.stem else script_q.stem)[:60] if (detected.stem if detected and detected.stem else script_q.stem) else "",
                         }
                         log_msg(f"  AI: 题干{ai['ai_stem']} 内容{ai['ai_content']} 配图{ai['ai_image']} 作答{ai['ai_answer']} 音频{ai['ai_audio']} 答错后{ai['ai_post_error']} 得分{ai['overall_score']}")
                     else:

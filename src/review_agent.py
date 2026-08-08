@@ -68,13 +68,15 @@ class CheckResult:
     """单次检查结果"""
     passed: bool = False
     score: float = 0.0                # 0~1
+    confidence: int = 0               # ★ 置信度 0-100 (0=AI无法判断, 100=非常确定)
     details: list = field(default_factory=list)
     evidence: list = field(default_factory=list)  # ★ 结构化证据链(Evidence dict)
     error: str = ""
-    method: str = ""                   # "diff"(精确比对) / "llm"(AI判断) / "skip"
-    
+    method: str = ""                   # "diff"(精确比对) / "llm"(AI判断) / "skip" / "uncertain"
+
     def to_dict(self):
-        return {"passed": self.passed, "score": self.score, 
+        return {"passed": self.passed, "score": self.score,
+                "confidence": self.confidence,
                 "details": self.details[:5], "error": self.error[:80],
                 "evidence": self.evidence[:5], "method": self.method}
 
@@ -229,7 +231,9 @@ class ReviewAgent:
 
     def _review_one(self, q: YingYuBaoQuestion, screenshot: str,
                     post_error_shot: str = "",
-                    is_first_question: bool = False) -> QuestionReview:
+                    is_first_question: bool = False,
+                    ui_texts: list = None,
+                    detected: object = None) -> QuestionReview:
         """审查一道题 (六维 + 知识库)
 
         Args:
@@ -237,24 +241,45 @@ class ReviewAgent:
             screenshot: 题目截图路径
             post_error_shot: 答错后结果页截图（仅首题有）
             is_first_question: 是否为本模块首题（触发答错后检查）
+            ui_texts: 手机屏幕文字列表（供文字题走文本模型加速）
+            detected: TypeDetector 实时识别的题型 (DetectedQuestion)，优先于脚本题型
         """
+        # ★ 实时题型优先：手机页面实际识别出的题型 > 脚本题型
+        qtype = q.type_2 or ""
+        is_audio_q = ("听音" in qtype or "音频" in qtype)
+        is_image_q = ("图片" in qtype or "看图" in qtype)
+        _orig_type2 = q.type_2  # 备份，_review_batch/_check_image 读 q.type_2
+        if detected is not None:
+            dq_type1 = getattr(detected, "type_1", "") or ""
+            dq_type2 = getattr(detected, "type_2", "") or ""
+            if dq_type1 and dq_type1 != "未知":
+                qtype = f"{dq_type1}-{dq_type2}" if dq_type2 else dq_type1
+                is_audio_q = bool(getattr(detected, "is_audio", False))
+                is_image_q = bool(getattr(detected, "is_image", False))
+                # 让下游 _review_batch/_check_image 用实时题型判断图片题
+                q.type_2 = qtype
+            # 实时识别的题干/选项可补充脚本缺失信息
+            det_stem = getattr(detected, "stem", "") or ""
+            if det_stem and not (q.stem or "").strip():
+                q.stem = det_stem
+            det_opts = getattr(detected, "options", None)
+            if det_opts and not q.options:
+                q.options = det_opts
+
         r = QuestionReview(
             idx=q.global_idx,
-            question_type=q.type_2,
+            question_type=qtype,
             script_answer=q.answer,
             screenshot=screenshot,
             timestamp=datetime.now().isoformat(),
         )
 
         if not screenshot or not Path(screenshot).exists():
-            r.stem_check.error = "无截图"
-            r.content_check.error = "无截图"
-            r.image_check.error = "无截图"
-            r.answer_check.error = "无截图"
-            r.audio_check.error = "无截图"
-            r.post_error_check.error = "无截图"
-            r.overall_passed = False
-            return r
+            # ★ 纯文字审查模式（不连手机 / 无截图）：只检查文字可查的维度，
+            #   依赖截图的维度（配图/音频/答错后）标记 skip，而不是全判 0 分
+            rr = self._review_text_only(r, q)
+            q.type_2 = _orig_type2
+            return rr
 
         # ---- 批量审查 (文字题走文本模型, 配图题走视觉模型) ----
         self._review_batch(q, screenshot, r, ui_texts)
@@ -284,6 +309,135 @@ class ReviewAgent:
         ]
         r.overall_score = sum(scores) / len(scores) if scores else 0.0
         r.overall_passed = r.overall_score >= 0.7
+
+        q.type_2 = _orig_type2  # 恢复脚本题型，避免污染
+        return r
+
+    # ============================================================
+    # 纯文字审查（不连手机 / 无截图）：对照脚本文字检查
+    # ============================================================
+    def _review_text_only(self, r: QuestionReview, q) -> QuestionReview:
+        """
+        无截图时的文字审查模式：
+        - 题干检查：题干非空、长度合理
+        - 内容检查：选项是否齐全（选择题应有 ≥2 个选项）
+        - 作答检查：答案非空、格式合理（A/B/C/D 或文本）
+        - 知识库检查：题目词汇是否在教材知识范围内（不依赖截图）
+        - 配图/音频/答错后：标记 skip（依赖截图，未检测）
+        """
+        import re as _re
+        qtype = q.type_2 or ""
+        # 听音/图片类题型：题干与选项内容在音频/图片中，脚本文字里没有，属正常
+        is_audio_q = ("听音" in qtype or "音频" in qtype)
+        is_image_q = ("图片" in qtype or "看图" in qtype)
+
+        # (1) 题干检查
+        stem_txt = (q.stem or "").strip()
+        if is_audio_q or is_image_q:
+            r.stem_check.passed = False
+            r.stem_check.score = 0.0
+            r.stem_check.method = "skip"
+            r.stem_check.error = "听音/图片题：题干内容在音频或图片中"
+            r.stem_check.details.append("纯文字模式无法核对音频/图片内容（需连手机截图）")
+        elif not stem_txt:
+            r.stem_check.passed = False
+            r.stem_check.score = 0.0
+            r.stem_check.error = "题干为空（脚本中该题没有题干文字）"
+            r.stem_check.details.append("纯文字检查: 题干为空")
+        elif len(stem_txt) < 10:
+            r.stem_check.passed = False
+            r.stem_check.score = 0.3
+            r.stem_check.error = "题干过短"
+            r.stem_check.details.append(f"纯文字检查: 题干仅 {len(stem_txt)} 字，疑似不完整")
+        else:
+            r.stem_check.passed = True
+            r.stem_check.score = 1.0
+            r.stem_check.method = "text"
+            r.stem_check.details.append(f"纯文字检查: 题干完整（{len(stem_txt)} 字）")
+
+        # (2) 内容检查：选项完整性（听音/图片题选项在图中，跳过）
+        opts = q.options or []
+        opt_clean = [o for o in opts if o and str(o).strip()]
+        if is_image_q and len(opt_clean) < 2:
+            r.content_check.passed = False
+            r.content_check.score = 0.0
+            r.content_check.method = "skip"
+            r.content_check.error = "图片选择题：选项为图片，纯文字无法核对"
+            r.content_check.details.append("纯文字模式无法核对图片选项（需连手机截图）")
+        elif len(opt_clean) >= 2:
+            r.content_check.passed = True
+            r.content_check.score = 1.0
+            r.content_check.method = "text"
+            r.content_check.details.append(f"纯文字检查: 选项齐全（{len(opt_clean)} 个）")
+        elif len(opt_clean) == 1:
+            r.content_check.passed = False
+            r.content_check.score = 0.3
+            r.content_check.error = "选项不完整"
+            r.content_check.details.append("纯文字检查: 仅有 1 个选项")
+        else:
+            r.content_check.passed = False
+            r.content_check.score = 0.0
+            r.content_check.error = "无选项"
+            r.content_check.details.append("纯文字检查: 题目无选项（听音/图片题需连手机截图核对）")
+
+        # (3) 作答检查：答案非空 + 格式
+        ans = (q.answer or "").strip()
+        if not ans:
+            r.answer_check.passed = False
+            r.answer_check.score = 0.0
+            r.answer_check.error = "答案为空"
+            r.answer_check.details.append("纯文字检查: 脚本未给出答案")
+        elif len(opt_clean) >= 2 and ans not in "ABCDabcd"[:len(opt_clean)]:
+            r.answer_check.passed = False
+            r.answer_check.score = 0.3
+            r.answer_check.error = "答案超出选项范围"
+            r.answer_check.details.append(f"纯文字检查: 答案 {ans!r} 不在选项 A-{chr(64+len(opt_clean))} 范围内")
+        else:
+            r.answer_check.passed = True
+            r.answer_check.score = 1.0
+            r.answer_check.method = "text"
+            r.answer_check.details.append(f"纯文字检查: 答案 {ans!r} 有效")
+
+        # (4) 知识库检查（不依赖截图）
+        r.knowledge_check = self._verify_knowledge(q)
+        if r.knowledge_check:
+            if r.knowledge_check.get("unknown"):
+                r.knowledge_check["_detail"] = f"存在未收录词汇: {r.knowledge_check['unknown'][:5]}"
+            else:
+                r.knowledge_check["_detail"] = f"词汇均在知识库范围内（命中 {len(r.knowledge_check.get('matched', []))} 个）"
+
+        # (5)(6)(7) 依赖截图维度 → skip
+        for cr, name in ((r.image_check, "配图"), (r.audio_check, "音频"),
+                         (r.post_error_check, "答错后")):
+            cr.passed = False
+            cr.score = 0.0
+            cr.method = "skip"
+            cr.error = f"{name}检查需手机截图（纯文字模式跳过）"
+            cr.details.append(f"纯文字模式: {name}未检测（需连手机截图）")
+
+        # ---- 综合评分：只统计 文字可查的维度 ----
+        # 听音/图片题：题干/选项内容在音频/图中（skip 不计分），只按答案+知识库评分
+        if is_audio_q or is_image_q:
+            checked_scores = [r.answer_check.score]
+            if r.knowledge_check and r.knowledge_check.get("in_knowledge") is not None:
+                checked_scores.append(1.0 if r.knowledge_check.get("in_knowledge") else 0.4)
+            r.overall_score = sum(checked_scores) / len(checked_scores) if checked_scores else 0.0
+            # 答案有效 + 词汇在知识库内 → 通过；答案无效 → 不通过
+            r.overall_passed = r.answer_check.passed and r.overall_score >= 0.7
+        else:
+            checked_scores = [
+                r.stem_check.score,
+                r.content_check.score,
+                r.answer_check.score,
+            ]
+            if r.knowledge_check and r.knowledge_check.get("in_knowledge") is not None:
+                checked_scores.append(1.0 if r.knowledge_check.get("in_knowledge") else 0.4)
+            r.overall_score = sum(checked_scores) / len(checked_scores) if checked_scores else 0.0
+            # 文字题：题干+选项+答案 都通过才算过
+            r.overall_passed = (
+                r.stem_check.passed and r.content_check.passed and r.answer_check.passed
+                and r.overall_score >= 0.7
+            )
 
         return r
 
@@ -464,16 +618,62 @@ class ReviewAgent:
     # 重写: 四维检查 (统一角色 + 深度融合知识库)
     # ============================================================
 
-    def _judge_result(self, a: str) -> bool:
-        """智能判断AI回答是否为通过"""
+    def _judge_result(self, a: str) -> Optional[bool]:
+        """
+        智能判断AI回答是否为通过。
+
+        Returns:
+            True   — 明确判定为通过
+            False  — 明确判定为不通过
+            None   — AI返回无法解析的判定（需人工复核）
+        """
         a = a.strip()
+        if not a:
+            return None  # ★ 空白返回 → 不确定
         if '不通过' in a:
             return False
         if '通过' in a or '匹配' in a or '一致' in a or '正确' in a:
             return True
         if '无' in a and ('错误' in a or '问题' in a or '异常' in a):
             return True
-        return True
+        # ★ 无法解析 → 返回 None（不默认为通过！）
+        return None
+
+    def _apply_verdict(self, check: CheckResult, ai_response: str, reason: str = ""):
+        """
+        统一应用AI审查判定结果到 CheckResult。
+
+        解析格式: [通过/不通过 | 置信度:N] | 理由
+
+        处理三种情况：
+        - 明确通过   → passed=True,  score=1.0,  提取置信度
+        - 明确不通过 → passed=False, score=0.5,  提取置信度
+        - 无法解析   → passed=False, score=0.3,  标记"需人工复核"
+        """
+        import re as _re
+
+        passed = self._judge_result(ai_response)
+        # ★ 尝试提取置信度: [通过 | 置信度:85] 或 [通过/不通过]
+        conf_match = _re.search(r'(?:置信度|confidence)[:\s]*(\d{1,3})', ai_response, _re.IGNORECASE)
+        confidence = min(int(conf_match.group(1)), 100) if conf_match else (100 if passed else 50)
+
+        if passed is None:
+            check.passed = False
+            check.score = 0.3
+            check.confidence = 0
+            check.method = "uncertain"
+            check.error = "AI判定无法解析"
+            snippet = ai_response[:80]
+            check.details.append(f"⚠ 需人工复核 | 无法解析: '{snippet}'")
+            if reason:
+                check.details.append(f"  AI理由: {reason[:120]}")
+        else:
+            check.passed = passed
+            check.score = 1.0 if passed else 0.5
+            check.confidence = confidence
+            check.method = "llm"
+            detail = f"{ai_response} | {reason}" if reason else ai_response[:150]
+            check.details.append(detail)
 
     def _review_batch(self, q, shot, r, ui_texts=None):
         """一次LLM调用完成四维审查
@@ -571,11 +771,11 @@ class ReviewAgent:
             else:
                 prompt_text += f'截图已用UI解析提取出以下文字：\n{screen_text[:3000]}\n\n请基于以上屏幕文字和脚本信息，完成四个维度的检查。\n'
             prompt_text += (
-                f'回答格式(严格按此格式,一行一个):\n'
-                f'【题干】通过|理由\n'
-                f'【内容】通过|理由\n'
-                + (f'【配图】通过|理由\n' if is_img else '【配图】⏭ 非配图题\n') +
-                f'【作答】通过|理由'
+                f'回答格式(严格按此格式,一行一个，置信度0-100=你对判断的把握程度):\n'
+                f'【题干】通过 | 置信度:95 | 理由\n'
+                f'【内容】通过 | 置信度:90 | 理由\n'
+                + (f'【配图】通过 | 置信度:85 | 理由\n' if is_img else '【配图】⏭ 非配图题\n') +
+                f'【作答】通过 | 置信度:80 | 理由'
             )
             prompt = self.trainer.build_enhanced_prompt(prompt_text, dim_filter='all')
             answer = self.llm.ask(prompt, image_path=shot if use_vision else None)
@@ -588,10 +788,7 @@ class ReviewAgent:
                 if m:
                     verdict = m.group(1).strip()
                     reason = m.group(2).strip() if m.group(2) else ''
-                    passed = self._judge_result(verdict)
-                    check.passed = passed
-                    check.score = 1.0 if passed else 0.5
-                    check.details.append(f'{verdict} | {reason}' if reason else verdict[:100])
+                    self._apply_verdict(check, verdict, reason)
                 elif dim_name == '配图' and not is_img:
                     check.passed = True; check.score = 1.0; check.details.append('⏭ 非配图题')
                 else:
@@ -616,15 +813,11 @@ class ReviewAgent:
                 f"1. 题目文字是否完整、无截断、无模糊?\n"
                 f"2. 是否有错别字或拼写错误?\n"
                 f"3. 文字内容是否与脚本一致?\n\n"
-                f"回答格式: [通过/不通过] | 理由",
+                f"回答格式: [通过/不通过 | 置信度:0-100] | 理由",
                 dim_filter="stem"
             )
             answer = self.llm.ask(prompt, image_path=shot)
-            # 评分: 明确"通过"且没"不通过"=1.0; 包含"通过"=0.7; 非"不通过"=0.5
-            passed = self._judge_result(answer)
-            result.passed = passed
-            result.score = 1.0 if passed else 0.5
-            result.details.append(answer[:150])
+            self._apply_verdict(result, answer)
         except Exception as e:
             result.error = str(e)
         return result
@@ -648,14 +841,11 @@ class ReviewAgent:
                 f"2. 正确答案是否合理? (录音内容是否确实对应正确答案)\n"
                 f"3. 涉及的词汇/句型是否在该年级教材范围内?\n"
                 f"4. 如果有超出教材范围的词汇, 是否合理?(合理扩展可接受)\n\n"
-                f"回答格式: [通过/不通过] | 理由",
+                f"回答格式: [通过/不通过 | 置信度:0-100] | 理由",
                 dim_filter="content"
             )
             answer = self.llm.ask(prompt, image_path=shot)
-            passed = self._judge_result(answer)
-            result.passed = passed
-            result.score = 1.0 if passed else 0.5
-            result.details.append(answer[:150])
+            self._apply_verdict(result, answer)
         except Exception as e:
             result.error = str(e)
         return result
@@ -703,7 +893,7 @@ class ReviewAgent:
                     f"2. 实际截图是否清晰完整?(无截断/模糊/变形)\n"
                     f"3. 实际截图是否有逻辑问题?(如参考图是勺子, 但APP显示叉子)\n"
                     f"4. 图片内容是否与录音 '{q.recording}' 匹配?\n\n"
-                    f"回答格式: [通过/不通过] | 理由"
+                    f"回答格式: [通过/不通过 | 置信度:0-100] | 理由"
                 )
                 all_images = ref_images + [shot]
             else:
@@ -714,19 +904,15 @@ class ReviewAgent:
                     f"3. 图片中的物品/场景是否适合该年级学生的认知水平?\n"
                     f"4. 图片有无逻辑问题?(如: 录音说'spoon'但图片是叉子)\n"
                     f"5. 如果是干扰项图片, 是否合理?(不会让学生混淆)\n\n"
-                    f"回答格式: [通过/不通过] | 理由"
+                    f"回答格式: [通过/不通过 | 置信度:0-100] | 理由"
                 )
                 all_images = [shot]
 
             prompt = self.trainer.build_enhanced_prompt(prompt_text, dim_filter="image")
             answer = self.llm.ask(prompt, image_paths=all_images)
-            passed = self._judge_result(answer)
-            result.passed = passed
-            result.score = 1.0 if passed else 0.5
-            detail = answer[:150]
+            self._apply_verdict(result, answer)
             if ref_images:
-                detail += f" [参考图: {', '.join(Path(p).stem for p in ref_images[:2])}]"
-            result.details.append(detail)
+                result.details.append(f" [参考图: {', '.join(Path(p).stem for p in ref_images[:2])}]")
         except Exception as e:
             result.error = str(e)
         return result
@@ -749,14 +935,11 @@ class ReviewAgent:
                 f"   - 拖拽/连线类题型: 检查可拖拽元素是否存在\n"
                 f"3. 交互方式是否符合该题型的预期?(如听音选图应有图片可点, 听音选词应有文字选项)\n"
                 f"4. 对于听音题型, 录音播放按钮是否可见?\n\n"
-                f"回答格式: [通过/不通过] | 理由",
+                f"回答格式: [通过/不通过 | 置信度:0-100] | 理由",
                 dim_filter="answer"
             )
             answer = self.llm.ask(prompt, image_path=shot)
-            passed = self._judge_result(answer)
-            result.passed = passed
-            result.score = 1.0 if passed else 0.5
-            result.details.append(answer[:150])
+            self._apply_verdict(result, answer)
         except Exception as e:
             result.error = str(e)
         return result
@@ -798,7 +981,7 @@ class ReviewAgent:
                 f"2. 音频控件是否被遮挡或截断？\n"
                 f"3. 播放按钮位置是否合理（通常靠近题目顶部）？\n"
                 f"4. 是否有任何异常（如灰色不可点击状态）？\n\n"
-                f"回答格式: [通过/不通过] | 理由",
+                f"回答格式: [通过/不通过 | 置信度:0-100] | 理由",
                 dim_filter="audio"
             )
             answer = self.llm.ask(prompt, image_path=shot)
