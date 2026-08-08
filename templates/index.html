@@ -486,28 +486,17 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
 const $=id=>document.getElementById(id)
 let logLast=0,_devListTs=0,_lastLogs=0
 
-<<<<<<< HEAD
 /* ========== 使用指南 ========== */
 function openGuide(){document.getElementById('guideMask').classList.add('open')}
 function closeGuide(){document.getElementById('guideMask').classList.remove('open')}
-=======
-// ====== 初始化 ======
-async function init(){
-  pollStatus()
-  loadUploadList()
-  startShotPolling()
-}
-init()
->>>>>>> origin/bunana
 
 /* ========== 设备轮询 ========== */
 async function pollStatus(){
-<<<<<<< HEAD
-=======
   while(true){
     try{
       const s=await(await fetch('/api/status')).json()
       const on=s.device_connected
+      refreshDevSelect(s.devices||[], s.device_serial)
       $('devStatus').textContent=on?'已连接':'离线'
       $('devStatus').style.color=on?'#22c55e':'#ef4444'
       $('devDot').className='dot '+(on?'on':'off')
@@ -613,41 +602,6 @@ async function loadUploadList(){
     : '<span>暂无上传 — 可跳过，AI将自动生成答案</span>'
 }
 
-// ====== 自然语言解析 ======
-async function parseNL(){
-  const text=$('nlInput').value.trim()
-  if(!text){$('nlResult').textContent='请先输入描述';return}
-  $('nlResult').textContent='解析中...'
->>>>>>> origin/bunana
-  try{
-    const s=await(await fetch('/api/status')).json()
-    const on=s.device_connected
-    $('devDot').className='w-2.5 h-2.5 rounded-full '+(on?'bg-green-400':'bg-amber-400')
-    $('devStatus').textContent=on?(s.device_serial||'已连接'):'离线'
-    $('devMeta').textContent=(s.model||'')+(s.current_version?' · v'+s.current_version:'')
-    const now=Date.now()
-    if(now-_devListTs>8000){
-      _devListTs=now
-      const dl=await(await fetch('/api/devices')).json()
-      refreshDevSelect(dl.devices||[], s.device_serial||'')
-    }
-    const ts=s.task_status||{}
-    updateStopBtn(ts.running)
-    const busy=!!ts.running
-    $('runBtn').disabled=busy; $('quickBtn').disabled=busy; $('stopBtn2').disabled=!busy
-    if(ts.running){
-      $('kitchenPulse').className='w-2.5 h-2.5 rounded-full bg-red-500'
-      $('kitchenMsg').textContent='检测中… '+(ts.current_task||'')
-    }else if(!ts.current_task){
-      $('kitchenPulse').className='w-2.5 h-2.5 rounded-full bg-[#9aa5a0]'
-      $('kitchenMsg').textContent='就绪，等待开始…'
-      $('kitchenSub').textContent=''
-    }
-    $('taskBadge').textContent=ts.current_task||'空闲'
-  }catch(e){}
-  setTimeout(pollStatus,2000)
-}
-
 function refreshDevSelect(devs,cur){
   const sel=$('devSelect'),focus=cur||sel.value
   sel.innerHTML='<option value="">选择设备…</option>'+
@@ -708,7 +662,6 @@ function clearLog(){
 }
 async function pollLog(){
   try{
-<<<<<<< HEAD
     const d=await(await fetch('/api/log')).json()
     const arr = Array.isArray(d) ? d : (d.logs||[])
     const logs=arr.slice(logLast)
@@ -805,21 +758,11 @@ function updateStopBtn(running){
 }
 
 function pollCookResult(modules){
-=======
-    const r=await fetch('/api/modules/run',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({version,grade,modules,unit_from:$('planUnitFrom')?parseInt($('planUnitFrom').value):0,unit_to:$('planUnitTo')?parseInt($('planUnitTo').value):0})})
-    const j=await r.json()
-    if(j.error){alert(j.error);return}
-    addLog('info',`多模块检测已启动: ${version} ${grade} → ${modules.join('、')}`)
-    // 启动结果轮询
-    pollModulesResult(modules)
-  }catch(e){alert('启动失败: '+e.message)}
-  finally{btn.disabled=false; btn.textContent='开始检测'}
+  pollModulesResult(modules)
 }
 
 // ====== 多模块检测：结果轮询与汇总展示 ======
 async function pollModulesResult(modules){
->>>>>>> origin/bunana
   let tried=0
   const timer=setInterval(async()=>{
     tried++
@@ -862,7 +805,6 @@ function renderServe(data){
   addLog('success','全部完成！'+names.length+'个模块，'+okN+'个成功，累计'+totalQ+'题')
 }
 
-<<<<<<< HEAD
 /* ========== 版本×年级配置表 ========== */
 let GRADE_TABLE=null, gradesLoaded=false
 async function loadGradeTable(){
@@ -1264,25 +1206,6 @@ loadGradeTable()
 loadUL()
 loadKB()
 loadVersions()
-=======
-setInterval(pollLog,2000)
-
-async function runReview(){
-  const docx=$('reviewDocx')?$('reviewDocx').value:'';
-  const unit=$('reviewUnit')?$('reviewUnit').value:'';
-  if(!docx||docx===''||docx==='— 尚未上传 —'){alert('请先选择脚本文件');return}
-  $('reviewResult').innerHTML='<span style="color:#64748b">🤖 审查中...（AI逐题审查，请稍候）</span>';
-  try{
-    const r=await(await fetch('/api/review/run',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({docx:docx,unit:unit?parseInt(unit):0})})).json();
-    if(r.error){$('reviewResult').innerHTML='<span style="color:#ef4444">❌ '+r.error+'</span>';return}
-    let total=0,passed=0;
-    if(r.results&&Array.isArray(r.results)){total=r.results.length;passed=r.results.filter(x=>x.overall_passed).length;}
-    else{total=r.total||0;passed=r.passed!==undefined?r.passed:0;}
-    $('reviewResult').innerHTML='<span style="color:#16a34a">✅ 审查完成: 共'+total+'题, 通过'+passed+'题</span>';
-    if(total>0&&typeof loadReviewResults==='function')loadReviewResults();
-  }catch(e){$('reviewResult').innerHTML='<span style="color:#ef4444">❌ 审查失败: '+e.message+'</span>'}
-}
 
 // ====== 截图实时预览轮询 (每2秒) ======
 let _shotTimer=null
@@ -1302,7 +1225,7 @@ function startShotPolling(){
   _shotTimer=setInterval(pollShot,2000)
   pollShot()
 }
->>>>>>> origin/bunana
+startShotPolling()
 </script>
 </body>
 </html>
