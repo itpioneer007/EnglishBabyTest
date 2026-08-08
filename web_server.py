@@ -13,6 +13,12 @@ Flask 后端，提供 REST API 和前端页面
 
 import os
 import sys
+import io
+
+# Windows 控制台默认 GBK 无法输出 emoji(✅❌⚠ 等)，全局切换为 UTF-8
+if sys.platform == "win32":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 import json
 import time
 import threading
