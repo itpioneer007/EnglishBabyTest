@@ -85,13 +85,13 @@ def _on_batch_progress(status: dict):
 
 
 def _on_batch_complete(result: dict):
-    """完成回调：自动导出错误到输出文件夹"""
+    """完成回调：自动收集错误 + 生成报告 + 导出"""
     global _BATCH_STATUS
     _BATCH_STATUS["running"] = False
     _BATCH_STATUS["paused"] = False
     _BATCH_STATUS["current"] = None
 
-    # 自动调用 C 的 ErrorCollector
+    # 1. ErrorCollector: 收集错误到输出目录
     try:
         from src.error_collector import ErrorCollector
         from pathlib import Path
@@ -100,20 +100,48 @@ def _on_batch_complete(result: dict):
         state_path = Path(__file__).parent.parent / "data" / "inspection_state.json"
         if state_path.exists():
             with open(state_path, "r", encoding="utf-8") as f:
-                questions = json.load(f).get("questions", {})
+                state = json.load(f)
+            questions = state.get("questions", [])
 
             if questions:
                 plan = _BATCH_STATUS.get("plan", {})
                 version = plan.get("version", "未知版本")
-                # 使用最后一个模块的信息
                 last_completed = _BATCH_STATUS.get("completed", [])
                 if last_completed:
                     last = last_completed[-1]
                     coll = ErrorCollector()
                     coll.collect(questions, version, last.get("unit", 0), last.get("stage", ""))
-                    print(f"[BatchRoutes] 自动导出完成: {coll.current_dir}")
+                    print(f"[BatchRoutes] 错误收集完成: {coll.current_dir}")
     except Exception as e:
-        print(f"[BatchRoutes] 自动导出失败: {e}")
+        print(f"[BatchRoutes] 错误收集失败: {e}")
+
+    # 2. ReportExporter: 生成 HTML + CSV + ZIP 报告
+    try:
+        from src.report_exporter import ReportExporter
+        from pathlib import Path
+        import json
+
+        state_path = Path(__file__).parent.parent / "data" / "inspection_state.json"
+        if state_path.exists():
+            with open(state_path, "r", encoding="utf-8") as f:
+                state = json.load(f)
+            questions = state.get("questions", [])
+
+            if questions:
+                plan = _BATCH_STATUS.get("plan", {})
+                last_completed = _BATCH_STATUS.get("completed", [])
+                metadata = {
+                    "version": plan.get("version", ""),
+                    "unit": last_completed[-1].get("unit", 1) if last_completed else 1,
+                    "stage": last_completed[-1].get("stage", "") if last_completed else "",
+                }
+
+                exporter = ReportExporter()
+                results = exporter.export_all(questions, metadata=metadata)
+                _BATCH_STATUS["export_results"] = results
+                print(f"[BatchRoutes] 报告生成完成: {results.get('output_dir', '')}")
+    except Exception as e:
+        print(f"[BatchRoutes] 报告生成失败: {e}")
 
 
 def register(app):
