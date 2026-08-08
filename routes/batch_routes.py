@@ -311,3 +311,117 @@ def register(app):
         """纯遍历专用页面 — B同学"""
         from flask import render_template
         return render_template("runner.html")
+
+    # ============================================================
+    # ★ P1: 审查一致性验证
+    # ============================================================
+
+    _consistency_status = {
+        "running": False, "results": None, "progress": "", "error": ""
+    }
+
+    @app.route("/api/consistency/check", methods=["POST"])
+    def api_consistency_check():
+        """
+        对已审查的题目执行一致性验证
+        POST: {"question_ids": ["q001","q002"], "runs": 3}
+        或 {"inspection_file": "data/inspection_state.json", "runs": 3, "limit": 10}
+        """
+        global _consistency_status
+        data = request.get_json() or {}
+        runs = data.get("runs", 3)
+
+        if _consistency_status["running"]:
+            return jsonify({"error": "一致性检查已在运行中"}), 409
+
+        _consistency_status = {"running": True, "results": None, "progress": "初始化...", "error": ""}
+
+        import threading
+        def run():
+            global _consistency_status
+            try:
+                from src.review_agent import ReviewAgent
+                from src.consistency_checker import ConsistencyChecker
+
+                agent = ReviewAgent()
+                checker = ConsistencyChecker(agent)
+
+                # 加载题目
+                inspection_file = data.get("inspection_file", "")
+                if inspection_file:
+                    import json as _json
+                    with open(inspection_file, "r", encoding="utf-8") as f:
+                        state = _json.load(f)
+                    questions_dict = {}
+                    shots_dict = {}
+                    limit = data.get("limit", 10)
+                    for qd in state.get("questions", [])[:limit]:
+                        qid = qd["qid"]
+                        from src.parse_yingyubao_docx import YingYuBaoQuestion
+                        q = YingYuBaoQuestion(
+                            idx=qd.get("idx", 0),
+                            stem=qd.get("stem", ""),
+                            type_2=qd.get("question_type", ""),
+                            answer=qd.get("script_answer", ""),
+                        )
+                        questions_dict[qid] = q
+                        shots_dict[qid] = qd.get("screenshot", "")
+                else:
+                    # 手动指定题目ID
+                    qids = data.get("question_ids", [])
+                    questions_dict = {
+                        q: YingYuBaoQuestion(idx=int(q[1:]) if q.startswith("q") else i)
+                        for i, q in enumerate(qids)
+                    }
+                    shots_dict = {}
+
+                if not questions_dict:
+                    _consistency_status["error"] = "无题目可检查"
+                    _consistency_status["running"] = False
+                    return
+
+                _consistency_status["progress"] = f"正在对 {len(questions_dict)} 道题进行 ×{runs} 次一致性检查..."
+                reports = checker.check_batch(questions_dict, shots_dict, runs=runs)
+                summary = checker.summary()
+
+                import json as _json
+                out = Path(__file__).parent.parent / "outputs" / "consistency_report.json"
+                out.parent.mkdir(parents=True, exist_ok=True)
+                with open(out, "w", encoding="utf-8") as f:
+                    _json.dump(summary, f, ensure_ascii=False, indent=2)
+
+                _consistency_status["results"] = summary
+                _consistency_status["progress"] = (
+                    f"完成: {summary['total_questions']}题, "
+                    f"稳定{summary['stable_questions']}题, "
+                    f"不稳定{summary['unstable_questions']}题"
+                )
+            except Exception as e:
+                _consistency_status["error"] = str(e)
+            finally:
+                _consistency_status["running"] = False
+
+        t = threading.Thread(target=run, daemon=True)
+        t.start()
+        return jsonify({"success": True, "message": "一致性检查已启动"})
+
+    @app.route("/api/consistency/status")
+    def api_consistency_status():
+        """查询一致性检查进度"""
+        return jsonify(_consistency_status)
+
+    @app.route("/api/consistency/report")
+    def api_consistency_report():
+        """获取一致性检查报告"""
+        p = Path(__file__).parent.parent / "outputs" / "consistency_report.json"
+        if p.exists():
+            import json as _json
+            with open(p, "r", encoding="utf-8") as f:
+                return jsonify(_json.load(f))
+        return jsonify(_consistency_status.get("results") or {"error": "暂无报告"})
+
+    @app.route("/consistency")
+    def page_consistency():
+        """一致性验证页面"""
+        from flask import render_template
+        return render_template("consistency.html")

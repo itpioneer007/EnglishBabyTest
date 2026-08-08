@@ -675,6 +675,10 @@ class ReviewAgent:
             detail = f"{ai_response} | {reason}" if reason else ai_response[:150]
             check.details.append(detail)
 
+    def _create_empty_review(self) -> QuestionReview:
+        """创建一个空的审查结果对象"""
+        return QuestionReview()
+
     def _review_batch(self, q, shot, r, ui_texts=None):
         """一次LLM调用完成四维审查
         文字题(非配图): ★ 优先用精确比对(difflib),只有边缘差异才走LLM; 配图题: 走视觉模型
