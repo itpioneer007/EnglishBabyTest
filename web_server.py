@@ -257,7 +257,12 @@ def log_msg(msg: str, level: str = "info", evidence: list = None):
     if evidence:
         entry["evidence"] = evidence
     task_status["log"].append(entry)
-    print(f"[{entry['time']}] [{level}] {msg}")
+    try:
+        print(f"[{entry['time']}] [{level}] {msg}")
+    except UnicodeEncodeError:
+        # Windows GBK 控制台无法编码 emoji(✅❌ 等)，降级输出
+        safe_msg = msg.encode("gbk", errors="replace").decode("gbk")
+        print(f"[{entry['time']}] [{level}] {safe_msg}")
 
 # 注入共享日志通道：让 scheduler 和模块内部的流程日志也能送到前端
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))

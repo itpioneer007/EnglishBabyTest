@@ -40,4 +40,7 @@ def step_log(msg, level="info", evidence=None):
             _log_callback(msg, level)
     else:
         # 没有注入回调时（命令行直接运行模块），回退到 print
-        print(f"    [{level}] {msg}")
+        try:
+            print(f"    [{level}] {msg}")
+        except UnicodeEncodeError:
+            print(f"    [{level}] {msg.encode('gbk', errors='replace').decode('gbk')}")
