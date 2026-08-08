@@ -1,273 +1,121 @@
-# E英语宝模块检测系统
+# src/ — C 同学：错误溯源与报告导出模块
 
-基于 ADB + uiautomator 的英语宝 APP 自动化检测工具。
-通过 YAML 定义检测流程，自动完成登录、模块导航、内容校验、缺陷上报。
-
-## ✨ 特性
-
-| 特性 | 说明 |
-|------|------|
-| **全自动登录** | 勾协议 → 点登录 → 同意弹窗 → 关广告，一键完成 |
-| **版本切换** | 自动检测所有教材版本，支持动态选择切换 |
-| **模块检测** | 教材精学(4个) + 专项突破(8个)，一键逐个进入截图 |
-| **双模式** | CLI 命令行 + Web 可视化面板，任意选择 |
-| **YAML 流程** | 检测流程用 YAML 定义，可读可改 |
-| **精确坐标** | uiautomator dump 获取像素级坐标，无需肉眼估算 |
-| **适应轮播图** | 直接 tap 坐标绕过轮播图干扰 |
+> 本目录是「英语宝模块检测智能体」项目里 **C 同学** 负责的全部源码。
+> 职责：把 A/B 同学跑完检测后产出的错题数据，转成**红框截图 + 错误文件夹 + 网页/CSV 报告 + 邮件**。
 
 ---
 
-## 🚀 快速开始
+## 一、本目录有哪些文件
 
-### 环境要求
+| 文件 | 分工 | 干什么 |
+|---|---|---|
+| `trace_engine.py` | **C1 + C2** | 溯源数据引擎（算错因/建议/坐标）+ 用 Pillow 画红框 |
+| `error_collector.py` | **C3** | 遍历所有题，把错题整理成 `errors/{版本}_{单元}/{模块}/{题号}/` 分层文件夹 |
+| `report_exporter.py` | **C4** | 生成网页报告（全貌 + 仅错误）和 CSV 汇总表 |
+| `email_sender.py` | **C5** | 把报告通过邮件发给老师 |
 
-- Python 3.10+
-- ADB（Android Platform Tools，已加入 `PATH`）
-- Android 手机（已开启 USB 调试，通过数据线连接电脑）
+> 另外还有 `routes/`（溯源 API、导出 API 蓝图）属于 C 同学，在上级目录 `英语宝模块检测/routes/`；本目录只放上面 4 个核心引擎。
 
-### 安装
+---
+
+## 二、每个文件怎么用（接口签名）
+
+### 1. `trace_engine.py` —— 单题处理引擎
+```python
+class TraceEngine:
+    def __init__(self, screenshots_dir: str = "screenshots")
+    def generate(self, qid: str, question_data: dict) -> dict   # C1：算一道题的错情
+    def draw_mark(self, screenshot_name: str, checks: list, out_path: str) -> str  # C2：画红框
+```
+- `generate()` 只处理**一道题**（输入该题数据，返回 `checks` 错情列表 + 题干上下文）。
+- 红框坐标：数据里带 `error_box` 就直接用；没有则用占位坐标（见下方「待办」）。
+
+### 2. `error_collector.py` —— 遍历 + 归档
+```python
+class ErrorCollector:
+    def __init__(self, output_root: str = "outputs")
+    def collect(self, questions: dict, version: str, unit) -> dict
+```
+- 收到**全部题**的字典，循环挑出 `overall_passed == False` 的错题。
+- 每道错题：复制原图 → 调 `TraceEngine` 溯源 → 画红框 → 写 `error.json`。
+- 返回 `{"failed": 出错数, "total": 总数, "output_dir": 报告根目录}`。
+- 输出目录带「时分」后缀（如 `U6_20260729_1535`），**每次运行独立文件夹，互不覆盖**。
+
+### 3. `report_exporter.py` —— 报告生成
+```python
+class ReportExporter:
+    def __init__(self, output_root: str = "outputs")
+    def export_html_full(self, questions: dict, metadata: dict) -> str    # 全貌报告 report_full.html
+    def export_html_errors(self, questions: dict, metadata: dict) -> str  # 仅错误报告 report_errors.html
+    def export_csv(self, questions: dict) -> str                          # 汇总表 summary.csv
+```
+- 报告里已加「模块」列（从 qid 第 2 段或数据 `module` 字段读取）。
+
+### 4. `email_sender.py` —— 邮件
+```python
+class EmailSender:
+    def send_report(self, to_email: str, subject: str,
+                    html_body: str = "", attachments: list = None) -> dict
+```
+- 返回 `{"success": True/False, "message": "..."}`。
+- 账号密码从**环境变量**读取（不写死在代码里）。
+
+---
+
+## 三、依赖
 
 ```bash
-cd 英语宝模块检测
-pip install -r requirements.txt
+pip install pillow        # trace_engine / error_collector 用
 ```
+`email_sender.py` 只用 Python 标准库 `smtplib`，无需额外安装。
 
-### 配置
+> ⚠️ 这些文件用 `from src.xxx import ...` 互相引用，所以运行时要保证**项目根目录**（`英语宝模块检测/`）在 Python 路径里。本地测试用根目录的 `run_report.py` 即可。
 
-编辑 `config.yaml`，填入设备序列号和账号：
+---
 
-```yaml
-device:
-  serial: "SKSCIF4T7PFMQS5X"    # adb devices 查看
+## 四、本地运行（测试用）
 
-account:
-  username: "10010005"
-  password: "123456"
-```
-
-### 运行
-
-**方式 A：Web 面板（推荐）**
+在项目根目录执行：
 ```bash
-python web_server.py
-# 浏览器打开 http://localhost:5000
+python run_report.py
 ```
-
-面板上点按钮即可：**自动登录 → 刷新版本列表 → 选版本 → 勾模块 → 开始检测**
-
-**方式 B：命令行**
-```bash
-# 一键登录
-python main.py login
-
-# 运行完整检测流程（版本切换 + 4个模块）
-python -m src.flow_runner flows/version_and_module_test.yaml
-
-# 查看设备
-python main.py devices
-
-# 调试：查看当前页面所有可点击元素
-python main.py dump
-```
+会读取 `data/inspection_state.json`，生成报告到 `outputs/.../`。
 
 ---
 
-## 📁 项目结构
+## 五、重要提醒（上传 GitHub 前必读）
 
+1. **只能改这些文件**：本目录 4 个 `.py` + `routes/` 下两个蓝图。
+   **绝对不能碰** A 同学（`review_agent.py` / `post_error_check.py` / `report_check.py` / `script_generator.py`）和 B 同学（`batch_runner.py` / `progress_tracker.py` / `recovery_handler.py` / `routes/batch_routes.py` / `web_server.py`）的文件。
+2. **红框坐标待接**：`trace_engine._compute_region()` 在数据无 `error_box` 时给占位坐标，需 A/B 把真实坐标写入 `inspection_state.json` 的题目数据里。
+3. **发邮件先配环境变量**：
+   ```bash
+   export EMAIL_USER="你的邮箱@qq.com"
+   export EMAIL_PASSWORD="邮箱授权码"   # QQ/163 用授权码，不是登录密码
+   ```
+4. **`severity` 严重程度**目前硬编码在 `trace_engine.py` 顶部的 `DIMENSIONS` 表里（内容/图片/答案=high，音频/报告=low，题干=medium）。
+5. **`outputs/` 是自动生成的**，已在项目根 `.gitignore` 忽略，不要上传。
+
+---
+
+## 六、输入数据格式（来自 A/B 的 `data/inspection_state.json`）
+
+```json
+{
+  "questions": {
+    "新湘鲁六上-模块A-U6-Q03": {
+      "qid": "新湘鲁六上-模块A-U6-Q03",
+      "question_type": "听音选择词汇",
+      "screenshot": "q03.png",
+      "stem": "选出你听到的单词",
+      "script_answer": "B",
+      "ai_stem": false, "ai_content": false, "ai_image": true, "ai_answer": true,
+      "ai_audio": null, "ai_post_error": null, "ai_report": null,
+      "stem_reason": "[不通过] ...", "content_reason": "...",
+      "overall_passed": false
+    }
+  }
+}
 ```
-英语宝模块检测/                    # ← 根目录
-├── main.py                       # CLI 命令行入口
-├── web_server.py                 # Web 控制面板服务器（Flask）
-├── config.yaml                   # 全局配置（设备/账号）
-├── requirements.txt              # Python 依赖
-├── .gitignore
-├── .vscode/
-│   ├── launch.json               # VS Code 调试配置（F5）
-│   └── settings.json
-│
-├── src/                          # 核心源码
-│   ├── __init__.py
-│   ├── adb_controller.py         # ★ ADB 智能控制器（核心）
-│   ├── flow_runner.py            # YAML 流程执行引擎
-│   └── config_loader.py          # 配置加载器
-│
-├── templates/                    # Web 前端
-│   └── index.html                # Web 控制面板页面
-│
-├── flows/                        # YAML 检测流程定义
-│   ├── login.yaml                # 自动登录流程
-│   ├── close_popup.yaml          # 关闭弹窗流程
-│   └── version_and_module_test.yaml  # 版本切换+模块测试
-│
-├── docs/                         # 项目文档
-│   ├── 实施方案.md               # 原始需求分析与实施方案
-│   ├── 操作日志.md               # 开发过程操作记录
-│   ├── 检测流程规范.md            # 9步流程 + 6项检查标准
-│   ├── 环境搭建指南.md            # ADB/设备/API 搭建步骤
-│   └── 脚本数据格式.md            # 题库数据结构规范
-│
-├── outputs/                      # 运行结果（自动生成）
-│   ├── screenshots/              # 模块截图
-│   └── flow_log_*.json           # 操作日志
-│
-└── assets/
-    └── report_template.html      # HTML 报告模板
-```
-
----
-
-## 🎮 使用说明
-
-### Web 面板操作流程
-
-1. 浏览器打开 **http://localhost:5000**
-2. 确认左上角设备显示 **✅ 已连接**
-3. 点击 **🔑 自动登录**（等待完成）
-4. 点击 **📚 刷新版本列表**（自动检测所有可用版本）
-5. **下拉选择目标版本**
-6. **勾选要检测的模块**（教材精学/专项突破）
-7. 点击 **▶ 开始检测**
-
-面板会实时显示：
-- 📋 执行进度条
-- 📋 运行日志（每步操作）
-- 📸 自动加载最新截图
-
-### 编写新检测流程
-
-在 `flows/` 下新建 `.yaml` 文件：
-
-```yaml
-name: "单词听写检测"
-description: "进入单词听写模块逐题检查"
-steps:
-  - action: tap
-    x: 919
-    y: 2033          # 坐标: 单词听写
-
-  - action: wait
-    seconds: 3
-
-  - action: screenshot
-    name: "word_dictation"
-
-  - action: press_back
-```
-
-### 支持的操作（action）
-
-| action | 说明 | 关键参数 |
-|--------|------|---------|
-| `tap` | 坐标点击（推荐） | `x`, `y` |
-| `click_element` | 智能点击（需 dump） | `text`, `resource_id`, `exact` |
-| `swipe` | 滑动 | `x1,y1,x2,y2,duration` |
-| `scroll_down` / `scroll_up` | 页面滚动 | `distance` |
-| `wait_for_element` | 等待元素出现 | `text`, `timeout` |
-| `wait` | 等待时间 | `seconds` |
-| `screenshot` | 截图 | `name` |
-| `press_back` / `press_home` | 按键 | — |
-| `launch_app` | 启动APP | `package` |
-| `list_clickable` | 列出可点击元素（调试） | — |
-
----
-
-## 🧩 已验证的模块坐标
-
-| 分组 | 模块 | 坐标 |
-|------|------|------|
-| 年级切换器 | 点击打开弹窗 | `(346, 275)` |
-| 年级选择 | 一年级上/下, 二年级上/下, 三年级上/下, 四年级上/下, 五年级上 | 行1: `(180/540/900, 670)` 行2: `(180/540/900, 1172)` 行3: `(180/540/900, 1674)` |
-| 教材精学 | 课本点读(左) / (中) / 巧记单词 / 语音评测 | `(203,1191)` `(540,1191)` `(876,1191)` `(203,1358)` |
-| 专项突破(第一行) | 听课文 / 课文动画 / 基础训练 / 一课一练 | `(161,1792)` `(414,1792)` `(666,1792)` `(919,1792)` |
-| 专项突破(第二行) | 课文配音 / 口语训练 / 复习回顾 / 全脑记词 | `(161,2033)` `(414,2033)` `(666,2033)` `(919,2033)` |
-| 底部导航 | 英语 / 我 | `(108,2233)` `(972,2220)` |
-| 设置图标 | ⚙️ (我页右上) | `(1000,170)` |
-| 关闭广告 | × | `(540,1821)` |
-
----
-
-## 🔄 已知版本列表
-
-从英语宝版本选择页自动检测：
-
-- `湘少版(2024审定)` — 四年级
-- `湘鲁版(2024审定)` — 四年级（默认）
-- `人教版(PEP)(2024审定)` — 四年级 下册
-- `教科版(2024审定)` — 四年级 下册
-- `教科版`
-
----
-
-## 📦 输出文件
-
-每次运行后，结果保存在 `outputs/`：
-
-```
-outputs/
-├── screenshots/
-│   ├── login_success.png          # 登录成功
-│   ├── 01_version_select_page.png # 版本选择页
-│   ├── 02_after_switch_renjiao.png# 切换后人教版
-│   ├── 03_back_to_home.png       # 回到首页
-│   ├── 04_module_kebendianfu.png  # 课本点读模块
-│   ├── 05_module_qiaojidanci.png  # 巧记单词模块
-│   ├── 06_module_tingkewen.png    # 听课文模块
-│   └── ...更多模块
-├── flow_log_*.json                # 操作日志
-└── screenshot_*.png               # Web 面板截图
-```
-
----
-
-## 🛠️ 技术原理
-
-```
-浏览器 / 命令行
-    │
-    ▼
-Web Server / Flow Runner
-    │
-    ▼
-ADB Controller
-    ├── uiautomator dump    ← 获取元素精确坐标
-    ├── adb shell input tap ← 点击操作
-    ├── adb shell swipe     ← 滑动操作
-    └── adb shell screencap ← 截图
-    │
-    ▼
-手机 英语宝APP
-```
-
-**核心优势**：
-- `uiautomator dump` 提供像素级精准坐标
-- ADB 直连手机操作系统，不受电脑桌面状态影响
-- 直接 tap 坐标绕过轮播图/动画 idle state 限制
-
----
-
-## 📚 文档
-
-| 文档 | 内容 |
-|------|------|
-| [实施方案](docs/实施方案.md) | 原始需求分析与四阶段16步实施方案 |
-| [操作日志](docs/操作日志.md) | 开发全过程操作记录（含踩坑经验） |
-| [检测流程规范](docs/检测流程规范.md) | 9步流程 + 6项检查判定标准 |
-| [环境搭建指南](docs/环境搭建指南.md) | ADB / 设备 / API 搭建步骤 |
-| [脚本数据格式](docs/脚本数据格式.md) | 题库数据结构规范 |
-
----
-
-## ✅ 已验证
-
-| 验证项 | 状态 |
-|--------|------|
-| ADB 设备连接 | ✅ SKSCIF4T7PFMQS5X (OnePlus PJB110) |
-| 全自动登录 | ✅ 54/54 通过 |
-| 版本切换 | ✅ 5个版本可检测可切换 |
-| 模块进入 | ✅ 4个模块全部正确进入 |
-| 返回首页 | ✅ back / tap 英语 tab |
-| Web 面板 | ✅ Flask 服务正常启动 |
-
----
-
-*构建于 2026年7月 · WorkBuddy + ADB + uiautomator*
+- `ai_*` 为 `False` → 该项不通过，记一条错误；`null` → 未检查（当通过）；`True` → 通过。
+- qid 格式：`教材-模块-单元-题号`（模块可省略，省略时模块列留空）。
