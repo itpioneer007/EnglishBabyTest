@@ -1400,8 +1400,13 @@ def api_version_grades():
         try:
             with open(vg_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            if data:
-                return jsonify({"table": data, "source": "table"})
+            # 兼容两种结构：{table:{...}} 或 直接 {版本:{...}}
+            if isinstance(data, dict) and "table" in data and isinstance(data["table"], dict):
+                table = data["table"]
+            else:
+                table = data
+            if table:
+                return jsonify({"table": table, "source": "table"})
         except Exception:
             pass
     # 回退旧版 all_grades.json
