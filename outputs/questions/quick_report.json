@@ -1,7 +1,6 @@
 {
-  "current_question_idx": 4,
-  "questions": {
-    "quick-Q01": {
+  "questions": [
+    {
       "idx": 1,
       "total": 15,
       "question_type": "听力选择题-词汇",
@@ -28,7 +27,7 @@
       "human_note": "",
       "timestamp": "2026-08-09T20:47:31.163420"
     },
-    "quick-Q02": {
+    {
       "idx": 2,
       "total": 15,
       "question_type": "听力选择题-词汇",
@@ -55,7 +54,7 @@
       "human_note": "",
       "timestamp": "2026-08-09T20:47:39.341580"
     },
-    "quick-Q03": {
+    {
       "idx": 3,
       "total": 15,
       "question_type": "听力选择题-词汇",
@@ -82,7 +81,7 @@
       "human_note": "",
       "timestamp": "2026-08-09T20:47:47.131338"
     },
-    "quick-Q04": {
+    {
       "idx": 4,
       "total": 15,
       "question_type": "听力选择题-词汇",
@@ -109,7 +108,5 @@
       "human_note": "",
       "timestamp": "2026-08-09T20:47:53.351971"
     }
-  },
-  "workflow_steps": [],
-  "docx": ""
+  ]
 }

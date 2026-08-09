@@ -183,9 +183,24 @@ def _test_answer_loop(d, max_q=45):
             return q
         # 答错后"下一题" → 点它
         if 'text="下一题"' in xml_now:
+            # ★ 答错题目截图：捕获当前答错画面（含反馈+题目），供人工核验错题，
+            #   并同步到前端「最近截图」展示（web_server 识别 evidence 写入面板）
+            _wrong_shot = ""
+            try:
+                _shot_dir = os.path.join(
+                    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                    "screenshots")
+                os.makedirs(_shot_dir, exist_ok=True)
+                _wrong_shot = f"wrong_q{q+1:02d}.png"
+                d.screenshot(os.path.join(_shot_dir, _wrong_shot))
+                print(f"      → 答错截图: {_wrong_shot}")
+            except Exception as _e:
+                print(f"      ⚠ 答错截图失败: {_e}")
             d(text="下一题").click()
             print("      → 下一题(答错)")
-            step_log(f"  答错 → 下一题", "warning")
+            step_log(f"  第{q+1}题 答错截图", "warning",
+                     evidence=[{"field": "错题截图", "type": "wrong_shot",
+                                "screenshot": _wrong_shot}] if _wrong_shot else None)
             time.sleep(0.6)
             _idle = 0
             continue
