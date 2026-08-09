@@ -60,7 +60,7 @@ class ADBController:
 
     def _adb(self, args: list[str], timeout: int = 15) -> tuple[int, str]:
         """执行ADB命令"""
-        cmd = ['C:/Users/bunana/AppData/Local/Microsoft/WinGet/Packages/Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe/platform-tools/adb.exe']
+        cmd = [self._find_adb()]
         if self.serial:
             cmd.extend(["-s", self.serial])
         cmd.extend(args)
@@ -69,6 +69,70 @@ class ADBController:
         stdout = result.stdout or ""
         stderr = result.stderr or ""
         return result.returncode, (stdout + stderr).strip()
+
+    @staticmethod
+    def _find_adb() -> str:
+        """自动定位 adb 可执行文件（★ 跨机器可移植：不再写死任何人的绝对路径，
+        队友拉取代码后无需修改即可运行）。
+
+        探测顺序：
+          1) PATH 中的 adb（装了 platform-tools 并加入 PATH 即可）；
+          2) adbutils / uiautomator2 自带 adb（随 pip 安装位置自动定位，任何电脑通用，
+             只要 pip install adbutils 就有，零配置）；
+          3) WinGet 安装的 Google.PlatformTools（按当前用户 ~ 目录 glob，不写死用户名）；
+          4) ANDROID_HOME / ANDROID_SDK_ROOT 环境变量下的 platform-tools。
+        """
+        import shutil
+
+        # 1) PATH
+        p = shutil.which("adb")
+        if p:
+            return p
+
+        # 2) adbutils / uiautomator2 自带（跨机器、随安装位置自动定位）
+        try:
+            from adbutils import adb as _adb_mod
+            p = str(_adb_mod.path())
+            if p and os.path.exists(p):
+                return p
+        except Exception:
+            pass
+        try:
+            import uiautomator2 as _u2
+            p = os.path.join(
+                os.path.dirname(os.path.dirname(_u2.__file__)),
+                "adbutils", "binaries", "adb.exe")
+            if os.path.exists(p):
+                return p
+        except Exception:
+            pass
+
+        # 3) WinGet 的 Google.PlatformTools（按用户目录查找，跨机器通用）
+        try:
+            _wg = os.path.join(os.path.expanduser("~"),
+                               "AppData", "Local", "Microsoft", "WinGet", "Packages")
+            if os.path.isdir(_wg):
+                for _entry in os.listdir(_wg):
+                    if _entry.startswith("Google.PlatformTools"):
+                        p = os.path.join(_wg, _entry, "platform-tools", "adb.exe")
+                        if os.path.exists(p):
+                            return p
+        except Exception:
+            pass
+
+        # 4) Android SDK 环境变量
+        for _env in ("ANDROID_HOME", "ANDROID_SDK_ROOT"):
+            _sdk = os.environ.get(_env, "")
+            if _sdk:
+                p = os.path.join(_sdk, "platform-tools", "adb.exe")
+                if os.path.exists(p):
+                    return p
+
+        raise FileNotFoundError(
+            "未找到 adb 可执行文件。任选一种方式安装后即可（无需改代码）：\n"
+            "  a) pip install adbutils   （自带 adb，推荐）\n"
+            "  b) 安装 Android platform-tools 并加入 PATH\n"
+            "  c) winget install Google.PlatformTools")
 
     def _log(self, action: str, detail: str, success: bool = True):
         """记录操作日志"""
@@ -107,19 +171,33 @@ class ADBController:
 
     def dump_ui(self, retries: int = 3, retry_delay: float = 1.5) -> list[UIElement]:
         """获取当前页面所有UI元素，返回列表
-        自动重试以应对轮播图等导致 idle state 拿不到的情况
+        ★ 优先用 uiautomator2 的 dump_hierarchy（本项目设备 ATX 服务常驻，
+        adb shell uiautomator dump 会因冲突被杀 exit=137 → 方案B兜底），
+        与项目主链路（engine/模块）一致、真机验证可靠。
         """
         remote = "/sdcard/yyb_ui.xml"
         last_error = ""
 
+        # ★ 方案A：uiautomator2 dump_hierarchy（与主链路一致）
+        try:
+            import uiautomator2 as _u2
+            _d = _u2.connect(self.serial or None)
+            _xml = _d.dump_hierarchy()
+            if _xml and "<hierarchy" in _xml:
+                elements = self._parse_ui_xml(_xml)
+                if elements:
+                    return elements
+                last_error = "u2 dump 解析为空"
+        except Exception as _e:
+            last_error = f"u2: {_e}"
+
+        # ★ 方案B：adb shell uiautomator dump（兼容无 u2 环境）
         for attempt in range(retries):
             # 等待动画/轮播稳定
             if attempt > 0:
                 time.sleep(retry_delay)
-
             self._adb(["shell", "uiautomator", "dump", remote])
             code, output = self._adb(["shell", "cat", remote])
-
             if output and "<hierarchy" in output:
                 self._adb(["shell", "rm", remote])
                 elements = self._parse_ui_xml(output)

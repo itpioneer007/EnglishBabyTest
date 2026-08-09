@@ -278,10 +278,15 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
             <select id="inspectUnit" class="w-full border-[1.5px] border-[#e6dfd4] rounded-lg px-1.5 py-1.5 text-[11.5px] bg-white"><option>6</option><option>7</option><option>8</option><option>9</option></select>
           </div>
           <div>
-            <span class="block text-[10.5px] text-[#6b7280] mb-0.5">阶段</span>
-            <select id="inspectStage" class="w-full border-[1.5px] border-[#e6dfd4] rounded-lg px-1.5 py-1.5 text-[11.5px] bg-white">
-              <option selected>基础巩固</option><option>综合进阶</option><option>难点突破</option>
-            </select>
+            <span class="block text-[10.5px] text-[#6b7280] mb-0.5">阶段（可多选）</span>
+            <label class="flex items-center gap-1 text-[11px] text-[#475569] mb-0.5 cursor-pointer">
+              <input type="checkbox" id="inspStageAll" checked onchange="inspStageAllChange()"> 全部子模块
+            </label>
+            <div id="inspStageBox" class="text-[11px] text-[#475569] space-y-0.5">
+              <label class="flex items-center gap-1 cursor-pointer"><input type="checkbox" class="inspStageCb" value="基础巩固" checked> 基础巩固</label>
+              <label class="flex items-center gap-1 cursor-pointer"><input type="checkbox" class="inspStageCb" value="综合进阶" checked> 综合进阶</label>
+              <label class="flex items-center gap-1 cursor-pointer"><input type="checkbox" class="inspStageCb" value="难点突破" checked> 难点突破</label>
+            </div>
           </div>
         </div>
         <button id="runBtn" onclick="startInsp()" class="w-full py-2 rounded-lg bg-[#2d6a4f] text-white text-[12.5px] font-semibold hover:bg-[#1b4332] transition disabled:opacity-50">开始检查（自动导航到题目页逐题查）</button>
@@ -1043,14 +1048,24 @@ function updShot(f){
 }
 
 /* ========== 审查动作 ========== */
+function inspStageAllChange(){
+  const all=$('inspStageAll')
+  document.querySelectorAll('.inspStageCb').forEach(c=>c.checked=!!(all&&all.checked))
+}
+function getInspStages(){
+  const sel=[...document.querySelectorAll('.inspStageCb')].filter(c=>c.checked).map(c=>c.value)
+  // 一个都没勾 = 全部
+  return sel.length?sel:['基础巩固','综合进阶','难点突破']
+}
 async function startInsp(){
-  const v=$('inspectVersion').value,u=$('inspectUnit').value,s=$('inspectStage').value
+  const v=$('inspectVersion').value,u=$('inspectUnit').value
+  const stages=getInspStages()
   $('runBtn').disabled=true
-  addLog('info','启动审查: '+v+' U'+u+' '+s)
+  addLog('info','启动审查: '+v+' U'+u+' '+stages.join('、'))
   try{
     const r=await(await fetch('/api/inspect/listening-run',{method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({version:v,unit:parseInt(u),stage:s})})).json()
+      body:JSON.stringify({version:v,unit:parseInt(u),stages})})).json()
     if(r.error){alert(r.error);$('runBtn').disabled=false;return}
     addLog('success','审查任务已启动')
   }catch(e){alert('失败:'+e);$('runBtn').disabled=false}

@@ -4,9 +4,9 @@
 close_ad / ensure_grade / run_single_module 等核心逻辑
 """
 import uiautomator2 as u2
-import time, re
+import os, time, re
 from config import MODULE_CONFIG, GLOBAL_POPUPS, APP_PACKAGE, GRADE_LEVEL, BOOK_VERSION
-from common.tools import S, S_swipe, S_h, S_w
+from common.tools import S, S_swipe, S_h, S_w, applock_blocked, settle_ads
 from common.logger import step_log, should_stop
 
 
@@ -418,26 +418,21 @@ def _handle_sort_question(d, config):
                     btns.append((step * (2 * i + 1), int(h * 0.85), 0, 0))
         return btns
 
-    # 点 1-5 序号（每次动态检测按钮位置；填一个后若出现"检查/查看报告"则填完停止）
+    # 点 1-5 序号：每次动态检测序号栏，序号栏空了（全部填完）才停止。
+    # ★ 关键修复：之前"点一个序号发现检查出现就 break"是错的——点第一个序号后
+    #   "检查"就已出现，但必须填满所有序号才能提交，否则会漏答（只填1个就检查）。
     for target in range(1, 6):
-        # 每次重新检测序号栏（点完序号后检查按钮可能出现、布局上移）
+        # 每次重新检测序号栏（点完序号后该序号被消耗、栏位变化）
         btns = _find_num_btns()
         if not btns:
-            print(f"      ⚠ 找不到序号按钮（第{target}次），等待重试")
-            time.sleep(0.5)
-            continue
+            print(f"      → 序号栏已空，第{target-1}个序号填完")
+            break
         try:
             d.click(btns[0][0], btns[0][1])
             print(f"      → 点序号{target} @({btns[0][0]},{btns[0][1]})")
             time.sleep(0.5)
         except Exception:
             pass
-        # 填完一个后：检查/检测/查看报告出现 → 说明填完了，停止
-        if (d(text="检查").exists(timeout=0.8)
-                or d(text="检测").exists(timeout=0.8)
-                or d(text="查看报告").exists(timeout=0.8)):
-            print(f"      → 填完第{target}个后出现按钮，停止填序号")
-            break
 
     # 3. 出现检查 → 点它（兼容"检测"；最后一题检查后出"查看报告"也点）
     for _ in range(10):
@@ -855,10 +850,26 @@ def _answer_loop(d, config, module_name):
             print(f"      → 本子模块完成，返回")
             return q
         if _has("下一题"):
+            # ★ 答错题目截图：捕获当前答错画面，供人工核验错题并同步到前端「最近截图」
+            #   （文件名带模块标识，避免多模块练习互相覆盖；web_server 识别 evidence 写入面板）
+            _wrong_shot = ""
+            try:
+                _shot_dir = os.path.join(
+                    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                    "screenshots")
+                os.makedirs(_shot_dir, exist_ok=True)
+                _mod_tag = re.sub(r"[^\w]", "_", module_name)[:12] or "mod"
+                _wrong_shot = f"wrong_{_mod_tag}_q{q:02d}.png"
+                d.screenshot(os.path.join(_shot_dir, _wrong_shot))
+                print(f"      → 答错截图: {_wrong_shot}")
+            except Exception as _e:
+                print(f"      ⚠ 答错截图失败: {_e}")
             _click_text("下一题")
             print(f"      → 下一题（答错）")
             _idle = 0
-            step_log(f"  第{q}题: 答错 → 下一题", "warning")
+            step_log(f"  第{q}题 答错截图", "warning",
+                     evidence=[{"field": "错题截图", "type": "wrong_shot",
+                                "screenshot": _wrong_shot}] if _wrong_shot else None)
             time.sleep(0.4); _need_dump = True; continue
 
         # 题型识别：基于缓存的字符串匹配（不再调 xpath）
@@ -985,9 +996,35 @@ def run_single_module(d, module_name, config):
     print(f"  [1] 查找「{entry}」...")
     if not scroll_and_find(d, entry):
         print(f"  ❌ 未找到模块: {entry}"); return 0
+    # ★ 点击入口【前】必须先清广告：广告延迟加载并覆盖入口卡片，直接点文字坐标会
+    #   点到广告上 → 打开外链触发 OPPO 系统验证弹窗（使用面部验证/密码验证）→ 全流程卡死。
+    #   （用户定位：只有点到广告才会弹这个验证框）
+    settle_ads(d, wait_total=8)
     d(text=entry).click()
     print(f"  ✅ 已进入 {module_name}")
     time.sleep(0.8)
+
+    # ★ 系统验证弹窗（点到广告触发）→ 先等它自动消失；持续不退 → back 关闭 + 清广告重试一次
+    if applock_blocked(d):
+        _cleared = False
+        for _lk in range(10):
+            time.sleep(0.5)
+            if not applock_blocked(d):
+                _cleared = True
+                break
+        if _cleared:
+            print(f"  ⏳ 系统验证弹窗已自动消失，继续…")
+        else:
+            d.press("back"); time.sleep(0.8)
+            settle_ads(d, wait_total=6)
+            if not applock_blocked(d):
+                print(f"  ⏳ 系统验证弹窗已关闭（疑似点到广告），已清广告，继续…")
+            else:
+                print(f"  ❌ 被系统验证（使用面部验证/密码验证）挡住，请先解锁「{entry}」，再重新运行")
+                return 0
+
+    # ★ 广告延迟加载：进入模块页后广告可能刚好弹出，先关干净再继续（避免后续点击误触广告）
+    settle_ads(d, wait_total=6)
 
     # 2. 空态检测
     for kw in config.get("empty_text", []):

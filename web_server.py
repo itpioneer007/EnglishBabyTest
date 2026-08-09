@@ -297,10 +297,52 @@ def log_msg(msg: str, level: str = "info", evidence: list = None):
     #   触发条件：消息含"第N题 检查"且带 evidence（来自 engine.py _collect_ui_evidence）
     if evidence and isinstance(evidence, list) and evidence:
         try:
-            m = re.match(r"第(\d+)题\s*检查", msg)
+            # ★ 修复：兼容实际消息格式——"第1题 检查"(可能带前导空格) 与
+            #   "第1题 完整性检查"(测试循环) 都能命中
+            m = re.match(r"\s*第(\d+)题\s*(?:完整性)?\s*检查", msg)
             if m:
                 qidx = int(m.group(1))
                 _record_module_evidence(qidx, msg, evidence)
+        except Exception:
+            pass
+
+    # ★ 答错题目截图 → 同步到审查结果区（前端「最近截图」展示）
+    #   触发条件：消息含"第N题 答错截图"且 evidence 带 type="wrong_shot" + screenshot 文件名
+    if evidence and isinstance(evidence, list) and evidence:
+        try:
+            m = re.match(r"\s*第(\d+)题\s*答错截图", msg)
+            if m:
+                qidx = int(m.group(1))
+                shot = ""
+                for e in evidence:
+                    if e.get("type") == "wrong_shot":
+                        shot = e.get("screenshot", "") or ""
+                        break
+                if shot:
+                    key = f"auto-Q{qidx:03d}"
+                    qs = _inspection_state.setdefault("questions", {})
+                    if key in qs:
+                        qs[key]["screenshot"] = shot
+                    else:
+                        # 该题无完整性检查记录（答题循环未发证据）→ 建一条错题记录
+                        qs[key] = {
+                            "idx": qidx,
+                            "total": len(qs) + 1,
+                            "question_type": "错题截图",
+                            "screenshot": shot,
+                            "progress": f"Q{qidx}",
+                            "ai_stem": None, "ai_content": None, "ai_image": None,
+                            "ai_answer": None, "ai_audio": None, "ai_post_error": None,
+                            "overall_passed": None, "overall_score": 0.0,
+                            "stem_reason": "", "content_reason": "", "image_reason": "",
+                            "answer_reason": "", "audio_reason": "", "post_error_reason": "",
+                            "stem": f"第{qidx}题（答错，已截图）", "options": "",
+                            "script_answer": "", "note": "",
+                        }
+                    try:
+                        _save_inspection_state()
+                    except Exception:
+                        pass
         except Exception:
             pass
 
@@ -1045,8 +1087,9 @@ def run_quick_inspect_task(docx_file: str = "", unit: int = 0):
             }
             if agent:
                 try:
-                    # 匹配脚本题目
-                    shot_path = str(PROJECT_ROOT / "outputs" / "web" / shot)
+                    # ★ 修复：截图保存在 screenshots/（adb.screenshot），
+                    #   原代码读 outputs/web/ 导致找不到图 → 降级纯文字模式
+                    shot_path = str(PROJECT_ROOT / "screenshots" / shot)
                     matching = [q for q in agent.script_questions if q.global_idx == idx]
                     if matching:
                         script_q = matching[0]
@@ -1673,7 +1716,8 @@ def api_inspect_listening_run():
     请求参数:
         version: "新湘鲁六上" / "新湘鲁五上" / ...
         unit: 6 (单元号)
-        stage: "基础巩固" / "综合进阶" / "难点突破"
+        stage: "基础巩固" / "综合进阶" / "难点突破"   (兼容旧版单阶段)
+        stages: ["基础巩固","综合进阶",...]            (新版多阶段，优先)
         docx: 脚本文件名 (已在uploads目录的)
     """
     if task_status["running"]:
@@ -1684,8 +1728,14 @@ def api_inspect_listening_run():
     unit = data.get("unit", 6)
     stage = data.get("stage", "基础巩固")
     docx_file = data.get("docx", "")
-    
-    # 新巡检自动清空日志和检查状态
+    # ★ 多阶段支持：stages 优先；兼容旧版单 stage
+    stages = data.get("stages") or []
+    if isinstance(stages, str):
+        stages = [s.strip() for s in stages.split(",") if s.strip()]
+    if not stages:
+        stages = [stage] if stage else ["基础巩固"]
+
+    # 新巡检自动清空日志和检查状态（多阶段只清一次，后面各阶段结果累积）
     task_status["log"] = []
     _inspection_state["questions"] = {}
     _inspection_state["workflow_steps"] = []
@@ -1694,19 +1744,40 @@ def api_inspect_listening_run():
 
     # 启动线程
     t = threading.Thread(
-        target=run_listening_inspect,
-        args=(version_label, unit, stage, docx_file),
+        target=_run_listening_inspect_stages,
+        args=(version_label, unit, stages, docx_file),
         daemon=True,
     )
     t.start()
     return jsonify({
         "status": "started",
         "task": "listening_inspect",
-        "params": {"version": version_label, "unit": unit, "stage": stage},
+        "params": {"version": version_label, "unit": unit, "stages": stages},
     })
 
 
-def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: str):
+def _run_listening_inspect_stages(version_label: str, unit: int, stages: list, docx_file: str):
+    """多阶段巡检：依次跑每个子模块，结果按 stage 前缀累积到六维面板。
+    最后一阶段才 set_done（避免中间阶段提前让前端显示"完成"）。"""
+    n = len(stages)
+    for i, st in enumerate(stages):
+        log_msg(f"📌 巡检阶段 [{i+1}/{n}]: {st}", "step")
+        try:
+            run_listening_inspect(version_label, unit, st, docx_file,
+                                  keep_running=(i < n - 1))
+        except SystemExit:
+            log_msg("⏹ 任务已被立即停止", "warning")
+            break
+        except Exception as e:
+            log_msg(f"⚠ 阶段 {st} 巡检异常: {e}", "error")
+        if _is_stop_requested():
+            break
+    set_done()
+    log_msg(f"✅ 多阶段巡检结束: {'、'.join(stages)}", "success")
+
+
+def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: str,
+                          keep_running: bool = False):
     """
     通用模块巡检主循环
     
@@ -1735,15 +1806,9 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
             pass
 
     try:
-        # 重置巡检状态
+        # 记录开始（★ 题目结果由 API 入口统一清空一次；此处不再 reset，
+        #   否则多阶段遍历时后一阶段会清掉前一阶段的题）
         record_step("初始化", "running", f"{version_label} U{unit} {stage}")
-        try:
-            import urllib.request, json
-            req = urllib.request.Request("http://127.0.0.1:5000/api/inspect/reset",
-                                        data=b"{}", headers={"Content-Type": "application/json"})
-            urllib.request.urlopen(req, timeout=2)
-        except Exception:
-            pass
 
         set_running("listening_inspect")
         config = load_config()
@@ -2276,7 +2341,8 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
                         log_msg(f"  审查: 题干{review_result['stem']} 内容{review_result['content']} 配图{review_result['image']} 作答{review_result['answer']} 得分{review_result['score']:.2f}")
 
                         # ====== 发送每题结果到后端 ======
-                        qid = f"{version_label}-U{unit}-Q{cur:02d}"
+                        # ★ 多阶段：qid 带 stage 前缀，避免不同子模块同题号互相覆盖
+                        qid = f"{version_label}-U{unit}-{stage}-Q{cur:02d}"
                         det_type = (detected.full_type if detected and detected.full_type else script_q.type_2)
                         record_q_result(
                             qid,
@@ -2400,7 +2466,8 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
             agent.export_json(str(PROJECT_ROOT / "outputs" / f"review_{docx_file.replace('.docx','')}.json"))
             record_step("7.生成报告", "done", f"已保存到 outputs/")
 
-        set_done()
+        if not keep_running:
+            set_done()
         log_msg(f"✅ 听力专项巡检完成! {len(questions_reviewed)}题", "success")
 
     except SystemExit:
@@ -2409,7 +2476,8 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
         import traceback
         log_msg(f"❌ 巡检失败: {e}", "error")
         log_msg(traceback.format_exc(), "error")
-        set_done()
+        if not keep_running:
+            set_done()
 
 
 
@@ -2717,8 +2785,9 @@ def run_quick_inspect_task(docx_file: str = "", unit: int = 0):
             }
             if agent:
                 try:
-                    # 匹配脚本题目
-                    shot_path = str(PROJECT_ROOT / "outputs" / "web" / shot)
+                    # ★ 修复：截图保存在 screenshots/（adb.screenshot），
+                    #   原代码读 outputs/web/ 导致找不到图 → 降级纯文字模式
+                    shot_path = str(PROJECT_ROOT / "screenshots" / shot)
                     matching = [q for q in agent.script_questions if q.global_idx == idx]
                     if matching:
                         script_q = matching[0]
@@ -3071,6 +3140,10 @@ def api_screenshot(filename):
     alt_dir = PROJECT_ROOT / "outputs" / "screenshots"
     if (alt_dir / filename).exists():
         return send_from_directory(str(alt_dir), filename)
+    # ★ 截图实际保存目录（快速检查 qXX.png / 答错截图 wrong_qXX.png 都在这）
+    shot_dir = PROJECT_ROOT / "screenshots"
+    if (shot_dir / filename).exists():
+        return send_from_directory(str(shot_dir), filename)
     return jsonify({"error": "未找到截图"}), 404
 
 
@@ -3436,16 +3509,15 @@ def api_audio_run():
             log_msg(f"启动听力专项 {mode} 模式: 练习单元{units} 测试单元{test_units}")
             sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
             from modules.听力专项 import run_module, run_test_module
-            from common.tools import dismiss_global_popups, close_ad, ensure_grade
+            from common.tools import dismiss_global_popups, close_ad, ensure_grade, settle_ads
             import uiautomator2 as u2
 
             d = _connect_device()
             log_msg("设备已连接")
 
             # 关广告 + 确认年级
-            for _ in range(3):
-                dismiss_global_popups(d)
-            close_ad(d)
+            # ★ 用 settle_ads 循环「检测→关闭→再检测」消除"点空/广告刚弹出时误点"竞态
+            settle_ads(d, wait_total=12)
             ok = ensure_grade(d, "五年级上册", "湘少版")
             log_msg("年级确认: 湘少版 五年级上册" if ok else "⚠ 年级切换失败，继续尝试")
 
@@ -3924,14 +3996,35 @@ def api_modules_run():
         except SystemExit:
             # 前端"立即停止"注入的异常：记录并正常收尾
             log_msg("⏹ 任务已被立即停止", "warning")
+            _LAST_MODULES_RESULT = {
+                "done": True,
+                "version": version,
+                "grade": grade,
+                "stopped": True,
+                "error": "任务已被手动停止",
+                "results": {},
+            }
         except Exception as e:
             log_msg(f"多模块检测异常: {e}", "error")
+            _LAST_MODULES_RESULT = {
+                "done": True,
+                "version": version,
+                "grade": grade,
+                "error": str(e),
+                "results": {},
+            }
         finally:
             # 清理停止标志，供下次任务使用
             global _STOP_REQUESTED
             with _STOP_LOCK:
                 _STOP_REQUESTED = False
             set_done()
+
+    # ★ 修复：新任务启动前清空上次结果，否则前端轮询 /api/modules/result 会
+    #   立刻拿到旧任务的 done=true 结果（表现为"2秒全部完成+旧题数"假象），
+    #   把当前真正在跑的任务结果盖掉。
+    global _LAST_MODULES_RESULT
+    _LAST_MODULES_RESULT = None
 
     _MODULES_RUNNER = threading.Thread(target=_run, daemon=True)
     _MODULES_RUNNER.start()
