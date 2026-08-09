@@ -145,6 +145,22 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
 .g-sec-b .g-how b{color:var(--green)}
 .g-tip{font-size:11.5px;color:var(--warn-ink);background:var(--warn-bg);border-radius:8px;padding:8px 12px;margin:7px 0}
 .g-tip b{color:#7c4a03}
+/* ★ 精简版指南：横向流程条 */
+.g-flow{display:flex;align-items:stretch;gap:6px;margin:10px 0 14px}
+.g-step{flex:1;border:1px solid var(--line);border-radius:10px;padding:9px 10px;background:#fbfaf6;text-align:center;min-width:0}
+.g-sno{width:24px;height:24px;border-radius:50%;background:var(--green);color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;margin:0 auto 5px}
+.g-stitle{font-size:12.5px;font-weight:700;color:var(--green-deep);margin-bottom:3px}
+.g-sdesc{font-size:10.5px;color:#6b7280;line-height:1.45}
+.g-arrow{display:flex;align-items:center;color:#c9c2b2;font-size:15px;font-weight:700;flex-shrink:0}
+@media(max-width:680px){.g-flow{flex-direction:column}.g-arrow{transform:rotate(90deg);justify-content:center;padding:1px 0}}
+
+/* ★ Tab 切换（每个 Tab 一屏显示，避免页面内嵌滚动条） */
+.tabs-bar{display:flex;gap:4px;padding:8px 14px 0;background:#fbfaf6;border-bottom:1px solid var(--line);flex-shrink:0}
+.tab-btn{padding:8px 20px;font-size:13px;font-weight:600;color:var(--gray);background:transparent;border:1px solid transparent;border-bottom:none;border-radius:10px 10px 0 0;cursor:pointer;transition:all .15s;white-space:nowrap}
+.tab-btn:hover{color:var(--green-deep);background:#fff}
+.tab-btn.active{color:var(--green-deep);background:#fff;border-color:var(--line);box-shadow:0 -2px 6px rgba(0,0,0,.04)}
+.tab-btn .tb-no{display:inline-flex;width:18px;height:18px;border-radius:50%;background:var(--green);color:#fff;align-items:center;justify-content:center;font-size:10.5px;font-weight:700;margin-right:6px}
+.tab-btn.active .tb-no{background:var(--green-deep)}
 
 /* 齿轮/单元 */
 .unit-gear{opacity:.55;cursor:pointer;color:var(--green);display:inline-flex}
@@ -186,10 +202,17 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
 </header>
 
 <!-- ===== 主体 ===== -->
-<div class="flex h-[calc(100vh-52px)]">
+<div class="flex flex-col h-[calc(100vh-52px)]">
 
-  <!-- ===== 左栏：2 张卡（任务配置 / 脚本·审查·知识库） ===== -->
-  <aside class="w-[370px] shrink-0 overflow-y-auto p-3 space-y-3 bg-[#fbfaf6] border-r border-[#e6dfd4]">
+  <!-- Tab 导航条（每个 Tab 一屏，不用在页面里滚） -->
+  <div class="tabs-bar">
+    <button class="tab-btn active" data-tab="1" onclick="switchTab(1)"><span class="tb-no">1</span>任务配置</button>
+    <button class="tab-btn" data-tab="2" onclick="switchTab(2)"><span class="tb-no">2</span>运行日志 · 手机画面</button>
+    <button class="tab-btn" data-tab="3" onclick="switchTab(3)"><span class="tb-no">3</span>审查结果</button>
+  </div>
+
+  <!-- ===== Tab1 任务配置：左栏两卡（全宽两列，一屏显示完） ===== -->
+  <aside id="tabAside" class="flex-1 min-h-0 overflow-y-auto p-3 grid grid-cols-1 xl:grid-cols-2 gap-3 bg-[#fbfaf6]">
 
     <!-- 卡1：任务配置（一句话 + 版本年级模块 + 开始/快速/停止） -->
     <div class="bg-white rounded-xl border border-[#e6dfd4] p-3.5 shadow-sm">
@@ -306,11 +329,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
 
   </aside>
 
-  <!-- ===== 右栏：状态 + 流程 + 合并日志 + 审查结果 ===== -->
-  <main class="flex-1 flex flex-col overflow-hidden">
+  <!-- ===== Tab2/3/4 容器：运行日志 / 审查结果 / 手机画面 ===== -->
+  <main id="tabMain" class="flex-1 flex flex-col overflow-hidden">
 
-    <!-- 状态条 -->
-    <div class="flex items-center gap-3 px-4 py-2 bg-white border-b border-[#e6dfd4]">
+    <!-- 状态条（Tab2 显示） -->
+    <div id="statusSec" class="flex items-center gap-3 px-4 py-2 bg-white border-b border-[#e6dfd4]">
       <span id="kitchenPulse" class="w-2.5 h-2.5 rounded-full bg-[#9aa5a0]"></span>
       <span class="font-semibold text-[13px] text-[#1b4332]" id="kitchenMsg">就绪，等待开始…</span>
       <button id="btnStop" onclick="stopCooking()" class="ml-auto bg-[#bc4742] text-white rounded-lg px-3.5 py-1.5 text-[12px] font-semibold hover:bg-[#a33b36] transition hidden">停止检测</button>
@@ -320,11 +343,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
     <!-- 流程步骤条 -->
     <div class="flow-strip" id="flowStrip"></div>
 
-    <!-- 上下分区 -->
-    <div class="flex-1 flex flex-col min-h-0">
+    <!-- Tab2：运行日志(左) + 手机画面(右) 同屏 -->
+    <div id="logShotSec" class="flex-1 flex min-h-0">
+      <div class="flex-1 flex flex-col min-w-0 min-h-0">
 
-      <!-- 上半：合并日志（点击 + 审查 一条流） -->
-      <div class="flex-1 flex flex-col min-h-[35%] max-h-[52%]">
+      <!-- 合并日志（点击 + 审查 一条流） -->
+      <div id="logSec" class="flex-1 flex flex-col min-h-0">
         <div class="flex items-center gap-2 px-4 pt-2">
           <h3 class="font-bold text-[13px] text-[#1b4332]">运行过程日志</h3>
           <span class="text-[10.5px] text-[#9aa5a0]">自动化点击步骤 + 每题审查判断与证据，按时间合并</span>
@@ -340,46 +364,56 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
 
       <!-- 结果汇总 -->
       <div class="serve-wrap" id="serveWrap"></div>
-
-      <!-- 下半：左审查结果 + 右截图（横向利用宽度） -->
-      <div class="flex-1 flex min-h-0 border-t border-[#e6dfd4] bg-[#fbfaf6]">
-        <!-- 左：审查结果 -->
-        <div class="flex-1 flex flex-col min-w-0 min-h-0 border-r border-[#e6dfd4]">
-          <div class="flex items-center gap-2 px-4 pt-2">
-            <h3 class="font-bold text-[13px] text-[#1b4332]">题目审查结果（六维）</h3>
-            <span class="text-[10.5px] text-[#9aa5a0]">AI 判断 + 人工复核</span>
-            <span id="qBadge" class="ml-auto bg-white border border-[#e6dfd4] rounded-full px-2.5 py-0.5 text-[10.5px] text-[#6b7280]">待启动</span>
-          </div>
-          <div id="qStatsBar" class="hidden md:flex gap-4 px-4 py-1.5 text-[12px] text-[#6b7280] flex-wrap">
-            <span>总题数 <b class="text-[15px] text-[#2d6a4f]" id="sTotal">0</b></span>
-            <span>AI通过 <b class="text-[15px] text-[#1d6f3c]" id="sPassed">0</b></span>
-            <span>AI不通过 <b class="text-[15px] text-[#bc4742]" id="sFailed">0</b></span>
-            <span class="ml-auto">已人工标注 <b class="text-[15px] text-[#2d6a4f]" id="sLabeled">0</b></span>
-          </div>
-          <div id="questionList" class="flex-1 overflow-y-auto px-4 py-2">
-            <div class="text-center py-8 text-[#9aa5a0]">
-              <div class="text-[13.5px] font-medium text-[#6b7280] mb-1">尚未开始审查</div>
-              <div class="text-[11px]">点「快速检查」从手机当前页开查，或随自动化检测同步展示</div>
-            </div>
-          </div>
+      </div>
+      <!-- Tab2 右列：手机画面（实时截图） -->
+      <div id="shotSec" class="w-[310px] shrink-0 overflow-y-auto px-3 py-2 flex flex-col gap-1.5 border-l border-[#e6dfd4] bg-[#fbfaf6]">
+        <div class="flex items-center gap-2">
+          <h3 class="font-bold text-[12px] text-[#1b4332]">手机画面</h3>
+          <span class="text-[10px] text-[#9aa5a0]">实时 · 点图放大</span>
         </div>
-        <!-- 右：截图（手机相框 + 缩略图） -->
-        <div class="w-[310px] shrink-0 overflow-y-auto px-3 py-2 flex flex-col gap-1.5">
-          <div class="flex items-center gap-2">
-            <h3 class="font-bold text-[12px] text-[#1b4332]">手机画面</h3>
-            <span class="text-[10px] text-[#9aa5a0]">实时 · 点图放大</span>
-          </div>
-          <div class="phone-frame">
-            <div class="screenshot-box" id="screenshotArea"><div class="ph">等待巡检截图…</div></div>
-          </div>
-          <div class="text-[11px] font-semibold text-[#475569] mt-0.5">最近截图（点开放大）</div>
-          <div id="shotThumbs" class="grid grid-cols-3 gap-1.5">
-            <div class="text-[10px] text-[#9aa5a0] text-center py-4 bg-[#faf8f3] rounded-lg col-span-3">暂无</div>
-          </div>
-          <div class="shot-hint">手机屏 1080×2400 竖屏 · 完整显示每题画面</div>
+        <div class="phone-frame">
+          <div class="screenshot-box" id="screenshotArea"><div class="ph">等待巡检截图…</div></div>
         </div>
+        <div class="shot-hint">手机屏 1080×2400 竖屏 · 实时画面</div>
       </div>
     </div>
+
+      <!-- Tab3：审查结果（全宽一屏） -->
+      <div id="revSec" class="flex-1 flex flex-col min-w-0 min-h-0 bg-[#fbfaf6]">
+        <div class="flex items-center gap-2 px-4 pt-2">
+          <h3 class="font-bold text-[13px] text-[#1b4332]">题目审查结果（六维）</h3>
+          <span class="text-[10.5px] text-[#9aa5a0]">AI 判断 + 人工复核</span>
+          <span id="qBadge" class="ml-auto bg-white border border-[#e6dfd4] rounded-full px-2.5 py-0.5 text-[10.5px] text-[#6b7280]">待启动</span>
+        </div>
+        <div id="qStatsBar" class="hidden md:flex gap-4 px-4 py-1.5 text-[12px] text-[#6b7280] flex-wrap">
+          <span>总题数 <b class="text-[15px] text-[#2d6a4f]" id="sTotal">0</b></span>
+          <span>AI通过 <b class="text-[15px] text-[#1d6f3c]" id="sPassed">0</b></span>
+          <span>AI不通过 <b class="text-[15px] text-[#bc4742]" id="sFailed">0</b></span>
+          <span class="ml-auto">已人工标注 <b class="text-[15px] text-[#2d6a4f]" id="sLabeled">0</b></span>
+        </div>
+        <div class="flex-1 flex min-h-0">
+        <!-- 左：六维审查结果 -->
+        <div class="flex-1 flex flex-col min-w-0 min-h-0">
+        <div id="questionList" class="flex-1 overflow-y-auto px-4 py-2">
+          <div class="text-center py-8 text-[#9aa5a0]">
+            <div class="text-[13.5px] font-medium text-[#6b7280] mb-1">尚未开始审查</div>
+            <div class="text-[11px]">点「快速检查」从手机当前页开查，或随自动化检测同步展示</div>
+          </div>
+        </div>
+        </div>
+        <!-- 右：错题日志（位置 / 原因 / 修改建议，AI 检测中实时更新） -->
+        <div class="w-[38%] min-w-[330px] max-w-[460px] shrink-0 flex flex-col min-h-0 border-l border-[#e6dfd4] bg-white">
+          <div class="flex items-center gap-2 px-3 pt-2.5 pb-1">
+            <h3 class="font-bold text-[12.5px] text-[#bc4742]">错题日志</h3>
+            <span id="wrongBadge" class="bg-[#fee2e2] text-[#bc4742] rounded-full px-2 py-0.5 text-[10.5px] font-semibold">0</span>
+            <span class="text-[10px] text-[#9aa5a0]">AI 检测中实时更新</span>
+          </div>
+          <div id="wrongList" class="flex-1 overflow-y-auto px-3 py-2 space-y-2">
+            <div class="text-center py-6 text-[#9aa5a0] bg-[#faf8f3] rounded-lg text-[11px]">暂无错题</div>
+          </div>
+        </div>
+        </div>
+      </div>
   </main>
 </div>
 
@@ -389,46 +423,52 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
 <div class="guide-mask" id="guideMask" onclick="closeGuide()">
   <div class="guide" onclick="event.stopPropagation()">
     <div class="flex items-center justify-between px-5 py-3 bg-gradient-to-r from-[#1b4332] to-[#2d6a4f] text-white">
-      <h2 class="font-bold text-[15px]">界面使用指南</h2>
+      <h2 class="font-bold text-[15px]">界面使用指南 · 4 步上手</h2>
       <button class="bg-white/20 hover:bg-white/35 rounded-lg px-3 py-1 text-[12px] transition" onclick="closeGuide()">关闭</button>
     </div>
     <div class="guide-body">
-      <div class="g-tip"><b>一句话总览：</b>左边配置"要测什么"，右边看"跑的过程和审的结果"。自动化点击和逐题审查都记录在右侧<b>同一条日志流</b>里，按时间排。</div>
+      <div class="g-tip"><b>总览：</b>左边选「测什么」，右边看「过程 + 结果」。自动化点击和逐题审查在右侧<b>同一条日志</b>里按时间排。</div>
 
-      <div class="g-sec">
-        <div class="g-sec-h"><span class="g-no">1</span>任务配置（左栏）<span class="g-pos">第 1 步</span></div>
-        <div class="g-sec-b">
-          <p>输入一句话（自动识别版本/年级/模块/单元），或手动选版本、年级、勾选要测的模块（点模块旁齿轮可指定单元范围）。</p>
-          <p class="g-how">然后点 <b>「解析并开始检测」</b>：自动跑完所选模块，每步点击和每题判断都记录到右侧日志。</p>
-          <p class="g-how">两个快捷按钮：<b>快速检查</b>= 先把手机手动切到题目页再点，直接从当前页逐题审查；<b>停止</b>= 随时中断。</p>
+      <!-- 横向 4 步流程 -->
+      <div class="g-flow">
+        <div class="g-step">
+          <div class="g-sno">1</div>
+          <div class="g-stitle">上传脚本</div>
+          <div class="g-sdesc">公司 DOCX，AI 审查的对照依据</div>
+        </div>
+        <div class="g-arrow">→</div>
+        <div class="g-step">
+          <div class="g-sno">2</div>
+          <div class="g-stitle">选要测的</div>
+          <div class="g-sdesc">选版本/年级/模块，或一句话描述</div>
+        </div>
+        <div class="g-arrow">→</div>
+        <div class="g-step">
+          <div class="g-sno">3</div>
+          <div class="g-stitle">开始检测</div>
+          <div class="g-sdesc">点「解析并开始检测」自动答题+审查</div>
+        </div>
+        <div class="g-arrow">→</div>
+        <div class="g-step">
+          <div class="g-sno">4</div>
+          <div class="g-stitle">看结果</div>
+          <div class="g-sdesc">右侧日志看过程，六维面板人工复核</div>
         </div>
       </div>
 
+      <!-- 常用按钮速查 -->
       <div class="g-sec">
-        <div class="g-sec-h"><span class="g-no">2</span>审查脚本 · 知识库（左栏）<span class="g-pos">审查的依据</span></div>
+        <div class="g-sec-h"><span class="g-no">★</span>三个审查按钮怎么选<span class="g-pos">按需使用</span></div>
         <div class="g-sec-b">
-          <p>上传公司 DOCX 脚本，系统解析成知识库，AI 审查时用它核对题目，判断可溯源。</p>
-          <p class="g-how"><b>审查选项</b>：配置快速检查/开始检查用的 脚本版本/单元/阶段；<b>开始检查</b>= 自动导航到题目页逐题查；<b>按脚本一键审查</b>= 不连手机，直接对照脚本文字审查。</p>
+          <p><b>快速检查</b> ＝ 手机切到题目页再点，从当前题逐题截图审查</p>
+          <p><b>开始检查</b> ＝ 自动导航到题目页逐题查（先配好 脚本版本/单元/阶段）</p>
+          <p><b>按脚本一键审查</b> ＝ 不连手机，只对照脚本文字</p>
+          <p><b>停止</b> ＝ 随时中断任务</p>
         </div>
       </div>
 
-      <div class="g-sec">
-        <div class="g-sec-h"><span class="g-no">3</span>运行过程日志（右栏·上）<span class="g-pos">第 2 步看这里</span></div>
-        <div class="g-sec-b">
-          <p>自动化点击步骤（回到首页、进模块、点选项…）和逐题审查判断（每题一张证据卡：预期 vs 实际）<b>合并成一条流</b>，按时间顺序展示。</p>
-          <p class="g-how">只看即可；点「清空日志」重置显示。</p>
-        </div>
-      </div>
-
-      <div class="g-sec">
-        <div class="g-sec-h"><span class="g-no">4</span>题目审查结果 + 最近截图（右栏·下）<span class="g-pos">第 3 步看这里</span></div>
-        <div class="g-sec-b">
-          <p>每道题 6 个维度的 通过/不通过/未检 + AI 判据。对 AI 判断有异议，可点「通过/不通过」人工标注，标注会反馈给 AI 学习，提高后续准确率。</p>
-          <p class="g-how">下方「最近截图」是手机真实画面，供肉眼核验。</p>
-        </div>
-      </div>
-
-      <div class="g-tip"><b>推荐顺序：</b>① 上传脚本（左栏 2）→ ② 一句话描述要测什么（左栏 1）→ ③ 点「解析并开始检测」→ ④ 需要更细的逐题审查就点「快速检查」→ ⑤ 在右侧日志看过程、在审查结果里人工复核标注。</div>
+      <!-- 人工复核提示 -->
+      <div class="g-tip"><b>结果有异议？</b>六维卡片上点「通过 / 不通过」人工标注，会反馈给 AI 学习，越用越准。手机画面 / 最近截图可点开放大核对。</div>
     </div>
   </div>
 </div>
@@ -457,8 +497,26 @@ function openShotLightbox(src){
 function closeShotLightbox(){$('shotLightbox').classList.remove('open')}
 
 /* ========== 使用指南 ========== */
-function openGuide(){document.getElementById('guideMask').classList.add('open')}
+function openGuide(){document.getElementById('guideMask').classList.add('open');try{localStorage.setItem('yyb_guide_seen','1')}catch(e){}}
 function closeGuide(){document.getElementById('guideMask').classList.remove('open')}
+
+/* ========== Tab 切换（每个 Tab 一屏，避免页面内嵌滚动条） ========== */
+function switchTab(n){
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('active', parseInt(b.dataset.tab)===n))
+  const aside=$('tabAside'), main=$('tabMain')
+  const on1=(n===1), on2=(n===2), on3=(n===3)
+  // Tab1 任务配置：aside 显示（全宽两列）；其余隐藏
+  aside.style.display=on1?'':'none'
+  if(on1) aside.className='flex-1 min-h-0 overflow-y-auto p-3 grid grid-cols-1 xl:grid-cols-2 gap-3 bg-[#fbfaf6]'
+  // Tab2/3：main 显示
+  main.style.display=on1?'none':''
+  // Tab2 运行日志·手机画面：状态条/流程条/日志+截图左右分栏显示；审查结果隐藏
+  $('statusSec').style.display=on2?'':'none'
+  $('flowStrip').style.display=on2?'':'none'
+  $('logShotSec').style.display=on2?'':'none'
+  // Tab3 审查结果：全宽显示
+  $('revSec').style.display=on3?'':'none'
+}
 
 /* ========== 设备轮询 ========== */
 async function pollStatus(){
@@ -932,6 +990,7 @@ async function pollInspect(){
     const f=await(await fetch('/api/inspect/state')).json()
     updFlowStrip(f)
     updQ(f)
+    updWrong(f)
     updShot(f)
     const qs=f.questions||{}
     const ids=Object.keys(qs)
@@ -1034,17 +1093,59 @@ function updShot(f){
   if(q.screenshot){
     $('screenshotArea').innerHTML=`<img src="/api/screenshot/${q.screenshot}" onclick="openShotLightbox('/api/screenshot/${q.screenshot}')" onerror="this.parentElement.innerHTML='<div class=ph>截图加载失败: ${q.screenshot}</div>'">`
   }
-  // 缩略图列表：最近 6 张
-  const thumbs=ids.slice(-6).reverse()
-  const list=thumbs.map(qid=>{
-    const sq=qs[qid]
-    if(!sq||!sq.screenshot) return ''
-    return `<div class="cursor-pointer bg-[#faf8f3] rounded-lg overflow-hidden border border-[#e6dfd4] hover:border-[#40916c] transition" onclick="openShotLightbox('/api/screenshot/${sq.screenshot}')">
-      <img src="/api/screenshot/${sq.screenshot}" class="w-full h-20 object-cover" onerror="this.style.display='none'">
-      <div class="text-[9.5px] text-center py-0.5 text-[#6b7280]">${sq.idx||qid}</div>
+}
+
+/* ========== 错题日志（位置 / 原因 / 修改建议，AI 检测中实时更新） ========== */
+const WRONG_SUGGEST={
+  题干:'按脚本核对并修正题干文字',
+  内容:'核对选项内容/数量是否与脚本一致',
+  配图:'核对配图与脚本是否一致',
+  作答:'核对答案与脚本是否一致',
+  音频:'检查听力音频控件与内容',
+  答错后:'验证答错后的反馈流程'
+}
+function fmtLoc(id,q){
+  // key 形如 "新湘鲁六上-U6-基础巩固-Q03" → "新湘鲁六上-U6-基础巩固 · 第3题"
+  const m=String(id).match(/^(.+?-U\d+[^Q]*?)-Q0*(\d+)$/)
+  if(m) return `${m[1]} · 第${m[2]}题`
+  return `${q.question_type||'题目'} · 第${q.idx||'?'}题`
+}
+function updWrong(f){
+  const el=$('wrongList'); if(!el) return
+  const qs=f.questions||{}
+  const wrong=Object.keys(qs).filter(id=>{
+    const q=qs[id]
+    return q.overall_passed===false || q.question_type==='错题截图'
+  }).sort().map(id=>({id,q:qs[id]}))
+  $('wrongBadge').textContent=wrong.length
+  if(!wrong.length){
+    el.innerHTML='<div class="text-center py-6 text-[#9aa5a0] bg-[#faf8f3] rounded-lg text-[11px]">暂无错题<br>（检测通过或尚未开始）</div>'
+    return
+  }
+  el.innerHTML=wrong.map(({id,q})=>{
+    const dims=[['题干',q.ai_stem,q.stem_reason],['内容',q.ai_content,q.content_reason],
+      ['配图',q.ai_image,q.image_reason],['作答',q.ai_answer,q.answer_reason],
+      ['音频',q.ai_audio,q.audio_reason],['答错后',q.ai_post_error,q.post_error_reason]]
+    let fails,reasons,sugg
+    if(q.question_type==='错题截图'){
+      // 来自答题流程真实答错的题（已截图）
+      fails=[];reasons=['答题答错（已截图）'];sugg=['人工核对错题画面，针对薄弱点重点巩固']
+    }else{
+      fails=dims.filter(d=>d[1]===false)
+      reasons=fails.length?fails.map(d=>`${d[0]}: ${d[2]||'未通过'}`):['综合判定不通过']
+      sugg=fails.map(d=>WRONG_SUGGEST[d[0]]||'核对脚本修正').filter((v,i,a)=>a.indexOf(v)===i)
+    }
+    return `<div class="border border-[#fecaca] rounded-lg overflow-hidden">
+      <div class="flex items-center gap-2 px-2.5 py-1.5 bg-[#fef2f2]">
+        <span class="w-1.5 h-1.5 rounded-full bg-[#bc4742] shrink-0"></span>
+        <span class="text-[11px] font-semibold text-[#7f1d1d] truncate" title="${escHtml(id)}">${escHtml(fmtLoc(id,q))}</span>
+      </div>
+      <div class="px-2.5 py-2 text-[11px] text-[#475569] space-y-1.5">
+        <div><span class="font-semibold text-[#bc4742]">原因：</span>${escHtml(reasons.join('；'))}</div>
+        <div><span class="font-semibold text-[#2d6a4f]">建议：</span>${escHtml(sugg.join('；'))}</div>
+      </div>
     </div>`
   }).join('')
-  $('shotThumbs').innerHTML=list||'<div class="text-[10.5px] text-[#9aa5a0] text-center py-6 bg-[#faf8f3] rounded-lg">暂无</div>'
 }
 
 /* ========== 审查动作 ========== */
@@ -1178,6 +1279,14 @@ loadGradeTable()
 loadUL()
 loadKB()
 loadVersions()
+
+// ====== 首次访问自动弹出使用指南（看过之后不再自动弹） ======
+try{
+  if(!localStorage.getItem('yyb_guide_seen')){ setTimeout(()=>openGuide(),600) }
+}catch(e){}
+
+// ====== 默认切到 Tab1 任务配置 ======
+switchTab(1)
 
 // ====== 截图实时预览轮询 (每2秒) ======
 let _shotTimer=null

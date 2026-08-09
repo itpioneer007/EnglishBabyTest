@@ -3157,6 +3157,40 @@ def api_screenshot_latest():
     return jsonify({"error": "无截图"}), 404
 
 
+# ★ 常驻实时截图线程：web_server 启动即开始，每 3 秒截一张 outputs/web/live.png，
+#   供前端「手机画面」实时预览。设备未连接时静默重试（10s 间隔），不阻塞启动。
+#   （原实现只在任务运行时启动截图循环，任务一结束前端就显示最后一张旧图）
+_LIVE_SHOT = {"dev": None, "fail": 0}
+
+def _start_live_screenshot_daemon():
+    def _loop():
+        shot_dir = PROJECT_ROOT / "outputs" / "web"
+        try:
+            shot_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        while True:
+            try:
+                if _LIVE_SHOT["dev"] is None:
+                    try:
+                        _LIVE_SHOT["dev"] = _connect_device()
+                        _LIVE_SHOT["fail"] = 0
+                    except Exception:
+                        _LIVE_SHOT["dev"] = None
+                        _LIVE_SHOT["fail"] += 1
+                if _LIVE_SHOT["dev"] is not None:
+                    try:
+                        _LIVE_SHOT["dev"].screenshot(str(shot_dir / "live.png"))
+                        _LIVE_SHOT["fail"] = 0
+                    except Exception:
+                        _LIVE_SHOT["dev"] = None
+                        _LIVE_SHOT["fail"] += 1
+                time.sleep(3 if _LIVE_SHOT["fail"] == 0 else 10)
+            except Exception:
+                time.sleep(10)
+    threading.Thread(target=_loop, daemon=True).start()
+
+
 @app.route("/api/log")
 def api_log():
     """获取日志"""
@@ -3960,21 +3994,6 @@ def api_modules_run():
                 pass
             d = _connect_device()
 
-            # ---- 定时截图循环: 每3秒截一张到 outputs/web/live.png (前端实时预览) ----
-            shot_dir = PROJECT_ROOT / "outputs" / "web"
-            shot_dir.mkdir(parents=True, exist_ok=True)
-            _stop_shot = {"v": False}
-            def _shot_loop():
-                while not _stop_shot["v"]:
-                    try:
-                        d.screenshot(str(shot_dir / "live.png"))
-                    except Exception:
-                        pass
-                    time.sleep(3)
-            _shot_thread = threading.Thread(target=_shot_loop, daemon=True)
-            _shot_thread.start()
-            log_msg("📸 截图预览已开启（每3秒刷新）", "info")
-
             results = sched.run_all(module_names, d, version=version, grade=grade, units=units, stop_check=_is_stop_requested)
             # 保存结果供前端查询
             global _LAST_MODULES_RESULT
@@ -4052,5 +4071,8 @@ if __name__ == "__main__":
     config = load_config()
     detect_screen_resolution(config.device.serial)
     scale_all_coords()
-    
+
+    # ★ 常驻实时截图（前端「手机画面」随时可见，不再只在任务运行时才有）
+    _start_live_screenshot_daemon()
+
     app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
