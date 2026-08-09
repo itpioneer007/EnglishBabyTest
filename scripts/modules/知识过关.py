@@ -198,7 +198,9 @@ def _answer_loop(d, max_q=120):
             if "字母" in t and "补全" in t:
                 title_text = "fill_letters"
                 break
-            if "连词成句" in t:
+            # ★ 修复：圆圈排序/方框排序/连词成句的标题常为「听录音，给句子排序」「连词成句」等，
+            #   统一识别为 sentence_sort（该分支内部再按圆圈/方框分流）
+            if "排序" in t or "连词成句" in t:
                 title_text = "sentence_sort"
                 break
 

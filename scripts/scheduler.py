@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import uiautomator2 as u2
 from common.setup import switch_version_grade
-from common.tools import close_ad, dismiss_global_popups
+from common.tools import close_ad, dismiss_global_popups, settle_ads
 from common.logger import step_log
 
 # ═══════════ 模块注册表：新增模块只需在此加一行 ═══════════
@@ -107,25 +107,10 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
     #     否则重启 App 后主页广告/弹窗未关，后续点坐标会点到广告上！）
     step_log("🧹 清理广告弹窗...", "step")
     try:
-        # ★ 广告是延迟加载的（实测重启后 4-6s 才出现 fl_ad_container/iv_close）：
-        #   先轮询等广告出现再关，最多等 6s，避免关广告时广告还没加载出来
-        import re as _re2
-        for _wait in range(3):
-            try:
-                _xml_now = d.dump_hierarchy()
-                if 'fl_ad_container' in _xml_now or 'iv_close' in _xml_now or '关闭' in _xml_now:
-                    break
-            except Exception:
-                pass
-            time.sleep(2)
-        # ★ 优化：dismiss 已用一次 dump 判断，最多 2 轮（有弹窗才点，无弹窗立刻返回）
-        for _ in range(2):
-            if not dismiss_global_popups(d):
-                break
-        close_ad(d)
-        # 广告可能一次关不完（有多个），再确认一次
-        time.sleep(0.8)
-        close_ad(d)
+        # ★ 广告延迟加载（冷重启后 4-6s 甚至更晚才出现）+ 可能弹多个：
+        #   用 settle_ads 循环「检测→关闭→再检测」，连续 2 轮干净才继续，
+        #   消除"关早了→点空 / 点听力专项时广告刚弹出→误点广告"的竞态（用户实测根因）。
+        settle_ads(d, wait_total=12)
     except Exception as e:
         print(f"  ⚠ 关广告异常: {e}")
 

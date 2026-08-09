@@ -54,13 +54,35 @@ def close_ad(d):
     has_ad_text = any(kw in xml for kw in ("老师伴学", "打卡服务", "点击参与", "广告", "推广", "跳过"))
     has_close_btn = ('content-desc="关闭' in xml or 'text="关闭"' in xml)
     # ★ 实测：右下角广告卡片 fl_ad_container + 关闭按钮 iv_close（坐标 986,1823）
-    has_ad_card = ('fl_ad_container' in xml or 'iv_ad' in xml or 'iv_close' in xml)
+    # ★ 加固（用户反馈：担心广告关闭位置点错）：必须命中【可见】节点（visible-to-user="true"）
+    #   才算真广告，防止页面里隐藏/残留的广告容器 id 误触发坐标点击。
+    #   若解析到可见 iv_close 节点，优先用其真实 bounds 中心点击（更稳，不再依赖固定坐标）。
+    has_ad_card = False
+    _close_xy = None
+    try:
+        import re as _re3
+        for _m3 in _re3.finditer(r'<node[^>]*>', xml):
+            _t3 = _m3.group(0)
+            if any(_k in _t3 for _k in ('fl_ad_container', 'iv_ad', 'iv_close')):
+                if 'visible-to-user="true"' in _t3:
+                    has_ad_card = True
+                    _bm3 = _re3.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', _t3)
+                    if _bm3 and ('iv_close' in _t3 or 'iv_ad' in _t3):
+                        _x1, _y1, _x2, _y2 = map(int, _bm3.groups())
+                        _close_xy = ((_x1 + _x2) // 2, (_y1 + _y2) // 2)
+                    break
+    except Exception:
+        has_ad_card = ('fl_ad_container' in xml or 'iv_ad' in xml or 'iv_close' in xml)  # 解析失败保守处理
 
-    # 方式0（★ 最可靠）：检测到广告卡片 → 直接点关闭按钮坐标（实测 iv_close 中心 986,1823）
+    # 方式0（★ 最可靠）：检测到广告卡片 → 点关闭按钮（优先节点真实坐标，兜底实测坐标 986,1823）
     if has_ad_card:
         try:
-            d.click(*S(d, 986, 1823))
-            print("    🔔 通过广告卡片 iv_close 坐标 (986,1823) 关闭广告")
+            if _close_xy:
+                d.click(*S(d, *_close_xy))
+                print(f"    🔔 通过广告卡片关闭按钮真实坐标 {_close_xy} 关闭广告")
+            else:
+                d.click(*S(d, 986, 1823))
+                print("    🔔 通过广告卡片 iv_close 坐标 (986,1823) 关闭广告")
             time.sleep(0.35)
             return True
         except Exception:
@@ -255,6 +277,40 @@ def dismiss_global_popups(d):
         except Exception:
             pass
     return False
+
+def settle_ads(d, wait_total=10):
+    """等待广告加载并关闭，直到连续 2 轮确认无广告（最多 wait_total 秒）。
+
+    ★ 竞态根因（用户实测）：广告是延迟加载的（冷重启后 4-6s 甚至更晚才出现）。
+      - 若在广告出现前就点击 → 点空；
+      - 若在广告刚弹出的瞬间点击 → 误点广告 → 导航被带歪（找不到 tab/入口等怪异结果）。
+      本函数在关键点击前调用：循环「检测→关闭→再检测」，直到连续 2 轮干净才返回，
+      消除"点空/点广告"竞态。
+    返回 True（尽力而为）。
+    """
+    clean = 0
+    t0 = time.time()
+    while time.time() - t0 < wait_total:
+        closed = False
+        try:
+            if dismiss_global_popups(d):
+                closed = True
+        except Exception:
+            pass
+        try:
+            if close_ad(d):
+                closed = True
+        except Exception:
+            pass
+        if closed:
+            clean = 0
+            time.sleep(0.5)
+        else:
+            clean += 1
+            if clean >= 2:
+                return True
+            time.sleep(0.4)
+    return True
 
 def applock_blocked(d):
     """检测 OPPO 系统「应用锁」验证框（使用面部验证/密码验证，包 com.oplus.safecenter）。

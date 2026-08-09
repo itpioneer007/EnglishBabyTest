@@ -3436,16 +3436,15 @@ def api_audio_run():
             log_msg(f"启动听力专项 {mode} 模式: 练习单元{units} 测试单元{test_units}")
             sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
             from modules.听力专项 import run_module, run_test_module
-            from common.tools import dismiss_global_popups, close_ad, ensure_grade
+            from common.tools import dismiss_global_popups, close_ad, ensure_grade, settle_ads
             import uiautomator2 as u2
 
             d = _connect_device()
             log_msg("设备已连接")
 
             # 关广告 + 确认年级
-            for _ in range(3):
-                dismiss_global_popups(d)
-            close_ad(d)
+            # ★ 用 settle_ads 循环「检测→关闭→再检测」消除"点空/广告刚弹出时误点"竞态
+            settle_ads(d, wait_total=12)
             ok = ensure_grade(d, "五年级上册", "湘少版")
             log_msg("年级确认: 湘少版 五年级上册" if ok else "⚠ 年级切换失败，继续尝试")
 

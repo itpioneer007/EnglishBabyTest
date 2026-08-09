@@ -6,7 +6,7 @@ close_ad / ensure_grade / run_single_module 等核心逻辑
 import uiautomator2 as u2
 import time, re
 from config import MODULE_CONFIG, GLOBAL_POPUPS, APP_PACKAGE, GRADE_LEVEL, BOOK_VERSION
-from common.tools import S, S_swipe, S_h, S_w, applock_blocked
+from common.tools import S, S_swipe, S_h, S_w, applock_blocked, settle_ads
 from common.logger import step_log, should_stop
 
 
@@ -980,14 +980,35 @@ def run_single_module(d, module_name, config):
     print(f"  [1] 查找「{entry}」...")
     if not scroll_and_find(d, entry):
         print(f"  ❌ 未找到模块: {entry}"); return 0
+    # ★ 点击入口【前】必须先清广告：广告延迟加载并覆盖入口卡片，直接点文字坐标会
+    #   点到广告上 → 打开外链触发 OPPO 系统验证弹窗（使用面部验证/密码验证）→ 全流程卡死。
+    #   （用户定位：只有点到广告才会弹这个验证框）
+    settle_ads(d, wait_total=8)
     d(text=entry).click()
     print(f"  ✅ 已进入 {module_name}")
     time.sleep(0.8)
 
-    # ★ OPPO 应用锁偶发弹出，会盖住整个 App → 明确报错，避免静默失败产生怪异结果
+    # ★ 系统验证弹窗（点到广告触发）→ 先等它自动消失；持续不退 → back 关闭 + 清广告重试一次
     if applock_blocked(d):
-        print(f"  ❌ 被系统应用锁（使用面部验证/密码验证）挡住，请先在手机上解锁「{entry}」，再重新运行")
-        return 0
+        _cleared = False
+        for _lk in range(10):
+            time.sleep(0.5)
+            if not applock_blocked(d):
+                _cleared = True
+                break
+        if _cleared:
+            print(f"  ⏳ 系统验证弹窗已自动消失，继续…")
+        else:
+            d.press("back"); time.sleep(0.8)
+            settle_ads(d, wait_total=6)
+            if not applock_blocked(d):
+                print(f"  ⏳ 系统验证弹窗已关闭（疑似点到广告），已清广告，继续…")
+            else:
+                print(f"  ❌ 被系统验证（使用面部验证/密码验证）挡住，请先解锁「{entry}」，再重新运行")
+                return 0
+
+    # ★ 广告延迟加载：进入模块页后广告可能刚好弹出，先关干净再继续（避免后续点击误触广告）
+    settle_ads(d, wait_total=6)
 
     # 2. 空态检测
     for kw in config.get("empty_text", []):
