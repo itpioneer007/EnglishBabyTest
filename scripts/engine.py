@@ -6,7 +6,7 @@ close_ad / ensure_grade / run_single_module 等核心逻辑
 import uiautomator2 as u2
 import time, re
 from config import MODULE_CONFIG, GLOBAL_POPUPS, APP_PACKAGE, GRADE_LEVEL, BOOK_VERSION
-from common.tools import S, S_swipe, S_h, S_w
+from common.tools import S, S_swipe, S_h, S_w, applock_blocked
 from common.logger import step_log, should_stop
 
 
@@ -418,26 +418,21 @@ def _handle_sort_question(d, config):
                     btns.append((step * (2 * i + 1), int(h * 0.85), 0, 0))
         return btns
 
-    # 点 1-5 序号（每次动态检测按钮位置；填一个后若出现"检查/查看报告"则填完停止）
+    # 点 1-5 序号：每次动态检测序号栏，序号栏空了（全部填完）才停止。
+    # ★ 关键修复：之前"点一个序号发现检查出现就 break"是错的——点第一个序号后
+    #   "检查"就已出现，但必须填满所有序号才能提交，否则会漏答（只填1个就检查）。
     for target in range(1, 6):
-        # 每次重新检测序号栏（点完序号后检查按钮可能出现、布局上移）
+        # 每次重新检测序号栏（点完序号后该序号被消耗、栏位变化）
         btns = _find_num_btns()
         if not btns:
-            print(f"      ⚠ 找不到序号按钮（第{target}次），等待重试")
-            time.sleep(0.5)
-            continue
+            print(f"      → 序号栏已空，第{target-1}个序号填完")
+            break
         try:
             d.click(btns[0][0], btns[0][1])
             print(f"      → 点序号{target} @({btns[0][0]},{btns[0][1]})")
             time.sleep(0.5)
         except Exception:
             pass
-        # 填完一个后：检查/检测/查看报告出现 → 说明填完了，停止
-        if (d(text="检查").exists(timeout=0.8)
-                or d(text="检测").exists(timeout=0.8)
-                or d(text="查看报告").exists(timeout=0.8)):
-            print(f"      → 填完第{target}个后出现按钮，停止填序号")
-            break
 
     # 3. 出现检查 → 点它（兼容"检测"；最后一题检查后出"查看报告"也点）
     for _ in range(10):
@@ -988,6 +983,11 @@ def run_single_module(d, module_name, config):
     d(text=entry).click()
     print(f"  ✅ 已进入 {module_name}")
     time.sleep(0.8)
+
+    # ★ OPPO 应用锁偶发弹出，会盖住整个 App → 明确报错，避免静默失败产生怪异结果
+    if applock_blocked(d):
+        print(f"  ❌ 被系统应用锁（使用面部验证/密码验证）挡住，请先在手机上解锁「{entry}」，再重新运行")
+        return 0
 
     # 2. 空态检测
     for kw in config.get("empty_text", []):

@@ -256,6 +256,21 @@ def dismiss_global_popups(d):
             pass
     return False
 
+def applock_blocked(d):
+    """检测 OPPO 系统「应用锁」验证框（使用面部验证/密码验证，包 com.oplus.safecenter）。
+
+    冷重启 App 后偶发弹出，把整个 App 盖住，入口点击会静默失败 → 产生"找不到测试 tab/
+    找不到入口"等怪异结果。自动化无法绕过（需人脸/密码），命中时应明确报错提示用户解锁。
+    返回 True = 被应用锁挡住。
+    """
+    try:
+        xml = d.dump_hierarchy()
+        if "safecenter" in xml or "面部验证" in xml or "密码验证" in xml:
+            return True
+    except Exception:
+        pass
+    return False
+
 def scroll_and_find(d, text, max_swipes=5) -> bool:
     """查找文字：先直接找，然后向上滑（内容下移）找下方，再向下滑（内容上移）找上方"""
     if d(text=text).exists(timeout=2): return True

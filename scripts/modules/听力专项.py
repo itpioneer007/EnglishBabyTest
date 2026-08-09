@@ -19,7 +19,9 @@
      → _handle_sort_question
 """
 import os
-import sys, os, time
+import re
+import sys
+import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import uiautomator2 as u2
@@ -27,7 +29,7 @@ from common.logger import step_log
 from common.tools import (
     S, S_swipe, S_h, S_w,
     close_ad, dismiss_global_popups, ensure_grade, back_to_home, scroll_and_find,
-    smart_find_unit_row,
+    smart_find_unit_row, applock_blocked,
 )
 from engine import run_single_module
 
@@ -137,6 +139,8 @@ def _test_answer_loop(d, max_q=30):
     q = 0
     _idle = 0  # 连续空转计数：无选项/无按钮但页面没变化 → 防漏答最后一题后死循环
     _ev_q = -1  # 已发证据卡的题号（每题只发一次）
+    total_q = 0   # 总题数（界面右上角 "当前/总" 的右边数字，用户指出总题数在右上角右边）
+    cur_q = 0     # 当前题号
     for i in range(max_q):
         # ★ 每题界面级完整性检查证据（题型/题干/选项/音频/作答）→ 前端证据卡
         if q != _ev_q:
@@ -188,6 +192,34 @@ def _test_answer_loop(d, max_q=30):
         #   现改为：遍历整节点，单独提取 text 与 bounds（不要求 clickable/属性顺序），
         #   点击用坐标点击 d.click(x,y)。仍只 dump 一次，保留速度优化。
         xml_now = d.dump_hierarchy() if d else ""
+
+        # ★ 读取总题数（界面右上角 "当前/总"，用户指出总题数在右上角右边）
+        _m = re.search(r'text="(\d+)/(\d+)"', xml_now)
+        if _m:
+            cur_q = int(_m.group(1)); total_q = int(_m.group(2))
+
+        # ★ 排序题优先检测（必须放在字母/图片选项之前！）
+        #   排序题界面含 CheckBox(序号圆圈 img_sort_btn) 或 题干含"排序"，
+        #   会被下方"图片选项"分支(找 CheckBox)误捕获 → 点到序号圆圈而非图片 → 排序失败。
+        #   正确解法：图片排序(img_sort_btn)→_handle_sort_question 直接点所有大图片；
+        #            句子排序(题干"排序")→_handle_sentence_sort 直接点所有句子；序号自动填。
+        if 'img_sort_btn' in xml_now or '排序' in xml_now:
+            from engine import _handle_sort_question
+            # ★ 图片排序(img_sort_btn)与方框排序(题干"排序")都走 _handle_sort_question，
+            #   它内部按"有没有大图"自动区分：图片模式A / 方框模式B。
+            #   （之前 Q17 含"排序"被错路由到 _handle_sentence_sort 圆圈排序，
+            #    导致只点一个句子就放弃，且计数错乱）
+            _handle_sort_question(d, {})
+            q += 1
+            _idle = 0
+            step_log(f"  第{q}题(排序): 处理完毕 → 检查 (总题数 {total_q})", "info")
+            if d(text="查看报告").exists(timeout=1.5):
+                d(text="查看报告").click()
+                step_log(f"📊 测试完成，共{q}题", "success")
+                time.sleep(0.8)
+                return q
+            continue
+
         opt = None
         opt_xy = None
         import re as _re_opt
@@ -205,6 +237,20 @@ def _test_answer_loop(d, max_q=30):
                 opt = tm.group(1)
                 opt_xy = ((x1 + x2) // 2, (y1 + y2) // 2)
                 break
+        # ★ u2 原生兜底：dump 偶发截断/漏节点（实测页面有 T/F 但手写正则未命中），
+        #   d(text=...) 内部会自动重新 dump 且带超时重试，比手写正则更稳。
+        if opt is None:
+            for _ch in ("T", "F", "A", "B", "C", "D", "E"):
+                try:
+                    if d(text=_ch).exists(timeout=0.3):
+                        _b = d(text=_ch).bounds
+                        _x1, _y1, _x2, _y2 = _b[0], _b[1], _b[2], _b[3]
+                        if _y1 > 320 and (_x2 - _x1) >= 20 and (_y2 - _y1) >= 20:
+                            opt = _ch
+                            opt_xy = ((_x1 + _x2) // 2, (_y1 + _y2) // 2)
+                            break
+                except Exception:
+                    continue
         if opt:
             q += 1  # ★ 先计数再打印：第1题从1开始（原逻辑先打印第0题再+1，导致计数偏移）
             d.click(*opt_xy) if opt_xy else d(text=opt).click()
@@ -221,13 +267,13 @@ def _test_answer_loop(d, max_q=30):
                 time.sleep(0.15)
             continue
         # ★ 图片题选项：字母选项没有时，检测 CheckBox 候选（用户反馈：第16题是图片题）
-        #   同样稳健：先匹配 CheckBox 节点，再单独取 clickable + bounds（不要求属性顺序）
+        #   真机验证：选项 CheckBox 的 clickable="false"（如 T/F 判断框、图片选项框），
+        #   故此处【不要求 clickable】，只校验 bounds 在选项区（与字母分支一致）。
         _img_xy = None
         for m in _re_opt.finditer(r'<node[^>]*class="android\.widget\.CheckBox"[^>]*>', xml_now):
             tag = m.group(0)
-            cm = _re_opt.search(r'clickable="true"', tag)
             bm = _re_opt.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
-            if not (cm and bm):
+            if not bm:
                 continue
             x1, y1, x2, y2 = map(int, bm.groups())
             if y1 > 400:  # y>400 选项区
@@ -257,56 +303,8 @@ def _test_answer_loop(d, max_q=30):
             _handle_match_question(d, {})
             _idle = 0
             continue
-        # 排序题：先判断类型
-        #   句子圆圈排序题（听录音给句子排序）：句子前是圆圈，**没有底部序号按钮**，
-        #     直接按顺序点句子（序号自动填入 1,2,3...）→ _handle_sentence_sort
-        #   空方框排序题：句子是空方框（宽~228），需点方框激活 → 底部序号按钮才出现
-        #     → 点序号 → _handle_sort_question
-        if any(kw in texts for kw in ("排序", "给图片排序", "给句子排序", "听录音，给句子排序")):
-            from engine import _handle_sentence_sort, _handle_sort_question
-            xml = d.dump_hierarchy()
-            import re as _re
-            _wide = 0   # 整行句子数（宽>800 → 句子圆圈排序题特征）
-            _boxes = 0  # 空方框数（宽 100-300 → 空方框排序题特征）
-            for m in _re.finditer(
-                r'class="android\.widget\.LinearLayout"[^>]*clickable="true"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
-                xml
-            ):
-                x1, y1, x2, y2 = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
-                w, h = x2 - x1, y2 - y1
-                if w > 800 and 700 < y1 < 1900:
-                    _wide += 1
-                elif 100 < w < 300 and 100 < h < 140 and 700 < y1 < 1500:
-                    _boxes += 1
-            # ★ CheckBox 整行句子（圆圈排序题：option_cb CheckBox，宽>800 带文本）
-            #   这也是句子圆圈排序题，必须计入 _wide，否则会被误判成方框题
-            #   ★ dump 属性顺序 text 在 class 前面，必须整节点匹配
-            for m in _re.finditer(r'<node[^>]*class="android\.widget\.CheckBox"[^>]*/?>', xml):
-                tag = m.group(0)
-                tm = _re.search(r'text="([^"]{6,})"', tag)
-                bm = _re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
-                if not (tm and bm):
-                    continue
-                x1, y1, x2, y2 = int(bm.group(1)), int(bm.group(2)), int(bm.group(3)), int(bm.group(4))
-                w = x2 - x1
-                if w > 800 and 700 < y1 < 1900:
-                    _wide += 1
-            if _wide >= 3:
-                print(f"    🎯 句子圆圈排序题（整行{_wide}句）→ 直接点句子（序号自动填）")
-                _handle_sentence_sort(d, {})
-            else:
-                print(f"    🎯 空方框排序题（方框{_boxes}个）→ 点方框激活+点序号")
-                _handle_sort_question(d, {})
-            q += 1  # ★ 先计数（与选择分支一致）
-            _idle = 0
-            # 排序题完成后（最后一题）：查看报告出现 → 点击并完成
-            if d(text="查看报告").exists(timeout=1.5):
-                d(text="查看报告").click()
-                print("      → 查看报告！测试完成")
-                step_log(f"📊 测试完成，共{q}题", "success")
-                time.sleep(0.8)
-                return q
-            continue
+        # ★ 排序题已在上方「排序题优先检测」块处理（img_sort_btn / 题干含"排序"），
+        #   此处不再重复；保留空分支避免误触（若上方未捕获将 fall through 到无选项分支）。
         # 无选项无按钮 → 检查页面/加载中/最后一题报告页
         # ★ 空转保护：页面没变化连续多轮 → 可能已答完最后一题但"查看报告"未识别到，
         #   再检测一次"查看报告/完成"再退出，避免漏答/提前 back
@@ -323,6 +321,16 @@ def _test_answer_loop(d, max_q=30):
             return q
         _idle += 1
         if _idle >= 12:
+            # ★ 页面仍显示题号（如 "1/17"）说明确实在答题页，只是选项未渲染/加载慢，
+            #   多等几轮再退出（用户反馈：测试答题界面 T/F 按钮有时延迟出现）
+            _qno_m = re.search(r"\d+/\d+", _no_opt_text)
+            if _qno_m:
+                step_log(f"⚠ 答题页选项未渲染（{_idle}轮，题号 {_qno_m.group(0)}），继续等待…", "warning")
+                if _idle >= 25:
+                    step_log(f"⚠ 连续 {_idle} 轮无有效选项，退出", "warning")
+                    return q
+                time.sleep(2.0)
+                continue
             step_log(f"⚠ 连续 {_idle} 轮无有效选项（可能停在非答题页/最后一题未识别），退出", "warning")
             return q
         print(f"    ⚠ 无选项({_idle}): {texts2[:6]}")
@@ -346,6 +354,10 @@ def run_test_module(d, test_units=None):
         if not scroll_and_find(d, "听力专项"):
             print("  ❌ 找不到听力专项入口"); return 0
         d(text="听力专项").click(); time.sleep(1.2)
+        # ★ OPPO 应用锁偶发弹出（使用面部验证/密码验证）→ 明确报错，避免静默失败
+        if applock_blocked(d):
+            print("  ❌ 被系统应用锁（使用面部验证/密码验证）挡住，请先在手机上解锁「听力专项」，再重新运行")
+            return 0
     if not d(text="测试").exists(timeout=3):
         print("  ❌ 找不到测试 tab"); return 0
     d(text="测试").click(); time.sleep(1.2)

@@ -3924,14 +3924,35 @@ def api_modules_run():
         except SystemExit:
             # 前端"立即停止"注入的异常：记录并正常收尾
             log_msg("⏹ 任务已被立即停止", "warning")
+            _LAST_MODULES_RESULT = {
+                "done": True,
+                "version": version,
+                "grade": grade,
+                "stopped": True,
+                "error": "任务已被手动停止",
+                "results": {},
+            }
         except Exception as e:
             log_msg(f"多模块检测异常: {e}", "error")
+            _LAST_MODULES_RESULT = {
+                "done": True,
+                "version": version,
+                "grade": grade,
+                "error": str(e),
+                "results": {},
+            }
         finally:
             # 清理停止标志，供下次任务使用
             global _STOP_REQUESTED
             with _STOP_LOCK:
                 _STOP_REQUESTED = False
             set_done()
+
+    # ★ 修复：新任务启动前清空上次结果，否则前端轮询 /api/modules/result 会
+    #   立刻拿到旧任务的 done=true 结果（表现为"2秒全部完成+旧题数"假象），
+    #   把当前真正在跑的任务结果盖掉。
+    global _LAST_MODULES_RESULT
+    _LAST_MODULES_RESULT = None
 
     _MODULES_RUNNER = threading.Thread(target=_run, daemon=True)
     _MODULES_RUNNER.start()
