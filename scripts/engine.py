@@ -9,6 +9,18 @@ from config import MODULE_CONFIG, GLOBAL_POPUPS, APP_PACKAGE, GRADE_LEVEL, BOOK_
 from common.tools import S, S_swipe, S_h, S_w
 from common.logger import step_log, should_stop
 
+
+def _find_control(xml: str, keywords: tuple) -> tuple:
+    """在 XML 中查找含关键词的控件节点，返回 (found, clickable)"""
+    for m in re.finditer(r'<node[^>]*>', xml):
+        tag = m.group(0)
+        for kw in keywords:
+            if kw in tag:
+                clickable = 'clickable="true"' in tag
+                return True, clickable
+    return False, False
+
+
 def close_ad(d):
     """关闭广告：多种策略按顺序尝试"""
     # 方式1：contentDescription 包含"关闭"
@@ -719,14 +731,49 @@ def _answer_loop(d, config, module_name):
             ev.append({"field": "选项", "type": "text_ok" if opts_found else "text_mismatch",
                        "expected": "存在可选项", "actual": ",".join(opts_found) or "(无)",
                        "diff": f"检测到 {len(opts_found)} 个选项"})
-            # ④ 音频控件（听力题小喇叭/播放按钮）
-            has_audio = ("喇叭" in _xml or "播放" in _xml
-                         or 'content-desc="播放' in _xml or "ic_play" in _xml
-                         or "btn_play" in _xml or "audio" in _xml.lower())
-            ev.append({"field": "音频", "type": "text_ok" if has_audio else "skip",
-                       "expected": "播放控件可见" if has_audio else "非音频题或无需检查",
-                       "actual": "存在播放控件" if has_audio else "—",
-                       "diff": "播放按钮可见" if has_audio else "本题无音频控件"})
+            # ④ 音频/语音控件检查（★ 结合题型：听力题查扬声器、口语题查小喇叭+麦克风，均查可点击）
+            # ★ 关键词判断直接基于整段 XML（短题干如"跟读句子"也能命中）
+            LISTEN_KWS = ("听录音", "听音", "听一听", "听对话", "听短文", "听句子",
+                          "听单词", "listen", "听下面", "听材料", "听问题")
+            SPEAK_KWS = ("朗读", "读一读", "跟读", "读单词", "读句子", "大声读",
+                         "repeat", "口语", "跟录音读")
+            is_listening = any(kw in _xml for kw in LISTEN_KWS)
+            is_speaking = any(kw in _xml for kw in SPEAK_KWS)
+            PLAY_KWS = ("播放", "喇叭", "扬声器", "ic_play", "btn_play",
+                        "play_btn", "audio", "sound", "▶")
+            MIC_KWS = ("麦克风", "录音", "record", "mic", "开始作答")
+            play_found, play_clickable = _find_control(_xml, PLAY_KWS)
+            mic_found, mic_clickable = _find_control(_xml, MIC_KWS)
+            if is_listening:
+                if play_found:
+                    ev.append({"field": "音频", "type": "text_ok" if play_clickable else "text_mismatch",
+                               "expected": "听力题须有可点击的扬声器",
+                               "actual": "播放控件" + ("(可点击)" if play_clickable else "(存在但不可点击)"),
+                               "diff": ("扬声器/播放标识可见且可点击（题干含'听录音'）" if play_clickable
+                                        else "⚠ 扬声器存在但不可点击（无法播放音频）")})
+                else:
+                    ev.append({"field": "音频", "type": "text_mismatch",
+                               "expected": "听力题须有扬声器/播放标识",
+                               "actual": "未检测到播放控件",
+                               "diff": "⚠ 题干含'听录音'但页面未检测到扬声器/播放标识"})
+            elif is_speaking:
+                ev.append({"field": "音频", "type": "text_ok" if play_clickable else "text_mismatch",
+                           "expected": "口语题须有可点击的播放控件(小喇叭/导读音频)",
+                           "actual": "播放控件" + ("(可点击)" if play_clickable else "(存在但不可点击)") if play_found else "未检测到播放控件",
+                           "diff": ("小喇叭/播放标识可见且可点击" if play_clickable
+                                    else ("⚠ 小喇叭存在但不可点击（无法播放音频）" if play_found
+                                          else "⚠ 口语题未检测到小喇叭/播放控件"))})
+                ev.append({"field": "作答", "type": "text_ok" if mic_clickable else "text_mismatch",
+                           "expected": "口语题须有可点击的麦克风(录音作答)",
+                           "actual": "麦克风/录音控件" + ("(可点击)" if mic_clickable else "(存在但不可点击)") if mic_found else "未检测到麦克风",
+                           "diff": ("麦克风/录音控件可见且可点击" if mic_clickable
+                                    else ("⚠ 麦克风存在但不可点击（无法录音）" if mic_found
+                                          else "⚠ 口语题未检测到麦克风/录音控件"))})
+            else:
+                ev.append({"field": "音频", "type": "skip",
+                           "expected": "非听力/口语题",
+                           "actual": "—",
+                           "diff": "题干无'听录音/朗读'等关键词，本题非听力/口语题，无需音频"})
             # ⑤ 作答元素（检查/录音/输入框）
             has_act = ("检查" in _xml or "录音" in _xml or "完成" in _xml
                        or "EditText" in _xml)
@@ -809,6 +856,9 @@ def _answer_loop(d, config, module_name):
         # 题型识别：基于缓存的字符串匹配（不再调 xpath）
         qtype = _detect_question_type_cached(_xml, config)
         if qtype == "sort_questions":
+            q += 1  # ★ 排序题计数（之前遗漏，导致总题数少）
+            step_log(f"📸 第{q}题（排序题）", "step")
+            step_log(f"  第{q}题 检查", "info", _collect_ui_evidence("排序题"))
             _has_circle = 0
             for _m in re.finditer(r'<node[^>]*class="android\.widget\.CheckBox"[^>]*/?>', _xml):
                 _tag = _m.group(0)
@@ -825,6 +875,9 @@ def _answer_loop(d, config, module_name):
             _idle = 0
             time.sleep(0.4); _need_dump = True; continue
         elif qtype == "match_questions":
+            q += 1  # ★ 匹配题计数（之前遗漏，导致总题数少）
+            step_log(f"📸 第{q}题（匹配题）", "step")
+            step_log(f"  第{q}题 检查", "info", _collect_ui_evidence("匹配题"))
             _handle_match_question(d, config)
             _idle = 0
             time.sleep(0.4); _need_dump = True; continue

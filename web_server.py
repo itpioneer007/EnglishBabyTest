@@ -112,6 +112,29 @@ def _is_stop_requested():
     with _STOP_LOCK:
         return _STOP_REQUESTED
 
+
+def _request_stop():
+    """统一停止入口：设置协作式停止标志 + 向任务线程注入 SystemExit 强制中断
+
+    所有停止接口（modules/stop、inspect/stop、audio/stop 等）必须走这里，
+    否则只改 running=False 无法真正停止脚本（线程内部不检查 running）。
+    返回 True 表示已向任务线程发送强制中断信号。
+    """
+    global _STOP_REQUESTED
+    if not task_status["running"]:
+        return False, "没有正在运行的任务"
+    # 1. 设协作式标志（scheduler/engine/模块循环内的 should_stop() 立即感知）
+    with _STOP_LOCK:
+        _STOP_REQUESTED = True
+    # 2. 立即强制中断线程（下一条 Python 字节码处抛 SystemExit；若阻塞在
+    #    u2 HTTP/time.sleep，最长等 HTTP_TIMEOUT=15s 返回后立即抛出）
+    forced = _force_stop_thread()
+    log_msg("⏹ 收到停止请求，立即中断任务…", "warning")
+    if not forced:
+        log_msg("⚠ 强制中断未生效，任务将在当前步骤结束后停止", "warning")
+    return forced, ("停止信号已发送，任务已中断" if forced
+                    else "停止信号已发送，等待当前步骤结束")
+
 # 模块坐标（从 uiautomator dump 获取的精确坐标）
 MODULE_COORDS = {
     # 教材精学 (人教版下的坐标)
@@ -270,6 +293,17 @@ def log_msg(msg: str, level: str = "info", evidence: list = None):
         safe_msg = msg.encode("gbk", errors="replace").decode("gbk")
         print(f"[{entry['time']}] [{level}] {safe_msg}")
 
+    # ★ 每题界面级完整性检查证据 → 同步写入审查结果区（多模块检测也能看到 AI 判断）
+    #   触发条件：消息含"第N题 检查"且带 evidence（来自 engine.py _collect_ui_evidence）
+    if evidence and isinstance(evidence, list) and evidence:
+        try:
+            m = re.match(r"第(\d+)题\s*检查", msg)
+            if m:
+                qidx = int(m.group(1))
+                _record_module_evidence(qidx, msg, evidence)
+        except Exception:
+            pass
+
 # 注入共享日志通道：让 scheduler 和模块内部的流程日志也能送到前端
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 from common.logger import set_log_callback, set_stop_check
@@ -340,6 +374,14 @@ def set_done():
     """设置为完成"""
     task_status["running"] = False
     task_status["end_time"] = datetime.now().strftime("%H:%M:%S")
+
+
+def _cleanup_task_state():
+    """任务线程统一收尾：清 running 状态 + 重置停止标志（供正常/停止/异常所有路径调用）"""
+    global _STOP_REQUESTED
+    with _STOP_LOCK:
+        _STOP_REQUESTED = False
+    set_done()
 
 
 def update_progress(step: int, total: int, msg: str):
@@ -1293,6 +1335,12 @@ def _no_cache(resp):
 def index():
     """前端页面"""
     return render_template("index.html")
+
+
+@app.route("/trace")
+def trace_page():
+    """错题溯源页面"""
+    return render_template("trace.html")
 
 
 @app.route("/api/status")
@@ -2266,6 +2314,7 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
                         ))
                 except SystemExit:
                     log_msg("⏹ 任务已被立即停止", "warning")
+                    raise  # ★ 必须重新抛出，让注入的 SystemExit 继续传播到任务线程外层收尾
                 except Exception as e:
                     log_msg(f"  审查异常: {e}", "warning")
 
@@ -2394,13 +2443,14 @@ def api_inspect_run():
 
 @app.route("/api/inspect/stop", methods=["POST"])
 def api_inspect_stop():
-    """停止正在运行的任务"""
+    """停止正在运行的任务（设置停止标志 + 强制中断线程，与 modules/stop 一致）"""
     if not task_status["running"]:
         return jsonify({"status": "idle", "message": "没有正在运行的任务"})
+    # ★ 必须真正停止：只设 running=False 无法中断脚本线程（线程内部不检查 running），
+    #   先执行统一停止（标志 + 注入 SystemExit），再清 running 状态
+    forced, message = _request_stop()
     task_status["running"] = False
-    log_msg("⏹ 任务已被手动停止", "warning")
-    # 不立即set_done(), 等线程自己结束
-    return jsonify({"status": "stopping", "message": "停止信号已发送"})
+    return jsonify({"status": "stopping", "message": message})
 
 
 # ============================================================
@@ -2423,6 +2473,150 @@ def _save_inspection_state():
         json.dumps(_inspection_state, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+
+# ★ 多模块检测每题界面级证据 → 审查结果区（无脚本也能展示 AI 通过/不通过）
+def _record_module_evidence(qidx: int, msg: str, evidence: list):
+    """把 engine.py 每题收集的 5 维界面证据（题型/题干/选项/音频/作答）
+    映射成前端六维卡片字段写入 _inspection_state["questions"]。
+
+    判定规则：
+      - text_ok → 通过(true)；text_mismatch → 不通过(false)；skip → 未检(None)
+      - overall: 可查维度≥3且无不通过 → 通过；否则 → 不通过；全是 skip → 未审
+    """
+    global _inspection_state
+    # 证据维度 → 前端六维映射（"题型"不映射到任何六维，仅作为元信息）
+    field_map = {
+        "题干": "stem",
+        "选项": "content",
+        "音频": "audio",
+        "作答": "answer",
+    }
+    dims = {"stem": None, "content": None, "image": None,
+            "answer": None, "audio": None, "post_error": None}
+    reasons = {"stem": "", "content": "", "image": "",
+               "answer": "", "audio": "", "post_error": ""}
+
+    # 收集实际显示文字（题干+选项，供前端卡展示）
+    stem_text = ""
+    option_text = ""
+    question_type = "界面检查"  # 默认
+
+    for e in evidence:
+        field = e.get("field", "")
+        # 题型识别 → 只更新 question_type
+        if field == "题型":
+            diff = e.get("diff") or ""
+            if diff and ("[" in diff):
+                question_type = diff.split("[")[1].split("]")[0] if "]" in diff else diff
+            continue
+
+        dim = field_map.get(field)
+        if not dim:
+            continue
+        etype = e.get("type", "")
+        # ★ mismatch 优先：同一维度多条证据时，只要有一条不通过就判不通过
+        #   （口语题麦克风不可点 + 通用"作答元素存在"同时写入 answer 维度时，
+        #     不通过不能被后写的通过覆盖）
+        if etype == "text_ok":
+            if dims[dim] is not False:
+                dims[dim] = True
+        elif etype == "text_mismatch":
+            dims[dim] = False
+        else:
+            if dims[dim] is None:
+                dims[dim] = None
+
+        # ★ 提取实际文字：题干/选项的实际内容
+        actual = e.get("actual") or ""
+        if field == "题干" and actual and actual != "(无题干文字)" and actual != "(无)":
+            stem_text = actual[:150]
+        if field == "选项" and actual:
+            option_text = actual[:120]
+
+        # ★ 生成自然语言原因（检查人员一眼能看懂；不通过原因优先保留）
+        diff_str = e.get("diff") or ""
+        if etype == "text_mismatch":
+            reasons[dim] = _fmt_reason(field, diff_str, "不通过")
+        elif etype == "text_ok":
+            # 仅当该维度最终判定不是不通过时才写"通过"原因（避免覆盖不通过信息）
+            if dims[dim] is not False:
+                reasons[dim] = _fmt_reason(field, diff_str, "通过")
+        else:
+            reasons[dim] = f"{field}未检（需截图/脚本对照）" if diff_str else ""
+
+    # 配图/答错后 两维在多模块检测中不可查（需连手机截图）
+    if dims["image"] is None:
+        reasons["image"] = "需连手机截图检查配图"
+    if dims["post_error"] is None:
+        reasons["post_error"] = "需答错后截图验证"
+    # 音频非必须（听力题才要求）
+    if dims["audio"] is None:
+        reasons["audio"] = "非听力题，无需检查"
+
+    # ★ 综合判定：可查维度数（非None）≥3 且 无任何不通过 → 通过
+    checked = [d for d in dims.values() if d is not None]
+    failed = [d for d in dims.values() if d is False]
+    passed_cnt = sum(1 for d in dims.values() if d is True)
+
+    if not checked:
+        overall = None   # 全未检 → 未审查
+    elif failed:
+        overall = False  # 任何不通过 → 不通过
+    elif len(checked) >= 3:
+        overall = True   # 至少查到3维且全通过 → 通过
+    else:
+        overall = None   # 检查不足3维 → 标未审
+
+    total = len(_inspection_state.get("questions", {})) + 1
+    qid = f"auto-Q{qidx:03d}"
+
+    # ★ 描述文字：让检查人员知道题目大概内容和位置
+    if not stem_text:
+        stem_text = f"第{qidx}题（{question_type}）"
+
+    _inspection_state["questions"][qid] = {
+        "idx": qidx,
+        "total": total,
+        "question_type": question_type,
+        "screenshot": "",
+        "progress": f"Q{qidx}",
+        # 六维判定
+        "ai_stem": dims["stem"], "ai_content": dims["content"],
+        "ai_image": dims["image"], "ai_answer": dims["answer"],
+        "ai_audio": dims["audio"], "ai_post_error": dims["post_error"],
+        "overall_passed": overall,
+        "overall_score": round(passed_cnt / max(len(checked), 1), 2) if checked else 0.0,
+        # 详细原因（自然语言）
+        "stem_reason": reasons["stem"], "content_reason": reasons["content"],
+        "image_reason": reasons["image"], "answer_reason": reasons["answer"],
+        "audio_reason": reasons["audio"], "post_error_reason": reasons["post_error"],
+        # ★ 题目内容展示文字
+        "stem": stem_text,
+        "options": option_text,
+        "script_answer": "",
+        "note": "",
+        "human_label": None,
+        "human_note": "",
+        "timestamp": datetime.now().isoformat(),
+    }
+    _inspection_state["current_question_idx"] = qidx
+    # ★ 每 10 题保存一次到文件（供错题溯源 trace 页面读取，避免只存内存导致 trace 看不到）
+    if total % 10 == 0:
+        try:
+            _save_inspection_state()
+        except Exception:
+            pass
+
+
+def _fmt_reason(field: str, diff: str, verdict: str) -> str:
+    """生成自然语言原因描述，让检查人员一眼看懂"""
+    prefix = {"题干": "界面题干", "选项": "可选项", "音频": "音频控件", "作答": "作答元素"}.get(field, field)
+    if diff and len(diff) < 50:
+        return f"{prefix}: {diff}"
+    if verdict == "通过":
+        return f"{prefix}正常 ✓"
+    return f"{prefix}异常 ✗"
 
 
 # ===== 快速检查(从当前页开始) =====
@@ -3269,6 +3463,7 @@ def api_audio_run():
             set_done()
         except SystemExit:
             log_msg("⏹ 任务已被立即停止", "warning")
+            _cleanup_task_state()  # 统一收尾: 清running + 重置停止标志
         except Exception as e:
             log_msg(f"❌ 任务异常: {e}", "error")
             set_done()
@@ -3323,6 +3518,7 @@ def api_oral_run():
             set_done()
         except SystemExit:
             log_msg("⏹ 任务已被立即停止", "warning")
+            _cleanup_task_state()  # 统一收尾: 清running + 重置停止标志
         except Exception as e:
             log_msg(f"❌ 任务异常: {e}", "error")
             set_done()
@@ -3376,6 +3572,7 @@ def api_unit_run():
             set_done()
         except SystemExit:
             log_msg("⏹ 任务已被立即停止", "warning")
+            _cleanup_task_state()  # 统一收尾: 清running + 重置停止标志
         except Exception as e:
             log_msg(f"❌ 任务异常: {e}", "error")
             set_done()
@@ -3429,6 +3626,7 @@ def api_knowledge_run():
             set_done()
         except SystemExit:
             log_msg("⏹ 任务已被立即停止", "warning")
+            _cleanup_task_state()  # 统一收尾: 清running + 重置停止标志
         except Exception as e:
             log_msg(f"❌ 任务异常: {e}", "error")
             set_done()
@@ -3476,6 +3674,7 @@ def api_voice_run():
             set_done()
         except SystemExit:
             log_msg("⏹ 任务已被立即停止", "warning")
+            _cleanup_task_state()  # 统一收尾: 清running + 重置停止标志
         except Exception as e:
             log_msg(f"❌ 任务异常: {e}", "error")
             set_done()
@@ -3528,6 +3727,7 @@ def api_qiaoji_run():
             set_done()
         except SystemExit:
             log_msg("⏹ 任务已被立即停止", "warning")
+            _cleanup_task_state()  # 统一收尾: 清running + 重置停止标志
         except Exception as e:
             log_msg(f"❌ 任务异常: {e}", "error")
             set_done()
@@ -3581,6 +3781,7 @@ def api_setup():
                 log_msg("切换失败，请重试", "error")
         except SystemExit:
             log_msg("⏹ 任务已被立即停止", "warning")
+            _cleanup_task_state()  # 统一收尾: 清running + 重置停止标志
         except Exception as e:
             log_msg(f"切换异常: {e}", "error")
 
@@ -3597,19 +3798,11 @@ _LAST_MODULES_RESULT = None
 
 @app.route("/api/modules/stop", methods=["POST"])
 def api_modules_stop():
-    """立即停止正在运行的任务（注入异常强制中断线程，不再执行脚本内容）"""
-    global _STOP_REQUESTED
-    if not task_status["running"]:
-        return jsonify({"status": "idle", "message": "没有正在运行的任务"})
-    # 1. 设协作式标志（答题循环也感知）
-    with _STOP_LOCK:
-        _STOP_REQUESTED = True
-    # 2. 立即强制中断线程（无论脚本执行到哪，下一条字节码处抛出 SystemExit）
-    forced = _force_stop_thread()
-    log_msg("⏹ 收到停止请求，立即中断任务…", "warning")
-    if not forced:
-        log_msg("⚠ 强制中断未生效，任务将在当前步骤结束后停止", "warning")
-    return jsonify({"status": "stopping", "message": "停止信号已发送，任务已中断"})
+    """立即停止正在运行的任务（设置停止标志 + 注入异常强制中断线程）"""
+    forced, message = _request_stop()
+    if not task_status["running"] and not forced:
+        return jsonify({"status": "idle", "message": message})
+    return jsonify({"status": "stopping", "message": message})
 
 
 @app.route("/api/modules/run", methods=["POST"])
@@ -3623,6 +3816,10 @@ def api_modules_run():
     global _MODULES_RUNNER
     if task_status["running"]:
         return jsonify({"error": "已有任务在运行"}), 409
+
+    # 清空审查结果区（避免上次任务的题目残留）
+    _inspection_state["questions"] = {}
+    _inspection_state["current_question_idx"] = 0
 
     data = request.get_json() or {}
     version = (data.get("version") or "湘少版").strip()

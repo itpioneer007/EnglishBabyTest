@@ -246,7 +246,7 @@ class ReviewAgent:
         """
         # ★ 实时题型优先：手机页面实际识别出的题型 > 脚本题型
         qtype = q.type_2 or ""
-        is_audio_q = ("听音" in qtype or "音频" in qtype)
+        is_audio_q = ("听音" in qtype or "听力" in qtype or "音频" in qtype)
         is_image_q = ("图片" in qtype or "看图" in qtype)
         _orig_type2 = q.type_2  # 备份，_review_batch/_check_image 读 q.type_2
         if detected is not None:
@@ -327,8 +327,8 @@ class ReviewAgent:
         """
         import re as _re
         qtype = q.type_2 or ""
-        # 听音/图片类题型：题干与选项内容在音频/图片中，脚本文字里没有，属正常
-        is_audio_q = ("听音" in qtype or "音频" in qtype)
+        # 听音/听力/图片类题型：题干与选项内容在音频/图片中，脚本文字里没有，属正常
+        is_audio_q = ("听音" in qtype or "听力" in qtype or "音频" in qtype)
         is_image_q = ("图片" in qtype or "看图" in qtype)
 
         # (1) 题干检查

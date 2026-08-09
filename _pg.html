@@ -85,14 +85,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
 .q-dim.skip{background:#faf8f3;border-color:var(--line)}
 .q-dim.skip .st{color:var(--gray-2)}
 .q-reasons{font-size:12.5px;color:#475569;background:#faf8f3;border-radius:8px;padding:9px 13px;margin-bottom:9px;line-height:1.8}
-.q-reasons.ok{color:var(--ok-ink);background:var(--ok-bg)}
 .q-reasons b{color:var(--green-deep)}
-.q-reason-line{font-size:11.5px;margin-bottom:2px}
-/* ★ 题目内容展示区 */
-.q-content{margin-bottom:8px;padding:8px 11px;background:#f0f7f4;border-radius:8px;border-left:3px solid var(--green-deep)}
-.q-stem{font-size:13px;color:#1a202c;font-weight:500;line-height:1.6;word-break:break-all}
-.q-opts{font-size:12px;color:#475569;margin-top:4px;line-height:1.5}
-/* ★ 错误报告汇总卡片 */
 .q-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .q-actions .note{flex:1;min-width:100px;padding:6px 10px;border:1.5px solid var(--line);border-radius:7px;font-size:12.5px;outline:none;background:#fff}
 .q-actions .note:focus{border-color:var(--green-light)}
@@ -436,7 +429,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
 
 <script>
 const $=id=>document.getElementById(id)
-function escHtml(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 let logLast=0,_devListTs=0,_lastLogs=0
 
 /* ========== 截图放大 ========== */
@@ -982,21 +974,7 @@ function updQ(f){
       const stTxt=(v===true)?'通过':(v===false?'不通过':'未检')
       return `<div class="q-dim ${stCls}"><div class="label">${d[0]}</div><div class="st">${stTxt}</div></div>`
     }).join('')
-    // ★ 生成题目内容展示区域：显示题干文字 + 选项（让检查人员知道这题是什么）
-    const stemTxt=(q.stem||'').trim()
-    const optTxt=(q.options||'').trim()
-    let contentHtml=''
-    if(stemTxt&&stemTxt!==`第${q.idx}题（${q.question_type||''}）`){
-      contentHtml+=`<div class="q-stem">${escHtml(stemTxt)}</div>`
-    }
-    if(optTxt){
-      contentHtml+=`<div class="q-opts">选项: ${escHtml(optTxt)}</div>`
-    }
-    // 简化的原因展示：只显示不通过/异常的维度原因（一屏看清）
-    const failReasons=dims.filter(d=>d[1]===false||(d[1]===null&&d[2]&&!d[2].includes('无需检查')))
-    const reasonHtml=failReasons.length
-      ? `<div class="q-reasons">${failReasons.map(d=>`<div class="q-reason-line"><b>${d[0]}:</b> ${escHtml(d[2]||'?')}</div>`).join('')}</div>`
-      : `<div class="q-reasons ok">全部通过</div>`
+    const reasonHtml=`<b>(1)题干:</b> ${dims[0][2]||'-'}<br><b>(2)内容:</b> ${dims[1][2]||'-'}<br><b>(3)配图:</b> ${dims[2][2]||'-'}<br><b>(4)作答:</b> ${dims[3][2]||'-'}<br><b>(5)音频:</b> ${dims[4][2]||'-'}<br><b>(6)答错后:</b> ${dims[5][2]||'-'}`
     const actHtml = q.human_label
       ? `<span class="done-tag">已标注: ${q.human_label}${q.human_note?' · '+q.human_note:''}</span>`
       : `<span class="action-label">人工判断</span>
@@ -1013,7 +991,6 @@ function updQ(f){
         </div>
       </div>
       <div class="q-body">
-        ${contentHtml?`<div class="q-content">${contentHtml}</div>`:''}
         <div class="q-dims">${dimHtml}</div>
         <div class="q-reasons">${reasonHtml}</div>
         <div class="q-actions">${actHtml}</div>
