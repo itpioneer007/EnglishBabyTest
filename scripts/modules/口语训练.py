@@ -193,7 +193,19 @@ def _answer_big_question(d, big_idx=0):
     - 答完所有小题 → 出现「下一题」或「交卷」
     """
     q = 0
+    _ev_q = -1  # 已发证据卡的题号（每题只发一次）
     for _ in range(15):  # 最多15小题（包含若干道口语题）
+        # ★ 每题界面级完整性检查证据（题型/题干/选项/音频/作答）→ 前端证据卡
+        #   口语题为录音作答：证据卡会显示"录音/麦克风"作答元素 + 题干文字
+        if q != _ev_q:
+            try:
+                _xml_ev = d.dump_hierarchy()
+                from common.evidence import collect_ui_evidence
+                step_log(f"  第{q+1}题 完整性检查", "info",
+                         collect_ui_evidence(_xml_ev, qtype="口语训练"))
+                _ev_q = q
+            except Exception:
+                pass
         # ★ 停止检查：web_server 收到停止请求 → 中断
         if should_stop():
             step_log("⏹ 收到停止请求，中断当前模块", "warning")

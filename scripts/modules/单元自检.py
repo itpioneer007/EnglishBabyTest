@@ -21,6 +21,7 @@ from common.tools import (
     smart_find_unit_row,
 )
 from common.logger import step_log
+from common.evidence import collect_ui_evidence
 from common.screenshot import shot_to_file
 from engine import _handle_match_question, _handle_sort_question
 
@@ -109,9 +110,16 @@ def _answer_loop(d, max_q=60):
             except Exception:
                 pass
         if opt:
+            q += 1  # ★ 先计数（第1题从1开始）
             d(text=opt).click()
             print(f"      → 选 {opt}")
             step_log(f"  第{q}题: 选 {opt} → 检查", "info")
+            # ★ 每题界面级完整性检查证据 → 前端证据卡（题型/题干/选项/音频/作答）
+            try:
+                _xml = d.dump_hierarchy()
+                step_log(f"  第{q}题 完整性检查", "info", collect_ui_evidence(_xml, qtype="单元自检"))
+            except Exception:
+                pass
             time.sleep(0.35)
             # 等检查出现并点击
             for _ in range(10):
@@ -124,7 +132,6 @@ def _answer_loop(d, max_q=60):
                 except Exception:
                     pass
                 time.sleep(0.2)
-            q += 1
             continue
 
         # 其他题型：检测排序/匹配/填空

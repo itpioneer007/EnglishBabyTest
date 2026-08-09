@@ -35,6 +35,8 @@ from common.tools import (
     S, S_swipe, S_h, S_w,
     close_ad, dismiss_global_popups, ensure_grade, scroll_and_find,
 )
+from common.logger import step_log
+from common.evidence import collect_ui_evidence
 from engine import _handle_match_question, _handle_sort_question  # noqa: F401  (预留)
 
 APP_PACKAGE = "com.dinoenglish.yyb"
@@ -86,7 +88,18 @@ def _answer_loop(d, max_q=120):
     """
     import re as _re
     q = 0
+    _ev_q = -1  # 已发证据卡的题号（每题只发一次）
     for _ in range(max_q):
+        # ★ 每题界面级完整性检查证据（题型/题干/选项/音频/作答）→ 前端证据卡
+        #   在答题处理前采集当前页（新题加载后发一次，q 变化去重）
+        if q != _ev_q:
+            try:
+                _xml_ev = d.dump_hierarchy()
+                step_log(f"  第{q+1}题 完整性检查", "info",
+                         collect_ui_evidence(_xml_ev, qtype="知识过关"))
+                _ev_q = q
+            except Exception:
+                pass
         # 中途弹窗
         for kw in ('继续答题（0S）', '继续答题', '确定', '好的'):
             if d(text=kw).exists(timeout=0.1):

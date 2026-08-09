@@ -132,14 +132,28 @@ def _test_answer_loop(d, max_q=30):
     """测试卷答题循环：点选项→检查→(答对自动跳/答错点下一题)→最后一题查看报告
     
     处理题型：选择/判断(TF)、匹配(点方框+字母)、排序(点方框+序号)、中途"继续答题"弹窗
+    ★ 计数从第1题开始（先 q+=1 再打印/记录，与 engine._answer_loop 一致）
     """
     q = 0
+    _idle = 0  # 连续空转计数：无选项/无按钮但页面没变化 → 防漏答最后一题后死循环
+    _ev_q = -1  # 已发证据卡的题号（每题只发一次）
     for i in range(max_q):
+        # ★ 每题界面级完整性检查证据（题型/题干/选项/音频/作答）→ 前端证据卡
+        if q != _ev_q:
+            try:
+                _xml_ev = d.dump_hierarchy()
+                from common.evidence import collect_ui_evidence
+                step_log(f"  第{q+1}题 完整性检查", "info",
+                         collect_ui_evidence(_xml_ev, qtype="听力专项测试"))
+                _ev_q = q
+            except Exception:
+                pass
         # 中途弹窗"继续答题（0S）" → 点击
         if d(textContains="继续答题").exists(timeout=0.8):
             d(textContains="继续答题").click()
             print("      → 继续答题弹窗")
             time.sleep(0.6)
+            _idle = 0
             continue
         # 练习子模块完成 → 练习报告（防卡：测试循环误入练习部分时）
         if d(text="练习报告").exists(timeout=0.8):
@@ -165,6 +179,7 @@ def _test_answer_loop(d, max_q=30):
             print("      → 下一题(答错)")
             step_log(f"  答错 → 下一题", "warning")
             time.sleep(0.6)
+            _idle = 0
             continue
         # 新题：找选项
         opt = None
@@ -176,6 +191,7 @@ def _test_answer_loop(d, max_q=30):
             except Exception:
                 pass
         if opt:
+            q += 1  # ★ 先计数再打印：第1题从1开始（原逻辑先打印第0题再+1，导致计数偏移）
             d(text=opt).click()
             print(f"      → 选 {opt}")
             step_log(f"  第{q}题: 选 {opt} → 检查", "info")
@@ -191,16 +207,16 @@ def _test_answer_loop(d, max_q=30):
                 except Exception:
                     pass
                 time.sleep(0.2)
-            q += 1
             continue
         # 匹配题：点第一个方框 → 点字母
         texts = ""
         for e in (d.xpath('//*[@text!=""]').all() or []):
             texts += (e.text or "") + " "
         if any(kw in texts for kw in ("匹配", "配对")):
+            q += 1  # ★ 先计数（与选择分支一致，第1题从1开始）
             from engine import _handle_match_question
             _handle_match_question(d, {})
-            q += 1
+            _idle = 0
             continue
         # 排序题：先判断类型
         #   句子圆圈排序题（听录音给句子排序）：句子前是圆圈，**没有底部序号按钮**，
@@ -242,7 +258,8 @@ def _test_answer_loop(d, max_q=30):
             else:
                 print(f"    🎯 空方框排序题（方框{_boxes}个）→ 点方框激活+点序号")
                 _handle_sort_question(d, {})
-            q += 1
+            q += 1  # ★ 先计数（与选择分支一致）
+            _idle = 0
             # 排序题完成后（最后一题）：查看报告出现 → 点击并完成
             if d(text="查看报告").exists(timeout=1.5):
                 d(text="查看报告").click()
@@ -251,9 +268,25 @@ def _test_answer_loop(d, max_q=30):
                 time.sleep(0.8)
                 return q
             continue
-        # 无选项无按钮 → 检查页面
+        # 无选项无按钮 → 检查页面/加载中/最后一题报告页
+        # ★ 空转保护：页面没变化连续多轮 → 可能已答完最后一题但"查看报告"未识别到，
+        #   再检测一次"查看报告/完成"再退出，避免漏答/提前 back
         texts2 = [e.text for e in (d.xpath('//*[@text!=""]').all() or []) if e.text]
-        print(f"    ⚠ 无选项: {texts2[:6]}")
+        _no_opt_text = "".join(texts2)
+        if d(text="查看报告").exists(timeout=0.5) or "查看报告" in _no_opt_text:
+            d(text="查看报告").click()
+            print("      → 查看报告！测试完成")
+            step_log(f"📊 测试完成，共{q}题", "success")
+            time.sleep(0.8)
+            return q
+        if d(text="完成").exists(timeout=0.5) or d(text="提交").exists(timeout=0.5):
+            step_log(f"📊 测试结束信号（完成/提交），共{q}题", "success")
+            return q
+        _idle += 1
+        if _idle >= 12:
+            step_log(f"⚠ 连续 {_idle} 轮无有效选项（可能停在非答题页/最后一题未识别），退出", "warning")
+            return q
+        print(f"    ⚠ 无选项({_idle}): {texts2[:6]}")
         time.sleep(0.4)
     return q
 

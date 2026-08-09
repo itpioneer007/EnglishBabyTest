@@ -26,7 +26,8 @@ import sys, os, time, re
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import uiautomator2 as u2
-from common.logger import should_stop
+from common.logger import should_stop, step_log
+from common.evidence import collect_ui_evidence
 from common.tools import (
     S, S_swipe, S_h, S_w,
     close_ad, dismiss_global_popups, ensure_grade, scroll_and_find,
@@ -39,8 +40,9 @@ BOOK_VERSION = "湘少版"
 # 每单元关卡数（1~5 + boss = 6 关）
 LEVELS_PER_UNIT = 6
 
-# 主页「巧记单词」卡片位置（教材精学第一行第 2 张）
-QIAOJI_CARD = (540, 441)  # 新版主页教材精学第一行第2张卡片  # 基准坐标，使用时 S(d, *QIAOJI_CARD)
+# 主页「巧记单词」卡片位置（教材精学第一行第3张，x=876,y=1191；与 MODULE_COORDS 一致）
+# ★ 之前 (540,441) 是错误坐标——Y=441 在顶部轮播广告区，点击广告导致异常退出
+QIAOJI_CARD = (876, 1191)
 
 
 UNITS = [1]  # U1 验证；打通后 list(range(1, 10))
@@ -210,7 +212,17 @@ def _answer_loop(d, max_q=20):
     q = 0
     retry_count = 0  # 当前题答错次数
     idle = 0  # 连续空转计数（防空转死循环）
+    _ev_q = -1  # 已发证据卡的题号（每题只发一次）
     while True:
+        # ★ 每题界面级完整性检查证据（题型/题干/选项/音频/作答）→ 前端证据卡
+        if q != _ev_q:
+            try:
+                _xml_ev = d.dump_hierarchy()
+                step_log(f"  第{q+1}题 完整性检查", "info",
+                         collect_ui_evidence(_xml_ev, qtype="巧记单词"))
+                _ev_q = q
+            except Exception:
+                pass
         # ★ 停止检查：web_server 收到停止请求 → 中断
         if should_stop():
             step_log("⏹ 收到停止请求，中断当前模块", "warning")
