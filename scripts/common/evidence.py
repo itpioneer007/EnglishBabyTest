@@ -20,9 +20,40 @@
 import re
 
 
+def _detect_image_options(xml: str) -> int:
+    """检测图片选项数（★ 用户反馈：图片题选项是图片不是 A/B/C 字母，必须识别）
+
+    真实 App 选项结构：
+      - 字母选项：A/B/C/D/T/F 文字（已有）
+      - 图片选项：android.widget.CheckBox（含文本或空），或大尺寸可点击 ImageView
+    返回候选图片选项数（>=2 视为有图片选项）
+    """
+    count = 0
+    # CheckBox（图片题选项最常见）
+    for m in re.finditer(r'<node[^>]*class="android\.widget\.CheckBox"[^>]*>', xml):
+        b = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', m.group(0))
+        if not b:
+            continue
+        x1, y1, x2, y2 = map(int, b.groups())
+        if y1 > 400 and (x2 - x1) > 40 and (y2 - y1) > 40:
+            count += 1
+    # 大尺寸可点击 ImageView（>120x120，位于选项区域 y>400）
+    for m in re.finditer(r'<node[^>]*class="android\.widget\.ImageView"[^>]*clickable="true"[^>]*>', xml):
+        b = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', m.group(0))
+        if not b:
+            continue
+        x1, y1, x2, y2 = map(int, b.groups())
+        w, h = x2 - x1, y2 - y1
+        if w >= 120 and h >= 120 and 400 < y1 < 2000:
+            count += 1
+    return count
+
+
 def _find_control(xml: str, keywords: tuple) -> tuple:
     """在 XML 中查找含关键词的控件节点，返回 (found, clickable)
     - 逐节点匹配 text/content-desc 含任一关键词
+    - ★ 也匹配 resource-id 中的 play/sound/audio/speaker 模式
+      （真实 App 扬声器按钮常是 rid=id/play_box，text/content-desc 为空）
     - clickable 取该节点是否 clickable="true"
     """
     for m in re.finditer(r'<node[^>]*>', xml):
@@ -31,6 +62,10 @@ def _find_control(xml: str, keywords: tuple) -> tuple:
             if kw in tag:
                 clickable = 'clickable="true"' in tag
                 return True, clickable
+        # resource-id 模式：play_box / play_btn / btn_play / ic_play / iv_play / sound / audio / speaker
+        if re.search(r'resource-id="[^"]*(play|sound|audio|speaker)[^"]*"', tag):
+            clickable = 'clickable="true"' in tag
+            return True, clickable
     return False, False
 
 
@@ -65,10 +100,12 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
                    "expected": "文字完整可见", "actual": stem_txt,
                    "diff": f"提取到{len(stems)}条文字" if stems else "未提取到题干文字"})
 
-        # ③ 选项存在性（A/B/C/D/T/F 字母选项 或 图片选项/输入框）
+        # ③ 选项存在性（字母选项 A/B/C/D/T/F 或 图片选项 CheckBox/大图）
         opts_found = [o for o in ("A", "B", "C", "D", "T", "F")
                       if f'text="{o}"' in xml]
         has_edit = "EditText" in xml
+        # ★ 图片选项检测：CheckBox（图片题常见）或大尺寸可点击 ImageView
+        image_opt_count = _detect_image_options(xml) if not opts_found else 0
         if opts_found:
             ev.append({"field": "选项", "type": "text_ok",
                        "expected": "存在可选项", "actual": ",".join(opts_found),
@@ -77,6 +114,11 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
             ev.append({"field": "选项", "type": "text_ok",
                        "expected": "输入框作答", "actual": "EditText",
                        "diff": "本题为输入类题型（填空/拼写），有输入框"})
+        elif image_opt_count >= 2:
+            # ★ 找到 >=2 个图片选项（CheckBox 或大 ImageView）→ 视为图片题选项
+            ev.append({"field": "选项", "type": "text_ok",
+                       "expected": "存在可选项", "actual": f"图片选项×{image_opt_count}",
+                       "diff": f"本题为图片题，检测到 {image_opt_count} 个图片选项（CheckBox/大图）"})
         else:
             ev.append({"field": "选项", "type": "text_mismatch",
                        "expected": "存在可选项", "actual": "(无)",

@@ -182,31 +182,70 @@ def _test_answer_loop(d, max_q=30):
             _idle = 0
             continue
         # 新题：找选项
+        # ⚠ 关键修复：上一版正则 `text="X"[^>]*clickable="true"` 要求「同一节点」同时有
+        #   字母 text 和 clickable。但真实 App 选项字母在【不可点击的子 TextView】上，
+        #   可点击的是【父容器】，导致正则永不命中 → 字母题全部答不了（"不会答题"）。
+        #   现改为：遍历整节点，单独提取 text 与 bounds（不要求 clickable/属性顺序），
+        #   点击用坐标点击 d.click(x,y)。仍只 dump 一次，保留速度优化。
+        xml_now = d.dump_hierarchy() if d else ""
         opt = None
-        for kw in ("T", "F", "A", "B", "C", "D", "E"):
-            try:
-                if d(text=kw).exists(timeout=0.4):
-                    opt = kw
-                    break
-            except Exception:
-                pass
+        opt_xy = None
+        import re as _re_opt
+        # ★ 字母选项：稳健提取（finditer 整节点，单独取 text + bounds）
+        for m in _re_opt.finditer(r'<node[^>]*>', xml_now):
+            tag = m.group(0)
+            tm = _re_opt.search(r'text="([TFABCDE])"', tag)
+            if not tm:
+                continue
+            bm = _re_opt.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+            if not bm:
+                continue
+            x1, y1, x2, y2 = map(int, bm.groups())
+            if y1 > 320 and (x2 - x1) >= 20 and (y2 - y1) >= 20:  # 选项中区且尺寸合理
+                opt = tm.group(1)
+                opt_xy = ((x1 + x2) // 2, (y1 + y2) // 2)
+                break
         if opt:
             q += 1  # ★ 先计数再打印：第1题从1开始（原逻辑先打印第0题再+1，导致计数偏移）
-            d(text=opt).click()
+            d.click(*opt_xy) if opt_xy else d(text=opt).click()
             print(f"      → 选 {opt}")
             step_log(f"  第{q}题: 选 {opt} → 检查", "info")
-            time.sleep(0.35)
-            # 等检查出现
-            for _ in range(10):
-                try:
-                    if d(text="检查").exists(timeout=0.15):
-                        d(text="检查").click()
-                        print(f"      → 检查")
-                        time.sleep(0.6)
-                        break
-                except Exception:
-                    pass
-                time.sleep(0.2)
+            time.sleep(0.25)
+            # 等检查出现（★ 优化：减少 sleep）
+            for _ in range(6):
+                if d(text="检查").exists(timeout=0.2):
+                    d(text="检查").click()
+                    print(f"      → 检查")
+                    time.sleep(0.4)
+                    break
+                time.sleep(0.15)
+            continue
+        # ★ 图片题选项：字母选项没有时，检测 CheckBox 候选（用户反馈：第16题是图片题）
+        #   同样稳健：先匹配 CheckBox 节点，再单独取 clickable + bounds（不要求属性顺序）
+        _img_xy = None
+        for m in _re_opt.finditer(r'<node[^>]*class="android\.widget\.CheckBox"[^>]*>', xml_now):
+            tag = m.group(0)
+            cm = _re_opt.search(r'clickable="true"', tag)
+            bm = _re_opt.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+            if not (cm and bm):
+                continue
+            x1, y1, x2, y2 = map(int, bm.groups())
+            if y1 > 400:  # y>400 选项区
+                _img_xy = ((x1 + x2) // 2, (y1 + y2) // 2)
+                break
+        if _img_xy:
+            d.click(*_img_xy)
+            opt = "图片选项"
+            q += 1
+            print(f"      → 选 图片选项 (CheckBox)")
+            step_log(f"  第{q}题: 选图片选项 → 检查", "info")
+            time.sleep(0.25)
+            for _ in range(6):
+                if d(text="检查").exists(timeout=0.2):
+                    d(text="检查").click()
+                    time.sleep(0.4)
+                    break
+                time.sleep(0.15)
             continue
         # 匹配题：点第一个方框 → 点字母
         texts = ""

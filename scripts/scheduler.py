@@ -107,8 +107,24 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
     #     否则重启 App 后主页广告/弹窗未关，后续点坐标会点到广告上！）
     step_log("🧹 清理广告弹窗...", "step")
     try:
-        for _ in range(3):
-            dismiss_global_popups(d)
+        # ★ 广告是延迟加载的（实测重启后 4-6s 才出现 fl_ad_container/iv_close）：
+        #   先轮询等广告出现再关，最多等 6s，避免关广告时广告还没加载出来
+        import re as _re2
+        for _wait in range(3):
+            try:
+                _xml_now = d.dump_hierarchy()
+                if 'fl_ad_container' in _xml_now or 'iv_close' in _xml_now or '关闭' in _xml_now:
+                    break
+            except Exception:
+                pass
+            time.sleep(2)
+        # ★ 优化：dismiss 已用一次 dump 判断，最多 2 轮（有弹窗才点，无弹窗立刻返回）
+        for _ in range(2):
+            if not dismiss_global_popups(d):
+                break
+        close_ad(d)
+        # 广告可能一次关不完（有多个），再确认一次
+        time.sleep(0.8)
         close_ad(d)
     except Exception as e:
         print(f"  ⚠ 关广告异常: {e}")

@@ -41,58 +41,104 @@ def S_swipe(d, x1, y1, x2, y2, duration=0.4):
 
 
 def close_ad(d):
-    """关闭广告：多种策略按顺序尝试"""
-    # 方式1：contentDescription 包含"关闭"
+    """关闭广告：多种策略按顺序尝试
+    ★ 广告结构（实测）：右下角 fl_ad_container 广告卡片，关闭按钮 resource-id=iv_close（72x72）
+      "老师伴学/打卡服务"是广告卡片标题（有时只显示"伴学"），底部导航的"伴学/会员"不是广告！
+      关闭优先级：resource-id 精确定位 > description=关闭 > 广告文字 > 小尺寸X > 坐标"""
     try:
-        if d(description="关闭").exists(timeout=1):
-            d(description="关闭").click()
-            print("    🔔 通过 description='关闭' 关闭广告")
+        xml = d.dump_hierarchy()
+    except Exception:
+        xml = ""
+
+    # 广告特征：弹窗广告文字 / 关闭按钮资源 / 广告角标
+    has_ad_text = any(kw in xml for kw in ("老师伴学", "打卡服务", "点击参与", "广告", "推广", "跳过"))
+    has_close_btn = ('content-desc="关闭' in xml or 'text="关闭"' in xml)
+    # ★ 实测：右下角广告卡片 fl_ad_container + 关闭按钮 iv_close（坐标 986,1823）
+    has_ad_card = ('fl_ad_container' in xml or 'iv_ad' in xml or 'iv_close' in xml)
+
+    # 方式0（★ 最可靠）：检测到广告卡片 → 直接点关闭按钮坐标（实测 iv_close 中心 986,1823）
+    if has_ad_card:
+        try:
+            d.click(*S(d, 986, 1823))
+            print("    🔔 通过广告卡片 iv_close 坐标 (986,1823) 关闭广告")
             time.sleep(0.35)
             return True
-    except Exception:
-        pass
+        except Exception:
+            pass
 
-    # 方式2：找广告文字（"老师伴学"/"打卡服务"），点其右上角的 X
-    try:
-        for kw in ("老师伴学", "打卡服务", "点击参与"):
-            for elem in (d.xpath('//*[@text!=""]').all() or []):
-                if kw in (elem.text or ""):
-                    b = elem.bounds
-                    # X 按钮在广告卡片右上角：卡片底部 y + 20（X 在文字下方边缘）
-                    close_x = min(b[2] - 10, 1080)
-                    close_y = b[3] + 15
-                    d.click(close_x, close_y)
-                    print(f"    🔔 通过 ad 文字 [{kw}] 定位 X 按钮 ({close_x},{close_y})")
+    # 方式0b：按 resource-id 找广告关闭按钮（兜底，部分机型 resourceId 匹配不上时走坐标）
+    for close_rid in ("iv_close", "close_iv", "ad_close", "btn_close", "iv_ad_close",
+                      "fl_close", "close_btn", "img_close", "ad_del"):
+        if close_rid in xml:
+            try:
+                found = d(resourceId=f".*{close_rid}").exists(timeout=0.5)
+                if found:
+                    d(resourceId=f".*{close_rid}").click()
+                    print(f"    🔔 通过 resource-id [{close_rid}] 关闭广告")
                     time.sleep(0.35)
                     return True
-    except Exception:
-        pass
+            except Exception:
+                pass
 
-    # 方式3：找内嵌的小尺寸 clickable（X 通常很小）
-    try:
-        for elem in (d.xpath('//*[@clickable="true"]').all() or []):
-            b = elem.bounds
-            w = b[2] - b[0]
-            h = b[3] - b[1]
-            # X 按钮特征：尺寸小（< 80x80）、位于右侧、y>600
-            if w < 80 and h < 80 and b[0] > 800 and b[1] > 600:
-                elem.click()
-                print(f"    🔔 通过小尺寸 clickable (X) 关闭广告 ({sum(b)//4},{h*1000})")
+    # 方式1：contentDescription 包含"关闭"（广告右上角 X）
+    if has_close_btn:
+        try:
+            if d(description="关闭").exists(timeout=0.5):
+                d(description="关闭").click()
+                print("    🔔 通过 description='关闭' 关闭广告")
                 time.sleep(0.35)
                 return True
-    except Exception:
-        pass
+        except Exception:
+            pass
 
-    # 方式4：className=ImageView，右上角 —— 仅当页面有广告特征文字时才尝试
+    # 方式2：找广告文字（"老师伴学"/"打卡服务"/"跳过"），点其右上角的 X
+    if has_ad_text:
+        try:
+            for kw in ("老师伴学", "打卡服务", "点击参与"):
+                if kw in xml:
+                    for elem in (d.xpath('//*[@text!=""]').all() or []):
+                        if kw in (elem.text or ""):
+                            b = elem.bounds
+                            close_x = min(b[2] - 10, 1080)
+                            close_y = b[3] + 15
+                            d.click(close_x, close_y)
+                            print(f"    🔔 通过 ad 文字 [{kw}] 定位 X 按钮 ({close_x},{close_y})")
+                            time.sleep(0.35)
+                            return True
+        except Exception:
+            pass
+        # 有"跳过"按钮 → 直接点（开屏广告常用）
+        if "跳过" in xml:
+            try:
+                if d(text="跳过").exists(timeout=0.5):
+                    d(text="跳过").click()
+                    print("    🔔 通过'跳过'关闭开屏广告")
+                    time.sleep(0.35)
+                    return True
+            except Exception:
+                pass
+
+    # 方式3：找内嵌的小尺寸 clickable（X 通常很小、无文字）—— ★ 仅当检测到广告特征才尝试
+    #   （避免误点主页正常图标：成长宠物区(950,1787)、右上角功能按钮等）
+    if has_ad_text or has_close_btn:
+        try:
+            for elem in (d.xpath('//*[@clickable="true"]').all() or []):
+                b = elem.bounds
+                w = b[2] - b[0]
+                h = b[3] - b[1]
+                # X 按钮特征：尺寸小（< 90x90）、位于右侧、y>600（避开底部导航）
+                if w < 90 and h < 90 and b[0] > 800 and b[1] > 600:
+                    elem.click()
+                    print(f"    🔔 通过小尺寸 clickable (X) 关闭广告 ({sum(b)//4},{h*1000})")
+                    time.sleep(0.35)
+                    return True
+        except Exception:
+            pass
+
+    # 方式4/5：右上角 ImageView / 硬编码坐标 —— 仅当页面有广告特征文字时才尝试
     # （避免误点主页右上角的正常功能按钮，如二维码/扫码入口）
-    try:
-        has_ad = False
-        for e in (d.xpath('//*[@text!=""]').all() or []):
-            t = e.text or ""
-            if any(kw in t for kw in ("老师伴学", "打卡服务", "点击参与", "广告", "推广")):
-                has_ad = True
-                break
-        if has_ad:
+    if has_ad_text:
+        try:
             for elem in d(className="android.widget.ImageView"):
                 info = elem.info
                 if not info.get("clickable"):
@@ -103,24 +149,15 @@ def close_ad(d):
                     print("    🔔 通过右上角 ImageView 关闭广告（检测到广告特征）")
                     time.sleep(0.35)
                     return True
-    except Exception:
-        pass
-
-    # 方式5：硬编码右上角坐标——仅当检测到广告特征文字时才点击（避免误点正常页面）
-    try:
-        has_ad = False
-        for e in (d.xpath('//*[@text!=""]').all() or []):
-            t = e.text or ""
-            if any(kw in t for kw in ("老师伴学", "打卡服务", "点击参与", "广告", "推广")):
-                has_ad = True
-                break
-        if has_ad:
-            d.click(986, 1823)
+        except Exception:
+            pass
+        try:
+            d.click(*S(d, 986, 1823))
             print("    🔔 通过 ad-X 坐标 (986,1823) 关闭广告")
             time.sleep(0.35)
             return True
-    except Exception:
-        pass
+        except Exception:
+            pass
 
     print("    ⚠ 未找到广告关闭按钮")
     return False
@@ -167,7 +204,7 @@ def execute_actions(d, actions, label=""):
             text = action["text"]
             for _ in range(5):
                 if d(text=text).exists(timeout=1.5): break
-                d.swipe(500, 1400, 500, 400, duration=0.3)
+                S_swipe(d, 500, 1400, 500, 400, 0.3)
                 time.sleep(0.4)
             if safe_click(d, text, timeout=min(timeout, 3)):
                 print(f"    ✅ 滑动后点击 '{text}'")
@@ -179,7 +216,7 @@ def execute_actions(d, actions, label=""):
 
         elif at == "swipe_left":
             # 水平左滑切换子模块
-            d.swipe(900, 600, 200, 600, duration=0.3)
+            S_swipe(d, 900, 600, 200, 600, 0.3)
             time.sleep(0.6)
             print(f"    👈 左滑切换子模块")
 
@@ -198,13 +235,23 @@ def safe_click(d, text, timeout=3) -> bool:
         return False
 
 def dismiss_global_popups(d):
+    """关闭全局弹窗（★ 优化：一次 dump + 字符串匹配，避免逐词 UI 查询）"""
+    try:
+        xml = d.dump_hierarchy()
+    except Exception:
+        return False
+    # 找出页面上实际出现的弹窗词
+    hit = None
     for t in GLOBAL_POPUPS:
+        if f'text="{t}"' in xml or f'content-desc="{t}"' in xml:
+            hit = t
+            break
+    if hit:
         try:
-            if d(text=t).exists(timeout=0.15):
-                d(text=t).click()
-                print(f"    🔔 全局弹窗: '{t}'")
-                time.sleep(0.35)
-                return True
+            d(text=hit).click(timeout=1)
+            print(f"    🔔 全局弹窗: '{hit}'")
+            time.sleep(0.35)
+            return True
         except Exception:
             pass
     return False
@@ -214,12 +261,12 @@ def scroll_and_find(d, text, max_swipes=5) -> bool:
     if d(text=text).exists(timeout=2): return True
     # 第一轮：向上滑（内容下移）
     for _ in range(max_swipes):
-        d.swipe(500, 1400, 500, 400, duration=0.3)
+        S_swipe(d, 500, 1400, 500, 400, 0.3)
         time.sleep(0.35)
         if d(text=text).exists(timeout=1.5): return True
     # 第二轮：向下滑（内容上移，返回顶部区域）
     for _ in range(max_swipes):
-        d.swipe(500, 400, 500, 1400, duration=0.3)
+        S_swipe(d, 500, 400, 500, 1400, 0.3)
         time.sleep(0.35)
         if d(text=text).exists(timeout=1.5): return True
     return False

@@ -11,13 +11,21 @@ from common.logger import step_log, should_stop
 
 
 def _find_control(xml: str, keywords: tuple) -> tuple:
-    """在 XML 中查找含关键词的控件节点，返回 (found, clickable)"""
+    """在 XML 中查找含关键词的控件节点，返回 (found, clickable)
+    - 逐节点匹配 text/content-desc 含任一关键词
+    - ★ 也匹配 resource-id 中的 play/sound/audio/speaker 模式
+      （真实 App 扬声器按钮常是 rid=id/play_box，text/content-desc 为空）
+    - clickable 取该节点是否 clickable="true"
+    """
     for m in re.finditer(r'<node[^>]*>', xml):
         tag = m.group(0)
         for kw in keywords:
             if kw in tag:
                 clickable = 'clickable="true"' in tag
                 return True, clickable
+        if re.search(r'resource-id="[^"]*(play|sound|audio|speaker)[^"]*"', tag):
+            clickable = 'clickable="true"' in tag
+            return True, clickable
     return False, False
 
 
