@@ -297,7 +297,9 @@ def log_msg(msg: str, level: str = "info", evidence: list = None):
     #   触发条件：消息含"第N题 检查"且带 evidence（来自 engine.py _collect_ui_evidence）
     if evidence and isinstance(evidence, list) and evidence:
         try:
-            m = re.match(r"第(\d+)题\s*检查", msg)
+            # ★ 修复：兼容实际消息格式——"第1题 检查"(可能带前导空格) 与
+            #   "第1题 完整性检查"(测试循环) 都能命中
+            m = re.match(r"\s*第(\d+)题\s*(?:完整性)?\s*检查", msg)
             if m:
                 qidx = int(m.group(1))
                 _record_module_evidence(qidx, msg, evidence)
