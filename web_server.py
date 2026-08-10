@@ -2913,10 +2913,110 @@ def run_quick_inspect_task(docx_file: str = "", unit: int = 0):
 
 
 # ===== 快速检查(从当前页开始) =====
+# ============================================================
+# 错题溯源 / 透明评分 整合（复用同学C的 TraceEngine）
+# ============================================================
+_TRACE_ENGINE = None
+
+def _get_trace_engine():
+    """惰性加载同学C的 TraceEngine（缺 Pillow/文件时返回 None，不阻塞）。"""
+    global _TRACE_ENGINE
+    if _TRACE_ENGINE is None:
+        try:
+            from trace_engine import TraceEngine
+            _TRACE_ENGINE = TraceEngine(screenshots_dir=str(PROJECT_ROOT / "screenshots"))
+        except Exception:
+            _TRACE_ENGINE = False
+    return _TRACE_ENGINE or None
+
+
+def _score_breakdown(qd: dict) -> dict:
+    """透明评分：每个「已检查」的维度等权，得分 = 通过数 / 已检查数 × 100。
+
+    返回明细让检查人员一眼看懂评分怎么来的：
+      score      总分（0-100）
+      checked_count / passed_count / failed_count  已检/通过/未通过 维度数
+      formula    评分公式（如 '2/4×100=50'）
+      dims       每个已检查维度的 {name, passed, reason, severity}
+    未检查的维度（null）不参与评分（该项未检测，不算分也不扣分）。
+    """
+    dims = [
+        ("题干", qd.get("ai_stem"), qd.get("stem_reason"), "medium"),
+        ("内容", qd.get("ai_content"), qd.get("content_reason"), "high"),
+        ("图片", qd.get("ai_image"), qd.get("image_reason"), "high"),
+        ("答案", qd.get("ai_answer"), qd.get("answer_reason"), "high"),
+        ("音频", qd.get("ai_audio"), qd.get("audio_reason"), "low"),
+        ("答错检查", qd.get("ai_post_error"), qd.get("post_error_reason"), "low"),
+        ("报告", qd.get("ai_report"), qd.get("report_reason"), "low"),
+    ]
+    checked = [d for d in dims if d[1] is not None]
+    passed = [d for d in checked if d[1] is True]
+    total = len(checked)
+    score = round(len(passed) / total * 100) if total else 0
+    return {
+        "score": score,
+        "checked_count": total,
+        "passed_count": len(passed),
+        "failed_count": total - len(passed),
+        "formula": f"{len(passed)}/{total}×100={score}" if total else "未检查，无法评分",
+        "dims": [{"name": d[0], "passed": d[1], "reason": d[2] or "", "severity": d[3]} for d in checked],
+    }
+
+
+def _ensure_marked(qid: str, qd: dict, checks: list) -> str:
+    """生成红框标注图（同学C的 draw_mark），输出到 outputs/web/，已存在则复用（缓存）。
+    返回相对文件名（前端拼 /api/screenshot/<name>）；失败返回空串。"""
+    try:
+        shot = qd.get("screenshot", "")
+        if not shot or not checks:
+            return ""
+        out_name = f"marked_{shot}"
+        out_path = PROJECT_ROOT / "outputs" / "web" / out_name
+        if out_path.exists():
+            return out_name
+        eng = _get_trace_engine()
+        if not eng:
+            return ""
+        eng.draw_mark(shot, checks, str(out_path))
+        return out_name if out_path.exists() else ""
+    except Exception:
+        return ""
+
+
+def _enrich_inspect_state(state: dict):
+    """给每道错题附加溯源/评分/红框图；通过题仅附评分（供参考）。"""
+    eng = _get_trace_engine()
+    for qid, qd in (state.get("questions") or {}).items():
+        qd["_score"] = _score_breakdown(qd)
+        if qd.get("overall_passed") is not False:
+            continue  # 通过题不用溯源
+        if eng is None:
+            continue
+        try:
+            trace = eng.generate(qid, qd)
+            qd["_trace"] = trace
+            qd["_marked"] = _ensure_marked(qid, qd, trace.get("checks", []))
+        except Exception:
+            pass
+
+
 @app.route("/api/inspect/state", methods=["GET"])
 def api_inspect_state():
-    """获取当前巡检状态 (流式)"""
-    return jsonify(_inspection_state)
+    """获取当前巡检状态 (流式)。
+    ★ 集成同学C的溯源引擎：对每道错题附加 _trace（维度/原因/建议/严重度/坐标）、
+    _score（透明评分明细，说明评分怎么来的）、_marked（红框标注图URL）。
+    """
+    # 浅拷贝一层，避免污染 _inspection_state（_score/_trace/_marked 只进响应）
+    state = {
+        "questions": {k: dict(v) for k, v in (_inspection_state.get("questions") or {}).items()},
+        "workflow_steps": _inspection_state.get("workflow_steps", []),
+        "current_question_idx": _inspection_state.get("current_question_idx", 0),
+    }
+    try:
+        _enrich_inspect_state(state)
+    except Exception:
+        pass
+    return jsonify(state)
 
 
 @app.route("/api/inspect/question-result", methods=["POST"])

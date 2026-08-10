@@ -1122,27 +1122,98 @@ function updWrong(f){
     el.innerHTML='<div class="text-center py-6 text-[#9aa5a0] bg-[#faf8f3] rounded-lg text-[11px]">暂无错题<br>（检测通过或尚未开始）</div>'
     return
   }
+  const cleanR=s=>String(s||'').replace(/^\[不通过\]\s*\|\s*/,'')
+  const sevLbl={high:'高',medium:'中',low:'低'}
+  const sevCls={high:'bg-[#fee2e2] text-[#bc4742]',medium:'bg-[#fef3c7] text-[#92400e]',low:'bg-[#e0e7ff] text-[#3730a3]'}
   el.innerHTML=wrong.map(({id,q})=>{
-    const dims=[['题干',q.ai_stem,q.stem_reason],['内容',q.ai_content,q.content_reason],
-      ['配图',q.ai_image,q.image_reason],['作答',q.ai_answer,q.answer_reason],
-      ['音频',q.ai_audio,q.audio_reason],['答错后',q.ai_post_error,q.post_error_reason]]
-    let fails,reasons,sugg
+    // 1) 位置
+    const locHtml=`<div class="flex items-center gap-2 px-2.5 py-1.5 bg-[#fef2f2]">
+      <span class="w-1.5 h-1.5 rounded-full bg-[#bc4742] shrink-0"></span>
+      <span class="text-[11px] font-semibold text-[#7f1d1d] truncate" title="${escHtml(id)}">${escHtml(fmtLoc(id,q))}</span>
+    </div>`
+
+    // 来自答题流程真实答错的题（已截图，无六维判定）→ 简版卡片
     if(q.question_type==='错题截图'){
-      // 来自答题流程真实答错的题（已截图）
-      fails=[];reasons=['答题答错（已截图）'];sugg=['人工核对错题画面，针对薄弱点重点巩固']
-    }else{
-      fails=dims.filter(d=>d[1]===false)
-      reasons=fails.length?fails.map(d=>`${d[0]}: ${d[2]||'未通过'}`):['综合判定不通过']
-      sugg=fails.map(d=>WRONG_SUGGEST[d[0]]||'核对脚本修正').filter((v,i,a)=>a.indexOf(v)===i)
+      const shot=q.screenshot
+      return `<div class="border border-[#fecaca] rounded-lg overflow-hidden bg-white">
+        ${locHtml}
+        <div class="px-2.5 py-2 text-[11px] text-[#475569] space-y-1">
+          <div><span class="font-semibold text-[#bc4742]">原因：</span>答题答错（已截图）</div>
+          <div><span class="font-semibold text-[#2d6a4f]">建议：</span>人工核对错题画面，针对薄弱点重点巩固</div>
+          ${shot?`<img src="/api/screenshot/${shot}" class="w-full max-h-[150px] object-contain bg-[#faf8f3] rounded-md border border-[#e6dfd4] cursor-pointer" onclick="openShotLightbox('/api/screenshot/${shot}')" onerror="this.style.display='none'">`:''}
+        </div>
+      </div>`
     }
-    return `<div class="border border-[#fecaca] rounded-lg overflow-hidden">
-      <div class="flex items-center gap-2 px-2.5 py-1.5 bg-[#fef2f2]">
-        <span class="w-1.5 h-1.5 rounded-full bg-[#bc4742] shrink-0"></span>
-        <span class="text-[11px] font-semibold text-[#7f1d1d] truncate" title="${escHtml(id)}">${escHtml(fmtLoc(id,q))}</span>
-      </div>
-      <div class="px-2.5 py-2 text-[11px] text-[#475569] space-y-1.5">
-        <div><span class="font-semibold text-[#bc4742]">原因：</span>${escHtml(reasons.join('；'))}</div>
-        <div><span class="font-semibold text-[#2d6a4f]">建议：</span>${escHtml(sugg.join('；'))}</div>
+
+    // 2) 评分 + 评分依据（透明：已检查N维·通过M维 → M/N×100）
+    const sc=q._score
+    let scoreHtml=''
+    if(sc&&sc.checked_count>0){
+      const pct=sc.score
+      const barCls=pct>=80?'bg-[#2d6a4f]':(pct>=60?'bg-[#e9c46a]':'bg-[#bc4742]')
+      const txtCls=pct>=60?'text-[#2d6a4f]':'text-[#bc4742]'
+      scoreHtml=`<div class="bg-[#faf8f3] rounded-md px-2.5 py-2">
+        <div class="flex items-center gap-2">
+          <span class="text-[21px] font-bold leading-none ${txtCls}">${pct}</span>
+          <span class="text-[10px] text-[#9aa5a0]">/100</span>
+          <div class="flex-1 h-1.5 bg-[#e8e4da] rounded-full overflow-hidden"><div class="h-full ${barCls} rounded-full" style="width:${pct}%"></div></div>
+        </div>
+        <div class="text-[10px] text-[#6b7280] mt-1">评分依据：已检查 <b>${sc.checked_count}</b> 维 · 通过 <b>${sc.passed_count}</b> 维 → ${sc.formula}</div>
+      </div>`
+    }else if(sc){
+      scoreHtml=`<div class="bg-[#faf8f3] rounded-md px-2.5 py-2 text-[10.5px] text-[#6b7280]">${sc.formula}</div>`
+    }
+
+    // 3) 错误维度溯源清单（同学C的 checks：维度/严重度/原因/建议）
+    const tr=q._trace
+    let dimsHtml=''
+    if(tr&&tr.checks&&tr.checks.length){
+      dimsHtml=`<div class="space-y-1.5">${tr.checks.map(c=>{
+        const reason=cleanR(c.reason)||'未提供具体原因'
+        return `<div class="border border-[#fecaca] rounded-md px-2 py-1.5 bg-[#fffbfb]">
+          <div class="flex items-center gap-1.5">
+            <span class="text-[11px] font-semibold text-[#7f1d1d]">${escHtml(c.dimension)}</span>
+            <span class="text-[9px] px-1.5 py-px rounded ${sevCls[c.severity]||sevCls.low}">${sevLbl[c.severity]||c.severity}</span>
+            <span class="ml-auto text-[9.5px] text-[#bc4742]">未通过</span>
+          </div>
+          <div class="text-[10.5px] text-[#475569] mt-1">原因：${escHtml(reason)}</div>
+          <div class="text-[10.5px] text-[#2d6a4f] mt-0.5">建议：${escHtml(cleanR(c.suggestion)||'核对脚本修正')}</div>
+        </div>`
+      }).join('')}</div>`
+    }else{
+      // 兼容旧数据（无 trace 字段）→ 从维度 reason 提取
+      const dims=[['题干',q.ai_stem,q.stem_reason],['内容',q.ai_content,q.content_reason],
+        ['图片',q.ai_image,q.image_reason],['答案',q.ai_answer,q.answer_reason],
+        ['音频',q.ai_audio,q.audio_reason],['答错检查',q.ai_post_error,q.post_error_reason]]
+      const fails=dims.filter(d=>d[1]===false)
+      dimsHtml=fails.length
+        ? `<div class="space-y-1.5">${fails.map(d=>`<div class="border border-[#fecaca] rounded-md px-2 py-1.5 bg-[#fffbfb]">
+            <div class="flex items-center gap-1.5"><span class="text-[11px] font-semibold text-[#7f1d1d]">${escHtml(d[0])}</span><span class="ml-auto text-[9.5px] text-[#bc4742]">未通过</span></div>
+            <div class="text-[10.5px] text-[#475569] mt-1">原因：${escHtml(cleanR(d[2])||'未提供')}</div>
+            <div class="text-[10.5px] text-[#2d6a4f] mt-0.5">建议：${escHtml(WRONG_SUGGEST[d[0]]||'核对脚本修正')}</div>
+          </div>`).join('')}</div>`
+        : '<div class="text-[10.5px] text-[#6b7280]">综合判定不通过</div>'
+    }
+
+    // 4) 题目溯源截图（红框标注图优先，其次原图）
+    const shot=q._marked||q.screenshot
+    const shotHtml=shot?`<img src="/api/screenshot/${shot}" class="w-full max-h-[150px] object-contain bg-[#faf8f3] rounded-md border border-[#e6dfd4] cursor-pointer" onclick="openShotLightbox('/api/screenshot/${shot}')" onerror="this.style.display='none'">`:''
+
+    // 5) 题干 / 标准答案（script_context）
+    const ctx=tr&&tr.script_context
+    const ctxHtml=(ctx&&(ctx.stem||ctx.answer))
+      ? `<div class="text-[10.5px] text-[#6b7280] border-t border-dashed border-[#e6dfd4] pt-1.5 space-y-0.5">
+          ${ctx.stem?`<div><b>题干：</b>${escHtml(String(ctx.stem).slice(0,80))}</div>`:''}
+          ${ctx.answer?`<div><b>标准答案：</b>${escHtml(ctx.answer)}</div>`:''}
+        </div>`:''
+
+    return `<div class="border border-[#fecaca] rounded-lg overflow-hidden bg-white">
+      ${locHtml}
+      <div class="px-2.5 py-2 space-y-2">
+        ${scoreHtml}
+        ${dimsHtml}
+        ${shotHtml}
+        ${ctxHtml}
       </div>
     </div>`
   }).join('')
