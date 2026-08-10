@@ -168,6 +168,18 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
 .unit-input-wrap{display:none;align-items:center;gap:4px;font-size:11px;color:var(--gray);font-weight:400;margin-left:2px;padding:2px 0}
 .unit-input-wrap input{width:50px;padding:2px 5px;border:1px solid var(--line);border-radius:6px;font-size:11px;background:#fff;color:#3d3226}
 .unit-input-wrap input:focus{outline:none;border-color:var(--green-light)}
+/* ★ 模块卡片 + 单元勾选栏（替代齿轮展开，常驻展示） */
+.mod-card{border:1.5px solid var(--line);border-radius:10px;padding:6px 9px;background:#fff;transition:border-color .15s,background .15s}
+.mod-card-head{display:flex;align-items:center;justify-content:space-between;gap:6px}
+.mod-sel-label{display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;color:#3d3226;cursor:pointer;flex:1;min-width:0;user-select:none}
+.mod-sel-label input{accent-color:var(--green);width:14px;height:14px;flex-shrink:0;cursor:pointer}
+.unit-clear{font-size:10px;color:var(--gray);cursor:pointer;padding:1px 8px;border-radius:6px;border:1px solid var(--line);background:#fff;flex-shrink:0}
+.unit-clear:hover{color:var(--red);border-color:var(--red)}
+/* 单元输入行（空格/横线分隔，常驻显示） */
+.unit-input-row{display:flex;align-items:center;gap:6px;margin-top:5px;flex-wrap:wrap}
+.unit-val{width:130px;padding:3px 9px;border:1.5px solid var(--line);border-radius:7px;font-size:11.5px;background:#faf8f3;color:#3d3226;outline:none;transition:border-color .15s,background .15s}
+.unit-val:focus{border-color:var(--green-light);background:#fff}
+.unit-val::placeholder{color:#a8b3ae;font-size:10.5px}
 .file-list .item{font-size:11.5px;padding:2px 0;color:#475569;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .file-list .item::before{content:"· ";color:var(--green)}
 .info-row{display:flex;justify-content:space-between;padding:5px 0;font-size:12.5px;border-bottom:1px dashed var(--line)}
@@ -211,84 +223,162 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
     <button class="tab-btn" data-tab="3" onclick="switchTab(3)"><span class="tb-no">3</span>审查结果</button>
   </div>
 
-  <!-- ===== Tab1 任务配置：左栏两卡（全宽两列，一屏显示完） ===== -->
-  <aside id="tabAside" class="flex-1 min-h-0 overflow-y-auto p-3 grid grid-cols-1 xl:grid-cols-2 gap-3 bg-[#fbfaf6]">
+  <!-- ===== Tab1 任务配置：两栏布局（左配置+按钮 / 右脚本+自动匹配），宽屏充分利用、一屏放下 ===== -->
+  <aside id="tabAside" class="flex-1 min-h-0 overflow-y-auto p-3 bg-[#fbfaf6]">
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 max-w-[1600px] mx-auto h-full">
 
-    <!-- 卡1：任务配置（一句话 + 版本年级模块 + 开始/快速/停止） -->
-    <div class="bg-white rounded-xl border border-[#e6dfd4] p-3.5 shadow-sm">
-      <h3 class="font-bold text-[14px] text-[#1b4332] mb-2 flex items-center gap-2"><span class="w-5 h-5 rounded-full bg-[#2d6a4f] text-white flex items-center justify-center text-[10.5px] font-bold">1</span>任务配置</h3>
-      <div class="sec-note">
-        <b>要测什么，一句话或手动选都行。</b> 开始后自动化跑模块，同时逐题审查，整个过程和判断证据都在右侧日志一条流展示。
+    <!-- 左卡：任务配置 + 一键检测按钮 -->
+    <div class="bg-white rounded-xl border border-[#e6dfd4] p-4 shadow-sm flex flex-col min-h-0">
+      <h3 class="font-bold text-[14px] text-[#1b4332] mb-2 flex items-center gap-2 shrink-0"><span class="w-5 h-5 rounded-full bg-[#2d6a4f] text-white flex items-center justify-center text-[10.5px] font-bold">1</span>任务配置 · 一键自动检测</h3>
+      <div class="sec-note shrink-0">
+        <b>选好模块、上传脚本，一键全自动：</b>有脚本 → LLM 知识性审查；无脚本 → 基础完整性检查。
       </div>
-      <textarea id="orderInput" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();tryParseOrder()}"
-        placeholder="一句话描述，如：湘少版五年级上册 听力专项U1难点突破 口语训练U1&#10;回车自动识别 版本/年级/模块/单元"
-        class="w-full min-h-[76px] border-[1.5px] border-dashed border-[#e6dfd4] rounded-lg p-2.5 text-[12.5px] resize-y leading-relaxed focus:outline-none focus:border-[#40916c] focus:bg-white bg-[#faf7f2]"></textarea>
-      <div class="text-[11px] text-[#6b7280] mt-1.5 leading-relaxed">或 <span class="text-[#2d6a4f] underline underline-offset-2 cursor-pointer" onclick="$('fileOrder').click()">上传任务清单</span> · 也支持 期中/期末/AI检测 关键词单元</div>
+
+      <!-- 一句话描述 + 版本/年级（并排，省高度） -->
+      <div class="grid grid-cols-3 gap-2 shrink-0">
+        <div class="col-span-2">
+          <textarea id="orderInput" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();tryParseOrder()}"
+            placeholder="一句话描述，如：湘少版五年级上册 听力专项U1难点突破 口语训练U1&#10;回车自动识别 版本/年级/模块/单元"
+            class="w-full min-h-[46px] border-[1.5px] border-dashed border-[#e6dfd4] rounded-lg p-2 text-[12.5px] resize-y leading-relaxed focus:outline-none focus:border-[#40916c] focus:bg-white bg-[#faf7f2]"></textarea>
+          <div class="text-[10.5px] text-[#6b7280] mt-1 leading-relaxed">回车自动识别 · 或 <span class="text-[#2d6a4f] underline underline-offset-2 cursor-pointer" onclick="$('fileOrder').click()">上传任务清单</span> · 支持 期中/期末/AI检测</div>
+        </div>
+        <div class="flex flex-col gap-2">
+          <div>
+            <label class="block text-[11px] text-[#6b7280] mb-0.5">教材版本 <span class="text-[10px]" id="versionLoading"></span></label>
+            <select id="setupVersion" onchange="renderGrades(this.value)" class="w-full border-[1.5px] border-[#e6dfd4] rounded-lg px-2 py-1.5 text-[12px] bg-white">
+              <option selected>湘少版</option><option>湘少版(2024审定)</option><option>人教版</option><option>人教版(PEP)</option><option>外研版(三起)</option><option>外研版(一起)</option><option>湘鲁版</option><option>冀教版</option><option>教科版</option><option>陕旅版</option><option>新概念青少版</option><option>通用</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-[11px] text-[#6b7280] mb-0.5">年级 <span class="text-[10px]" id="gradeLoading"></span></label>
+            <select id="setupGrade" class="w-full border-[1.5px] border-[#e6dfd4] rounded-lg px-2 py-1.5 text-[12px] bg-white">
+              <option selected>五年级上册</option><option>五年级下册</option><option>六年级上册</option><option>六年级下册</option><option>四年级下册</option><option>三年级下册</option>
+            </select>
+          </div>
+        </div>
+      </div>
       <input type="file" id="fileOrder" accept=".txt,.docx,.xlsx,.doc,.xls" onchange="uploadOrder(event)" class="hidden">
 
-      <div class="grid grid-cols-2 gap-2 mt-3">
-        <div>
-          <label class="block text-[11px] text-[#6b7280] mb-0.5">教材版本 <span class="text-[10px]" id="versionLoading"></span></label>
-          <select id="setupVersion" onchange="renderGrades(this.value)" class="w-full border-[1.5px] border-[#e6dfd4] rounded-lg px-2 py-1.5 text-[12px] bg-white">
-            <option selected>湘少版</option><option>湘少版(2024审定)</option><option>人教版</option><option>人教版(PEP)</option><option>外研版(三起)</option><option>外研版(一起)</option><option>湘鲁版</option><option>冀教版</option><option>教科版</option><option>陕旅版</option><option>新概念青少版</option><option>通用</option>
-          </select>
+      <div class="flex items-center justify-between text-[11px] text-[#6b7280] mt-2.5 mb-1 shrink-0">
+        <span>要测的模块（可多选）· 单元默认全选，取消勾选可指定范围</span>
+        <span>已选 <b id="moduleSelCount" class="text-[#2d6a4f]">0</b></span>
+      </div>
+            <div class="space-y-1.5 shrink-0">
+        <!-- 听力专项：练/测 两组单元 -->
+        <div class="mod-card mod-tag">
+          <div class="mod-card-head">
+            <label class="mod-sel-label"><input type="checkbox" class="mod-sel" value="听力专项">听力专项</label>
+            <button type="button" class="unit-clear" onclick="clearUnitPicks(this)">清空单元</button>
+          </div>
+          <div class="unit-input-row"><span class="up-k">练</span><input class="unit-val unit-val-p" placeholder="1-5 或 1 3 5，留空=全部" title="练习单元范围：支持 1-5 / 1,3,5 / 空格分隔"></div>
+          <div class="unit-input-row"><span class="up-k">测</span><input class="unit-val unit-val-t" placeholder="1-5 或 1 3 5，留空=全部" title="测试单元范围：支持 1-5 / 1,3,5 / 空格分隔"></div>
         </div>
-        <div>
-          <label class="block text-[11px] text-[#6b7280] mb-0.5">年级 <span class="text-[10px]" id="gradeLoading"></span></label>
-          <select id="setupGrade" class="w-full border-[1.5px] border-[#e6dfd4] rounded-lg px-2 py-1.5 text-[12px] bg-white">
-            <option selected>五年级上册</option><option>五年级下册</option><option>六年级上册</option><option>六年级下册</option><option>四年级下册</option><option>三年级下册</option>
-          </select>
+        <!-- 口语训练 -->
+        <div class="mod-card mod-tag">
+          <div class="mod-card-head">
+            <label class="mod-sel-label"><input type="checkbox" class="mod-sel" value="口语训练">口语训练</label>
+            <button type="button" class="unit-clear" onclick="clearUnitPicks(this)">清空单元</button>
+          </div>
+          <div class="unit-input-row"><span class="up-k">单元</span><input class="unit-val" placeholder="1-5 或 1 3 5，留空=全部" title="单元范围：支持 1-5 / 1,3,5 / 空格分隔"></div>
+        </div>
+        <!-- 单元自检 -->
+        <div class="mod-card mod-tag">
+          <div class="mod-card-head">
+            <label class="mod-sel-label"><input type="checkbox" class="mod-sel" value="单元自检">单元自检</label>
+            <button type="button" class="unit-clear" onclick="clearUnitPicks(this)">清空单元</button>
+          </div>
+          <div class="unit-input-row"><span class="up-k">单元</span><input class="unit-val" placeholder="1-5 或 1 3 5，留空=全部" title="单元范围：支持 1-5 / 1,3,5 / 空格分隔"></div>
+        </div>
+        <!-- 知识过关 -->
+        <div class="mod-card mod-tag">
+          <div class="mod-card-head">
+            <label class="mod-sel-label"><input type="checkbox" class="mod-sel" value="知识过关">知识过关</label>
+            <button type="button" class="unit-clear" onclick="clearUnitPicks(this)">清空单元</button>
+          </div>
+          <div class="unit-input-row"><span class="up-k">单元</span><input class="unit-val" placeholder="1-5 或 1 3 5，留空=全部" title="单元范围：支持 1-5 / 1,3,5 / 空格分隔"></div>
+        </div>
+        <!-- 语音评测 -->
+        <div class="mod-card mod-tag">
+          <div class="mod-card-head">
+            <label class="mod-sel-label"><input type="checkbox" class="mod-sel" value="语音评测">语音评测</label>
+            <button type="button" class="unit-clear" onclick="clearUnitPicks(this)">清空单元</button>
+          </div>
+          <div class="unit-input-row"><span class="up-k">单元</span><input class="unit-val" placeholder="1-5 或 1 3 5，留空=全部" title="单元范围：支持 1-5 / 1,3,5 / 空格分隔"></div>
+        </div>
+        <!-- 巧记单词 -->
+        <div class="mod-card mod-tag">
+          <div class="mod-card-head">
+            <label class="mod-sel-label"><input type="checkbox" class="mod-sel" value="巧记单词">巧记单词</label>
+            <button type="button" class="unit-clear" onclick="clearUnitPicks(this)">清空单元</button>
+          </div>
+          <div class="unit-input-row"><span class="up-k">单元</span><input class="unit-val" placeholder="1-5 或 1 3 5，留空=全部" title="单元范围：支持 1-5 / 1,3,5 / 空格分隔"></div>
         </div>
       </div>
 
-      <div class="text-[11px] text-[#6b7280] mt-2 mb-1">要测的模块（可多选）· 点齿轮指定单元</div>
-      <div class="flex flex-wrap gap-1.5">
-        <label class="mod-tag flex items-center gap-1 px-2.5 py-1 rounded-full text-[11.5px] border-[1.5px] cursor-pointer select-none bg-white border-[#e6dfd4] text-[#3d3226]"><input type="checkbox" class="mod-sel hidden" value="听力专项">听力专项<span class="unit-gear" title="指定单元范围"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span><span class="unit-input-wrap"><span>练</span><input type="text" class="unit-range-input" placeholder="1-5" size="4" title="练习单元范围"><span>测</span><input type="text" class="unit-range-input" placeholder="1-5" size="4" title="测试单元范围"></span></label>
-        <label class="mod-tag flex items-center gap-1 px-2.5 py-1 rounded-full text-[11.5px] border-[1.5px] cursor-pointer select-none bg-white border-[#e6dfd4] text-[#3d3226]"><input type="checkbox" class="mod-sel hidden" value="口语训练">口语训练<span class="unit-gear" title="指定单元范围"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span><span class="unit-input-wrap"><input type="text" class="unit-range-input" placeholder="1-4" size="4"></span></label>
-        <label class="mod-tag flex items-center gap-1 px-2.5 py-1 rounded-full text-[11.5px] border-[1.5px] cursor-pointer select-none bg-white border-[#e6dfd4] text-[#3d3226]"><input type="checkbox" class="mod-sel hidden" value="单元自检">单元自检<span class="unit-gear" title="指定单元范围"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span><span class="unit-input-wrap"><input type="text" class="unit-range-input" placeholder="1-4" size="4"></span></label>
-        <label class="mod-tag flex items-center gap-1 px-2.5 py-1 rounded-full text-[11.5px] border-[1.5px] cursor-pointer select-none bg-white border-[#e6dfd4] text-[#3d3226]"><input type="checkbox" class="mod-sel hidden" value="知识过关">知识过关<span class="unit-gear" title="指定单元范围"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span><span class="unit-input-wrap"><input type="text" class="unit-range-input" placeholder="1-9" size="4"></span></label>
-        <label class="mod-tag flex items-center gap-1 px-2.5 py-1 rounded-full text-[11.5px] border-[1.5px] cursor-pointer select-none bg-white border-[#e6dfd4] text-[#3d3226]"><input type="checkbox" class="mod-sel hidden" value="语音评测">语音评测<span class="unit-gear" title="指定单元范围"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span><span class="unit-input-wrap"><input type="text" class="unit-range-input" placeholder="—" size="4"></span></label>
-        <label class="mod-tag flex items-center gap-1 px-2.5 py-1 rounded-full text-[11.5px] border-[1.5px] cursor-pointer select-none bg-white border-[#e6dfd4] text-[#3d3226]"><input type="checkbox" class="mod-sel hidden" value="巧记单词">巧记单词<span class="unit-gear" title="指定单元范围"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span><span class="unit-input-wrap"><input type="text" class="unit-range-input" placeholder="1-9" size="4"></span></label>
-        <span class="text-[11px] text-[#6b7280] self-center">已选 <b id="moduleSelCount">0</b></span>
-      </div>
-
-      <!-- 动作：主按钮 + 次按钮 -->
-      <button id="btnCook" onclick="startCooking()" class="mt-3 w-full py-2.5 bg-gradient-to-r from-[#1b4332] to-[#2d6a4f] text-white rounded-xl font-bold text-[14px] shadow-md hover:shadow-lg hover:-translate-y-px transition active:scale-[.98] disabled:opacity-60">解析并开始检测</button>
-      <div class="grid grid-cols-2 gap-2 mt-2">
-        <button id="quickBtn" onclick="quickInsp()" class="py-2 rounded-lg bg-[#e9c46a] text-[#5c4506] text-[12.5px] font-semibold hover:bg-[#dbb84a] transition disabled:opacity-50" title="从手机当前页面直接开始逐题审查">快速检查</button>
-        <button id="stopBtn2" onclick="stopInsp()" class="py-2 rounded-lg bg-[#bc4742] text-white text-[12.5px] font-semibold hover:bg-[#a33b36] transition disabled:opacity-50">停止</button>
+      <!-- 行动：极简——一个「解析并自动检测」按钮（有脚本→LLM审查 / 无脚本→基础完整性） -->
+      <div class="mt-auto pt-3 mb-[30px] shrink-0">
+        <button id="btnCook" onclick="startCooking()" class="w-full py-3 bg-gradient-to-r from-[#1b4332] to-[#2d6a4f] text-white rounded-xl font-bold text-[14px] shadow-md hover:shadow-lg hover:-translate-y-px transition active:scale-[.98] disabled:opacity-60 flex items-center justify-center gap-2"><span class="text-[15px] leading-none">▶</span>解析并自动检测</button>
+        <!-- ↓ 以下旧按钮/区块隐藏保留（JS 引用安全，界面不展示） -->
+        <div class="hidden grid grid-cols-2 gap-2 mt-2">
+          <button id="quickBtn" onclick="quickInsp()" class="py-2 rounded-lg bg-[#e9c46a] text-[#5c4506] text-[12px] font-semibold">快速检查</button>
+          <button id="stopBtn2" onclick="stopInsp()" class="py-2 rounded-lg bg-[#bc4742] text-white text-[12px] font-semibold">停止</button>
+        </div>
+        <button id="runBtn" onclick="startInsp()" class="hidden mt-2 w-full py-2 rounded-lg bg-[#2d6a4f] text-white text-[12px] font-semibold">开始检查</button>
+        <div class="hidden mt-2 border-t border-dashed border-[#e6dfd4] pt-2">
+          <span class="block text-[11px] font-semibold text-[#475569] mb-1">按脚本一键审查（不连手机）</span>
+          <select id="reviewDocx" class="w-full border-[1.5px] border-[#e6dfd4] rounded-lg px-2 py-1.5 text-[12px] bg-white mb-1.5"></select>
+          <div class="flex gap-1.5">
+            <input type="number" id="reviewUnit" placeholder="单元(0=全部)" class="flex-1 border-[1.5px] border-[#e6dfd4] rounded-lg px-2 py-1.5 text-[12px]">
+            <button class="bg-[#2d6a4f] text-white rounded-lg px-4 text-[12px] font-semibold" onclick="runReview()">审查</button>
+          </div>
+          <div class="review-result" id="reviewResult"></div>
+        </div>
       </div>
     </div>
 
-    <!-- 卡2：脚本 · 审查 · 知识库 -->
-    <div class="bg-white rounded-xl border border-[#e6dfd4] p-3.5 shadow-sm">
-      <h3 class="font-bold text-[14px] text-[#1b4332] mb-2 flex items-center gap-2"><span class="w-5 h-5 rounded-full bg-[#5f9d7f] text-white flex items-center justify-center text-[10.5px] font-bold">2</span>审查脚本 · 知识库</h3>
-      <div class="sec-note">
-        <b>审查的依据。</b> 上传 DOCX 脚本解析成知识库，AI 审查时用它当"标准答案"核对；也可不连手机直接对照脚本审查。
+    <!-- 右卡：审查脚本 · 自动匹配（模块+版本+年级） -->
+    <div class="bg-white rounded-xl border border-[#e6dfd4] p-4 shadow-sm flex flex-col min-h-0">
+      <div class="flex items-center justify-between mb-2 shrink-0">
+        <h3 class="font-bold text-[14px] text-[#1b4332] flex items-center gap-2"><span class="w-5 h-5 rounded-full bg-[#5f9d7f] text-white flex items-center justify-center text-[10.5px] font-bold">2</span>审查脚本 · 自动匹配</h3>
+        <span id="matchSummary" class="text-[10.5px] text-[#6b7280]"></span>
+      </div>
+      <div class="sec-note shrink-0">
+        <b>上传后按 模块+版本+年级 自动匹配。</b> 有脚本 → LLM 知识性审查；无脚本 → 基础完整性检查。
       </div>
 
-      <!-- 上传 -->
-      <div id="dropZone" class="border-2 border-dashed border-[#e6dfd4] rounded-lg p-2.5 text-center bg-[#faf7f2] transition hover:border-[#40916c] hover:bg-[#e8f5ee]">
-        <div class="text-[20px] text-[#2d6a4f] font-light leading-none">+</div>
-        <div class="text-[11px] text-[#6b7280] my-1">拖拽 DOCX / DOC 到此处，或点按钮选择</div>
-        <input type="file" id="fileInput" accept=".docx,.doc" class="hidden">
-        <button class="border-[1.5px] border-[#2d6a4f] text-[#2d6a4f] rounded-lg px-3 py-1 text-[11px] font-semibold hover:bg-[#e8f5ee] transition" onclick="document.getElementById('fileInput').click()">选择文件</button>
-      </div>
-      <div id="uploadStatus" class="text-[11px] text-[#6b7280] mt-1.5"></div>
-      <div class="file-list" id="uploadList"></div>
+      <!-- 中间内容区：超高时卡内滚动，不撑高整页 -->
+      <div class="flex-1 min-h-0 overflow-y-auto pr-1 -mr-1">
 
-      <!-- 知识库状态 -->
-      <div class="mt-2.5">
-        <span class="block text-[11px] font-semibold text-[#475569] mb-0.5">知识库状态</span>
-        <div class="info-row"><span class="key">总知识点数</span><span class="val" id="kbTotal">加载中</span></div>
-        <div class="info-row"><span class="key">覆盖年级</span><span class="val" id="kbGrades">—</span></div>
-        <div class="info-row"><span class="key">AI 与人工一致率</span><span class="val" id="fbAccuracy">—</span></div>
+        <!-- 上传 -->
+        <div id="dropZone" class="border-2 border-dashed border-[#e6dfd4] rounded-lg p-2.5 text-center bg-[#faf7f2] transition hover:border-[#40916c] hover:bg-[#e8f5ee]">
+          <div class="text-[20px] text-[#2d6a4f] font-light leading-none">+</div>
+          <div class="text-[11px] text-[#6b7280] my-1">拖拽 DOCX / DOC 到此处，或点按钮选择</div>
+          <input type="file" id="fileInput" accept=".docx,.doc" class="hidden">
+          <button class="border-[1.5px] border-[#2d6a4f] text-[#2d6a4f] rounded-lg px-3 py-1 text-[11px] font-semibold hover:bg-[#e8f5ee] transition" onclick="document.getElementById('fileInput').click()">选择文件</button>
+        </div>
+        <div id="uploadStatus" class="text-[11px] text-[#6b7280] mt-1.5"></div>
+        <div class="file-list" id="uploadList"></div>
+
+        <!-- 自动匹配展示（按选中模块分组） -->
+        <div class="mt-2.5">
+          <span class="block text-[11px] font-semibold text-[#475569] mb-1">脚本自动匹配（按选中模块）</span>
+          <div id="moduleMatchList" class="space-y-1 text-[11.5px]">
+            <div class="text-[#9aa5a0] text-center py-2 bg-[#faf8f3] rounded-lg">尚未选模块</div>
+          </div>
+        </div>
       </div>
 
-      <!-- 审查选项（合并自原"审查控制"，折叠收起，不占视觉空间） -->
-      <div class="mt-2.5 border-t border-dashed border-[#e6dfd4] pt-2.5">
-        <span class="block text-[11px] font-semibold text-[#475569] mb-1">审查选项（快速检查/开始检查 的参数）</span>
-        <div class="grid grid-cols-3 gap-1.5 mb-1.5">
+        <!-- 知识库状态（精简三栏，界面隐藏，JS 引用保留） -->
+        <div class="mt-2.5 grid grid-cols-3 gap-2 text-[11px] hidden">
+          <div class="bg-[#faf8f3] rounded-lg px-2 py-1.5 text-center"><span class="text-[#6b7280]">知识点</span> <b id="kbTotal" class="text-[#2d6a4f]">—</b></div>
+          <div class="bg-[#faf8f3] rounded-lg px-2 py-1.5 text-center"><span class="text-[#6b7280]">年级</span> <b id="kbGrades" class="text-[#2d6a4f]">—</b></div>
+          <div class="bg-[#faf8f3] rounded-lg px-2 py-1.5 text-center"><span class="text-[#6b7280]">一致率</span> <b id="fbAccuracy" class="text-[#2d6a4f]">—</b></div>
+        </div>
+
+      <!-- 审查选项（隐藏保留，JS 引用安全；界面不展示） -->
+      <details class="mt-3 border-t border-dashed border-[#e6dfd4] pt-2 hidden">
+        <summary class="text-[11.5px] font-semibold text-[#475569] cursor-pointer hover:text-[#2d6a4f] select-none">审查选项（开始检查参数，可不展开）</summary>
+        <div class="grid grid-cols-3 gap-1.5 mt-2">
           <div>
             <span class="block text-[10.5px] text-[#6b7280] mb-0.5">脚本版本</span>
             <select id="inspectVersion" class="w-full border-[1.5px] border-[#e6dfd4] rounded-lg px-1.5 py-1.5 text-[11.5px] bg-white">
@@ -312,21 +402,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
             </div>
           </div>
         </div>
-        <button id="runBtn" onclick="startInsp()" class="w-full py-2 rounded-lg bg-[#2d6a4f] text-white text-[12.5px] font-semibold hover:bg-[#1b4332] transition disabled:opacity-50">开始检查（自动导航到题目页逐题查）</button>
-      </div>
-
-      <!-- 按脚本一键审查 -->
-      <div class="mt-2.5 border-t border-dashed border-[#e6dfd4] pt-2.5">
-        <span class="block text-[11px] font-semibold text-[#475569] mb-1">按脚本一键审查（不连手机，对照脚本文字）</span>
-        <select id="reviewDocx" class="w-full border-[1.5px] border-[#e6dfd4] rounded-lg px-2 py-1.5 text-[12px] bg-white mb-1.5"></select>
-        <div class="flex gap-1.5">
-          <input type="number" id="reviewUnit" placeholder="单元(0=全部)" class="flex-1 border-[1.5px] border-[#e6dfd4] rounded-lg px-2 py-1.5 text-[12px]">
-          <button class="bg-[#2d6a4f] text-white rounded-lg px-4 text-[12px] font-semibold hover:bg-[#1b4332] transition" onclick="runReview()">审查</button>
-        </div>
-        <div class="review-result" id="reviewResult"></div>
-      </div>
+      </details>
     </div>
-
+  </div>
   </aside>
 
   <!-- ===== Tab2/3/4 容器：运行日志 / 审查结果 / 手机画面 ===== -->
@@ -505,9 +583,8 @@ function switchTab(n){
   document.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('active', parseInt(b.dataset.tab)===n))
   const aside=$('tabAside'), main=$('tabMain')
   const on1=(n===1), on2=(n===2), on3=(n===3)
-  // Tab1 任务配置：aside 显示（全宽两列）；其余隐藏
+  // Tab1 任务配置：aside 显示（内部两栏布局由 HTML 定义）；其余隐藏
   aside.style.display=on1?'':'none'
-  if(on1) aside.className='flex-1 min-h-0 overflow-y-auto p-3 grid grid-cols-1 xl:grid-cols-2 gap-3 bg-[#fbfaf6]'
   // Tab2/3：main 显示
   main.style.display=on1?'none':''
   // Tab2 运行日志·手机画面：状态条/流程条/日志+截图左右分栏显示；审查结果隐藏
@@ -608,6 +685,34 @@ function refreshModuleSel(){
   })
 }
 
+/* ========== 单元范围输入（空格/横线/逗号分隔 → 规范范围串） ========== */
+/* 输入 "1-5" / "1,3,5" / "1 3 5" / "1-3,5" → "1-5" / "1,3,5" / "1-3,5"；空 → ""（不限） */
+function normalizeUnits(str){
+  const tokens=String(str||'').split(/[\s,，]+/).filter(Boolean)
+  const vals=[]
+  tokens.forEach(t=>{
+    const m=t.trim().match(/^(\d+)(?:-(\d+))?$/)
+    if(!m) return
+    const a=parseInt(m[1]),b=m[2]?parseInt(m[2]):a
+    for(let u=a;u<=b;u++) vals.push(u)
+  })
+  const uniq=[...new Set(vals)].sort((a,b)=>a-b)
+  if(!uniq.length) return ''
+  const parts=[];let s=uniq[0],p=uniq[0]
+  for(let i=1;i<=uniq.length;i++){
+    const v=uniq[i]
+    if(v===p+1){p=v;continue}
+    parts.push(s===p?String(s):`${s}-${p}`)
+    s=p=v
+  }
+  return parts.join(',')
+}
+/* 「清空单元」按钮：清空输入框 */
+function clearUnitPicks(btn){
+  const card=btn.closest('.mod-card')||btn.closest('.mod-tag')
+  if(card) card.querySelectorAll('.unit-val').forEach(i=>i.value='')
+}
+
 /* ========== 日志（点击 + 审查合并流） ========== */
 function addLog(level,msg,evidence){
   const t=new Date().toLocaleTimeString()
@@ -669,15 +774,14 @@ async function startCooking(){
   document.querySelectorAll('.mod-sel:checked').forEach(cb=>{
     const name=cb.value
     const tag=cb.closest('.mod-tag')
-    if(name==='听力专项' && tag){
-      const inputs=tag.querySelectorAll('.unit-range-input')
-      const pUnits=inputs[0]?inputs[0].value.trim():''
-      const tUnits=inputs[1]?inputs[1].value.trim():''
-      moduleConfigs.push({name,units:pUnits,testUnits:tUnits})
+    if(!tag) return
+    if(name==='听力专项'){
+      const pWrap=tag.querySelector('.unit-val-p')
+      const tWrap=tag.querySelector('.unit-val-t')
+      moduleConfigs.push({name,units:pWrap?normalizeUnits(pWrap.value):'',testUnits:tWrap?normalizeUnits(tWrap.value):''})
     }else{
-      const input=tag?tag.querySelector('.unit-range-input'):null
-      const units=input?input.value.trim():''
-      moduleConfigs.push({name,units})
+      const v=tag.querySelector('.unit-val')
+      moduleConfigs.push({name,units:v?normalizeUnits(v.value):''})
     }
   })
   if(!moduleConfigs.length){alert('请至少选择一个模块（或在清单中说明）');return}
@@ -688,9 +792,21 @@ async function startCooking(){
     if(m.testUnits) unitsMap['听力专项_测试']=m.testUnits
   })
   const hasUnits=Object.keys(unitsMap).length>0
+  // ★ 模块 → 上传脚本 自动匹配：有脚本的模块走 LLM 知识性审查，无脚本仅基础完整性
+  const docxs=getUploadedDocxs()
+  const {v:matchV,g:matchG}=curVersionGrade()
+  const docxMap={}
+  moduleConfigs.forEach(m=>{
+    const _d=matchDocxForModule(m.name,docxs,matchV,matchG)
+    if(_d) docxMap[m.name]=_d
+  })
   let confirmMsg = '确认启动多模块检测？\n'
   confirmMsg += `版本: ${version} | 年级: ${grade}\n`
   confirmMsg += `模块: ${modules.join('、')} (共${modules.length}个)`
+  confirmMsg += '\n审查方式: '
+  confirmMsg += moduleConfigs.map(m=>docxMap[m.name]
+    ? `${m.name}=LLM知识性审查(脚本 ${docxMap[m.name]})`
+    : `${m.name}=基础完整性`).join('；')
   if(hasUnits){
     confirmMsg += '\n单元范围: '
     confirmMsg += moduleConfigs.filter(m=>m.units).map(m=>`${m.name}=${m.units}`).join(', ')
@@ -704,7 +820,9 @@ async function startCooking(){
   addLog('info','版本/年级: '+version+' '+grade)
   if(hasUnits) addLog('info','单元范围: '+JSON.stringify(unitsMap))
   try{
-    const body=hasUnits?{version,grade,modules,units:unitsMap}:{version,grade,modules}
+    const body=hasUnits
+      ? {version,grade,modules,units:unitsMap,docxMap}
+      : {version,grade,modules,docxMap}
     const r=await fetch('/api/modules/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
     const j=await r.json()
     if(j.error){alert(j.error);btn.disabled=false;btn.innerHTML='解析并开始检测';return}
@@ -947,12 +1065,13 @@ function applyOrder(text){
       cb.closest('.mod-tag').classList.add('on')
       const tag=cb.closest('.mod-tag')
       if(m.name==='听力专项' && tag){
-        const inputs=tag.querySelectorAll('.unit-range-input')
-        if(inputs[0]) inputs[0].value=m.units
-        if(inputs[1]) inputs[1].value=m.testUnits
+        const pWrap=tag.querySelector('.unit-val-p')
+        const tWrap=tag.querySelector('.unit-val-t')
+        if(pWrap && m.units) pWrap.value=m.units
+        if(tWrap && m.testUnits) tWrap.value=m.testUnits
       }else{
-        const input=tag.querySelector('.unit-range-input')
-        if(input) input.value=m.units
+        const v=tag?tag.querySelector('.unit-val'):null
+        if(v && m.units) v.value=m.units
       }
       addLog('info','识别模块: '+m.name+(m.units?' U'+m.units:'')+(m.testUnits?' 测试U'+m.testUnits:'')+(m.sub?'（'+m.sub+'）':''))
     })
@@ -1071,6 +1190,7 @@ function updQ(f){
       <div class="q-head">
         <div class="qnum">Q${String(q.idx??qid).padStart(2,'0')}</div>
         <span class="qtype">${q.question_type||'?'}</span>
+        ${q.note?`<span class="ml-auto text-[9px] px-1.5 py-px rounded bg-[#e0f2fe] text-[#0369a1] truncate max-w-[130px]" title="${escHtml(q.note)}">📖 脚本审查</span>`:''}
         <div class="qstatus">
           <span class="tag ${unrev?'pending-label':(pa?'pass':'fail')}">AI:${unrev?'未审查':(pa?'通过':'不通过')}</span>
           ${q.human_label?`<span class="tag ${q.human_label==='通过'?'human-pass':'human-fail'}">人:${q.human_label}</span>`:''}
@@ -1105,11 +1225,28 @@ const WRONG_SUGGEST={
   答错后:'验证答错后的反馈流程'
 }
 function fmtLoc(id,q){
-  // key 形如 "新湘鲁六上-U6-基础巩固-Q03" → "新湘鲁六上-U6-基础巩固 · 第3题"
-  const m=String(id).match(/^(.+?-U\d+[^Q]*?)-Q0*(\d+)$/)
-  if(m) return `${m[1]} · 第${m[2]}题`
-  return `${q.question_type||'题目'} · 第${q.idx||'?'}题`
+  // 期望格式：模块 + 单元 +（子模块）+ 题号，如「听力专项 · U6 · 基础巩固 · 第3题」
+  const s=String(id||'')
+  const parts=[]
+  // 模块名：auto- 前缀（来自答题循环）→ 用 question_type；否则取 qid 第一段
+  if(s.startsWith('auto-')){
+    parts.push(String(q.question_type||'题目').replace(/[（(].*?[）)]/g,'').replace(/测试$/,''))
+  }else{
+    const first=s.split('-')[0]
+    parts.push(first||'题目')
+  }
+  // 单元 U\d+
+  const um=s.match(/U(\d+)/)
+  if(um) parts.push('U'+um[1])
+  // 子模块（阶段）
+  const sm=(s.match(/(基础巩固|综合进阶|难点突破)/)||[])[1]
+  if(sm) parts.push(sm)
+  // 题号
+  const qm=s.match(/[Qq]0*(\d+)/)
+  parts.push('第'+(qm?qm[1]:(q.idx||'?'))+'题')
+  return parts.join(' · ')
 }
+let _wrongSig=''  // 错题列表内容签名（防每2秒重绘导致滚动抖动）
 function updWrong(f){
   const el=$('wrongList'); if(!el) return
   const qs=f.questions||{}
@@ -1118,10 +1255,18 @@ function updWrong(f){
     return q.overall_passed===false || q.question_type==='错题截图'
   }).sort().map(id=>({id,q:qs[id]}))
   $('wrongBadge').textContent=wrong.length
+  // ★ 内容签名无变化 → 不重绘（保住滚动位置，用户能翻到底部看最后一题）
+  const sig=wrong.length+':'+wrong.map(({id,q})=>
+    id+'|'+q.overall_passed+'|'+(q.human_label||'')+'|'+
+    (q._score?(q._score.score+'_'+q._score.checked_count):'')+'|'+(q.screenshot||q._marked||'')
+  ).join(',')
+  if(sig===_wrongSig) return
+  _wrongSig=sig
   if(!wrong.length){
     el.innerHTML='<div class="text-center py-6 text-[#9aa5a0] bg-[#faf8f3] rounded-lg text-[11px]">暂无错题<br>（检测通过或尚未开始）</div>'
     return
   }
+  const scTop=el.scrollTop  // 记录滚动位置，重绘后恢复
   const cleanR=s=>String(s||'').replace(/^\[不通过\]\s*\|\s*/,'')
   const sevLbl={high:'高',medium:'中',low:'低'}
   const sevCls={high:'bg-[#fee2e2] text-[#bc4742]',medium:'bg-[#fef3c7] text-[#92400e]',low:'bg-[#e0e7ff] text-[#3730a3]'}
@@ -1217,7 +1362,102 @@ function updWrong(f){
       </div>
     </div>`
   }).join('')
+  el.scrollTop=scTop  // 恢复滚动位置（防重绘抖动）
 }
+
+/* ========== 模块 → 上传脚本 自动匹配 ========== */
+// 模块名 → 脚本文件名关键词（顺序匹配，第一个命中即选）
+const MOD_KEYWORDS={
+  '听力专项':['听力专项','听力'],
+  '口语训练':['口语','朗读'],
+  '单元自检':['单元自检','单元检测'],
+  '知识过关':['知识过关','知识','重点词汇','重点句型'],
+  '巧记单词':['巧记','单词'],
+  '语音评测':['语音评测','语音']
+}
+function getSelectedModules(){
+  return [...document.querySelectorAll('.mod-sel')].filter(c=>c.checked).map(c=>c.value)
+}
+function getUploadedDocxs(){
+  // 从 reviewDocx select 的 options 取当前上传脚本名（由 loadUploadList / 上传回调填充）
+  const sel=$('reviewDocx'); if(!sel) return []
+  return [...sel.options].map(o=>o.text||'').filter(Boolean)
+}
+// 版本/年级 select 值 → 脚本文件名关键词（数组：简称+全称；表外值用 _Aliases 自动推导，绝不放空）
+const VER_KEYWORDS={
+  '湘少版':['湘少','湘少版'],'湘少版(2024审定)':['湘少','湘少版'],'湘鲁版':['湘鲁','湘鲁版'],'新湘鲁版':['湘鲁','湘鲁版'],
+  '人教版':['人教','人教版'],'人教版(PEP)':['人教','人教版'],'外研版(三起)':['外研','外研版'],'外研版(一起)':['外研','外研版'],
+  '冀教版':['冀教','冀教版'],'教科版':['教科','教科版'],'陕旅版':['陕旅','陕旅版'],'新概念青少版':['新概念']
+}
+const GRADE_KEYWORDS={
+  '一年级上册':['一上','一年级上册'],'一年级下册':['一下','一年级下册'],
+  '二年级上册':['二上','二年级上册'],'二年级下册':['二下','二年级下册'],
+  '三年级上册':['三上','三年级上册'],'三年级下册':['三下','三年级下册'],
+  '四年级上册':['四上','四年级上册'],'四年级下册':['四下','四年级下册'],
+  '五年级上册':['五上','五年级上册'],'五年级下册':['五下','五年级下册'],
+  '六年级上册':['六上','六年级上册'],'六年级下册':['六下','六年级下册']
+}
+/* 表外版本兜底：去括号、去“版”尾 → 如 湘鲁版(2024) → 湘鲁版/湘鲁；表外值仍用选项值本身匹配 */
+function _verAliases(v){
+  const base=String(v||'').replace(/（.*）|\(.*\)/g,'').replace(/版$/,'').trim()
+  return [...new Set([String(v),base])].filter(Boolean)
+}
+/* 表外年级兜底：一年级上册 → 一上（简称推导） */
+function _gradeAliases(g){
+  const m=String(g||'').match(/^([一二三四五六])年级([上下])册$/)
+  return m?[String(g),m[1]+m[2]]:[String(g)]
+}
+function matchDocxForModule(mod,docxs,version,grade){
+  const kws=MOD_KEYWORDS[mod]||[mod]
+  // ★ 关键：未知版本/年级绝不允许“不限制”——表里有就用表，表外就用选项值本身推导匹配
+  const verKws=(version&&version!=='通用')?(VER_KEYWORDS[version]||_verAliases(version)):[]
+  const gKws=grade?(GRADE_KEYWORDS[grade]||_gradeAliases(grade)):[]
+  const hasK=d=>kws.some(k=>d.includes(k))
+  const verOk=d=>!verKws.length||verKws.some(k=>d.includes(k))
+  const gOk=d=>!gKws.length||gKws.some(k=>d.includes(k))
+  // ★ 严格匹配：模块 + 版本 + 年级 三者全部命中才算「有脚本」
+  //   （不做降级兜底，避免版本/年级不对的脚本被误用，导致 LLM 对照错误）
+  return docxs.find(d=>hasK(d)&&verOk(d)&&gOk(d))||''
+}
+function curVersionGrade(){
+  return {v:$('setupVersion')?$('setupVersion').value:'',g:$('setupGrade')?$('setupGrade').value:''}
+}
+function updateModuleMatch(){
+  const list=$('moduleMatchList'); if(!list) return
+  const mods=getSelectedModules()
+  const docxs=getUploadedDocxs()
+  const {v,g}=curVersionGrade()
+  if(!mods.length){
+    list.innerHTML='<div class="text-[#9aa5a0] text-center py-2 bg-[#faf8f3] rounded-lg">尚未选模块</div>'
+    $('matchSummary').textContent=''
+    return
+  }
+  list.innerHTML=mods.map(m=>{
+    const d=matchDocxForModule(m,docxs,v,g)
+    if(d){
+      return `<div class="flex items-center gap-1.5 px-2 py-1 bg-[#f0f7f4] border border-[#bbf7d0] rounded">
+        <span class="text-[#2d6a4f]">✓</span>
+        <span class="text-[#2d6a4f] font-semibold">${escHtml(m)}</span>
+        <span class="text-[#9aa5a0]">→</span>
+        <span class="text-[#475569] truncate" title="${escHtml(d)}">${escHtml(d)}</span>
+        <span class="ml-auto text-[10px] text-[#2d6a4f]">LLM</span>
+      </div>`
+    }
+    return `<div class="flex items-center gap-1.5 px-2 py-1 bg-[#fef3c7] border border-[#fde68a] rounded">
+      <span class="text-[#92400e]">—</span>
+      <span class="text-[#92400e] font-semibold">${escHtml(m)}</span>
+      <span class="text-[#9aa5a0]">→</span>
+      <span class="text-[#92400e]">无匹配脚本</span>
+      <span class="ml-auto text-[10px] text-[#92400e]">仅基础</span>
+    </div>`
+  }).join('')
+  const hit=mods.filter(m=>matchDocxForModule(m,docxs,v,g)).length
+  $('matchSummary').textContent=`已匹配 ${hit}/${mods.length} 模块`
+}
+// 监听模块勾选变化 → 重新计算匹配
+document.querySelectorAll && setTimeout(()=>{
+  document.querySelectorAll('.mod-sel').forEach(c=>c.addEventListener('change',updateModuleMatch))
+},0)
 
 /* ========== 审查动作 ========== */
 function inspStageAllChange(){
@@ -1232,12 +1472,18 @@ function getInspStages(){
 async function startInsp(){
   const v=$('inspectVersion').value,u=$('inspectUnit').value
   const stages=getInspStages()
+  // ★ 按当前选中模块自动匹配上传的脚本：选中模块的第一个匹配 docx → 后端 LLM 审查
+  const mods=getSelectedModules()
+  const docxs=getUploadedDocxs()
+  const {v:cv,g:cg}=curVersionGrade()
+  const matchedMod=mods.length?mods[0]:''
+  const docx=matchedMod?matchDocxForModule(matchedMod,docxs,cv,cg):''
   $('runBtn').disabled=true
-  addLog('info','启动审查: '+v+' U'+u+' '+stages.join('、'))
+  addLog('info',`开始检查: ${v} U${u} ${stages.join('、')} · ${matchedMod||'未选模块'} ${docx?'(脚本 '+docx+' 启用 LLM)':'(无脚本，仅基础完整性)'}`)
   try{
     const r=await(await fetch('/api/inspect/listening-run',{method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({version:v,unit:parseInt(u),stages})})).json()
+      body:JSON.stringify({version:v,unit:parseInt(u),stages,docx})})).json()
     if(r.error){alert(r.error);$('runBtn').disabled=false;return}
     addLog('success','审查任务已启动')
   }catch(e){alert('失败:'+e);$('runBtn').disabled=false}
@@ -1250,13 +1496,18 @@ async function stopInsp(){
 }
 async function quickInsp(){
   $('quickBtn').disabled=true
-  const docx=$('reviewDocx')?$('reviewDocx').value:''
+  // ★ 按当前选中模块自动匹配上传的脚本（核心：模块→脚本→LLM 审查）
+  const mods=getSelectedModules()
+  const docxs=getUploadedDocxs()
+  const {v,g}=curVersionGrade()
+  const matchedMod=mods.length?mods[0]:''
+  const docx=matchedMod?matchDocxForModule(matchedMod,docxs,v,g):($('reviewDocx')?$('reviewDocx').value:'')
   const unit=$('reviewUnit')?$('reviewUnit').value:''
   const withAI=docx&&docx!=='— 尚未上传 —'&&docx!==''
-  addLog('info','快速检查: 从当前页面开始'+(withAI?'（携带脚本 '+docx+' 做 AI 六维审查）':'（未选脚本，仅截图推进）'))
+  addLog('info',`快速检查: ${matchedMod||'未选模块'} · ${withAI?'有脚本，启用 LLM 六维审查':'无脚本，仅做基础完整性'}`)
   try{
     const r=await(await fetch('/api/inspect/quick-run',{method:'POST',
-      headers:{'Content-Type':'application/json'},
+      headers:{'Content-Type': 'application/json'},
       body:JSON.stringify({docx:withAI?docx:'',unit:unit?parseInt(unit):0})})).json()
     if(r.error){alert(r.error);$('quickBtn').disabled=false;return}
     addLog('success','快速检查任务已启动')
@@ -1275,7 +1526,18 @@ async function humanLabel(qid,label){
   }catch(e){addLog('error','标注失败:'+e)}
 }
 async function runReview(){
-  const d=$('reviewDocx').value,u=parseInt($('reviewUnit')?.value||'0')
+  // ★ 优先用选中模块自动匹配的脚本，否则用 reviewDocx 手动选中的脚本
+  const mods=getSelectedModules()
+  const docxs=getUploadedDocxs()
+  const {v,g}=curVersionGrade()
+  let d=''
+  if(mods.length){d=matchDocxForModule(mods[0],docxs,v,g)}
+  if(!d)d=$('reviewDocx').value
+  const u=parseInt($('reviewUnit')?.value||'0')
+  if(!d||d==='— 尚未上传 —'){
+    $('reviewResult').innerHTML='<span style="color:var(--red)">请先选中模块并上传匹配脚本，或在下方下拉手动选脚本</span>'
+    return
+  }
   $('reviewResult').innerHTML='审查中…'
   try{
     const r=await(await fetch('/api/review/run',{method:'POST',
@@ -1314,6 +1576,7 @@ async function loadUL(){
       $('uploadList').innerHTML='<div style="color:var(--gray-2);font-size:11px">暂无已上传的脚本文件</div>'
       sel.innerHTML='<option>— 尚未上传 —</option>'
     }
+    updateModuleMatch()  // 脚本列表更新后刷新模块→脚本自动匹配
   }catch(e){}
 }
 async function loadVersions(){

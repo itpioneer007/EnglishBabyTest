@@ -4011,6 +4011,88 @@ def api_modules_stop():
     return jsonify({"status": "stopping", "message": message})
 
 
+# ============================================================
+# 脚本对照 LLM 知识性审查（有脚本的模块：基础自动化后追加）
+# ============================================================
+
+def _qreview_to_state(module: str, docx: str, unit, r) -> dict:
+    """把 ReviewAgent 的 QuestionReview 转成六维面板 questions 记录。"""
+    def _cr(chk):
+        if chk is None:
+            return None, "", "skip"
+        det = "；".join((chk.details or [])[:4])
+        # ★ skip = 该维度无法核对（听音/图片题无截图），计为「未检」而非「不通过」
+        if getattr(chk, "method", "") == "skip":
+            return None, det[:300], "skip"
+        return chk.passed, det[:300], chk.method or ""
+    dims = {
+        "stem": _cr(r.stem_check), "content": _cr(r.content_check),
+        "image": _cr(r.image_check), "answer": _cr(r.answer_check),
+        "audio": _cr(r.audio_check), "post_error": _cr(r.post_error_check),
+    }
+    checked = [v for v, _, _ in dims.values() if v is not None]
+    passed = [v for v, _, _ in dims.values() if v is True]
+    overall = None
+    if checked:
+        if any(v is False for v, _, _ in dims.values()):
+            overall = False
+        elif all(v is True for v, _, _ in dims.values()):
+            overall = True
+        # 部分检查（无 False 但未全过，如仅 1 维）→ 保持 None（未定），不误报不通过
+    return {
+        "idx": r.idx, "total": 0,
+        "question_type": r.question_type or "脚本题",
+        "screenshot": "",
+        "progress": f"Q{r.idx:02d}",
+        "ai_stem": dims["stem"][0], "ai_content": dims["content"][0],
+        "ai_image": dims["image"][0], "ai_answer": dims["answer"][0],
+        "ai_audio": dims["audio"][0], "ai_post_error": dims["post_error"][0],
+        "stem_reason": dims["stem"][1], "content_reason": dims["content"][1],
+        "image_reason": dims["image"][1], "answer_reason": dims["answer"][1],
+        "audio_reason": dims["audio"][1], "post_error_reason": dims["post_error"][1],
+        "overall_passed": overall,
+        "overall_score": round(len(passed) / max(len(checked), 1), 2) if checked else 0.0,
+        "stem": f"第{r.idx}题（{r.question_type or '脚本题'}）",
+        "options": "", "script_answer": r.script_answer or "",
+        "note": f"LLM 知识性审查 · 脚本 {docx}",
+    }
+
+
+def _run_llm_script_review(module: str, docx: str, version: str, unit):
+    """用 ReviewAgent 对照脚本做 LLM 知识性审查（文字核对 + 有截图时图片识别），
+    结果写入 _inspection_state["questions"]（前端六维面板实时展示）。"""
+    global _inspection_state
+    docx_path = PROJECT_ROOT / "uploads" / docx
+    if not docx_path.exists():
+        log_msg(f"❌ 脚本文件不存在: {docx}（请在页面上传脚本）", "error")
+        return
+    log_msg(f"🧠 {module} 正在用脚本「{docx}」做 LLM 知识性审查…（逐题核对题干/选项/答案，耗时较长）", "info")
+    try:
+        sys.path.insert(0, str(PROJECT_ROOT))
+        from src.review_agent import ReviewAgent, ReviewConfig
+        _u = 0
+        try:
+            _u = int(str(unit).split("-")[0])
+        except Exception:
+            pass
+        agent = ReviewAgent(ReviewConfig(
+            docx_path=str(docx_path),
+            screenshot_dir=str(PROJECT_ROOT / "screenshots"),
+            unit=_u, verbose=False,
+        ))
+        # ★ 不传 screenshots：自动化过程只有答错截图，旧截图与本次题目对不上会误导 LLM 判定
+        #   → 统一按脚本纯文字对照审查（题干/选项/答案），图片/音频维度标「需截图核对」= 未检
+        results = agent.review(screenshots={})
+        n_pass = sum(1 for rr in results if rr.overall_passed)
+        for rr in results:
+            qid = f"{module}-脚本-Q{rr.idx:02d}"
+            _inspection_state["questions"][qid] = _qreview_to_state(module, docx, unit, rr)
+        _save_inspection_state()
+        log_msg(f"✅ {module} LLM 知识性审查完成: {len(results)}题（通过{n_pass}，未检维度不计入不通过）", "success")
+    except Exception as e:
+        log_msg(f"❌ {module} LLM 知识性审查失败: {e}", "error")
+
+
 @app.route("/api/modules/run", methods=["POST"])
 def api_modules_run():
     """多模块检测：切换版本/年级后依次执行多个模块
@@ -4034,6 +4116,9 @@ def api_modules_run():
     unit_to = int(data.get("unit_to") or 0)
     modules = data.get("modules") or []
     units = data.get("units") or {}  # 可选：{模块名: 单元范围}
+    docx_map = data.get("docxMap") or data.get("docx_map") or {}  # 可选：{模块名: 上传脚本文件名}
+    if not isinstance(docx_map, dict):
+        docx_map = {}
 
     # ★ 兼容两种 modules 格式：
     #   旧: ["听力专项", "口语训练"]
@@ -4094,7 +4179,26 @@ def api_modules_run():
                 pass
             d = _connect_device()
 
-            results = sched.run_all(module_names, d, version=version, grade=grade, units=units, stop_check=_is_stop_requested)
+            # ★ 逐模块分流：有匹配脚本 → 基础自动化 + 追加 LLM 知识性审查；
+            #              无脚本 → 仅基础完整性检查
+            results = {}
+            for _mod in module_names:
+                _docx = (docx_map or {}).get(_mod, "")
+                if _docx:
+                    log_msg(f"📖 {_mod} 有匹配脚本「{_docx}」→ 自动化后追加 LLM 知识性审查", "info")
+                    _r = sched.run_all([_mod], d, version=version, grade=grade, units=units, stop_check=_is_stop_requested)
+                    # ★ run_all 返回 {模块名: {q,t,ok}}，取该模块自己的结果（否则后续 r['q'] 取到嵌套 dict 报 KeyError 'q'）
+                    results[_mod] = _r.get(_mod) or {"q": 0, "t": 0, "ok": False}
+                    try:
+                        _run_llm_script_review(_mod, _docx, version, units.get(_mod, "") or 0)
+                    except Exception as _e:
+                        log_msg(f"❌ {_mod} LLM 知识性审查失败: {_e}", "error")
+                else:
+                    log_msg(f"🔍 {_mod} 无匹配脚本 → 仅基础完整性检查", "info")
+                    _r = sched.run_all([_mod], d, version=version, grade=grade, units=units, stop_check=_is_stop_requested)
+                    results[_mod] = _r.get(_mod) or {"q": 0, "t": 0, "ok": False}
+                if _is_stop_requested():
+                    break
             # 保存结果供前端查询
             global _LAST_MODULES_RESULT
             _LAST_MODULES_RESULT = {

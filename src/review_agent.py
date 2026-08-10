@@ -387,16 +387,21 @@ class ReviewAgent:
             r.answer_check.score = 0.0
             r.answer_check.error = "答案为空"
             r.answer_check.details.append("纯文字检查: 脚本未给出答案")
-        elif len(opt_clean) >= 2 and ans not in "ABCDabcd"[:len(opt_clean)]:
-            r.answer_check.passed = False
-            r.answer_check.score = 0.3
-            r.answer_check.error = "答案超出选项范围"
-            r.answer_check.details.append(f"纯文字检查: 答案 {ans!r} 不在选项 A-{chr(64+len(opt_clean))} 范围内")
         else:
-            r.answer_check.passed = True
-            r.answer_check.score = 1.0
-            r.answer_check.method = "text"
-            r.answer_check.details.append(f"纯文字检查: 答案 {ans!r} 有效")
+            ans_up = ans.upper()
+            # ★ 判断题答案 T/F、匹配题映射答案（含 - 或数字）不套用 A/B/C 范围校验
+            is_judge = ans_up in ("T", "F", "TRUE", "FALSE")
+            is_map = ("-" in ans or any(c.isdigit() for c in ans))
+            if len(opt_clean) >= 2 and not is_judge and not is_map and ans_up not in "ABCD"[:len(opt_clean)]:
+                r.answer_check.passed = False
+                r.answer_check.score = 0.3
+                r.answer_check.error = "答案超出选项范围"
+                r.answer_check.details.append(f"纯文字检查: 答案 {ans!r} 不在选项 A-{chr(64+len(opt_clean))} 范围内")
+            else:
+                r.answer_check.passed = True
+                r.answer_check.score = 1.0
+                r.answer_check.method = "text"
+                r.answer_check.details.append(f"纯文字检查: 答案 {ans!r} 有效")
 
         # (4) 知识库检查（不依赖截图）
         r.knowledge_check = self._verify_knowledge(q)
