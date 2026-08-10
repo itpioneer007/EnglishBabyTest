@@ -1,0 +1,51 @@
+"""
+routes/error_log_routes.py — 实时错题报告接口
+
+提供:
+  GET /api/errors/live        返回当前实时生成的"仅错误"可折叠卡片 HTML 报告
+                              (审查进行中每出一道错题即更新, 可直接用 iframe 嵌入前端)
+  GET /api/errors/live-status 返回报告文件路径与当前错题数 (供前端按钮/提示使用)
+"""
+
+from pathlib import Path
+
+from flask import jsonify, send_file
+
+
+def register(app):
+    # 延迟引用 web_server 模块，避免循环导入：
+    # web_server 在第 56 行调用本 register() 时，_inspection_state 尚未定义；
+    # 处理函数运行时该全局变量早已就绪，故在 handler 内通过 web_server._inspection_state 访问。
+    import web_server
+
+    @app.route("/api/errors/live", methods=["GET"])
+    def api_error_live():
+        """返回实时错题报告 HTML（供前端 iframe 预览）"""
+        path = web_server._inspection_state.get("live_report_path", "")
+        if not path or not Path(path).exists():
+            return jsonify({
+                "error": "尚无实时报告，请先运行一次审查",
+                "path": ""
+            }), 404
+        return send_file(
+            path,
+            as_attachment=False,
+            download_name="report_live.html",
+            mimetype="text/html",
+        )
+
+    @app.route("/api/errors/live-status", methods=["GET"])
+    def api_error_live_status():
+        """返回实时报告状态（路径 + 错题数），供前端按钮/提示使用"""
+        path = web_server._inspection_state.get("live_report_path", "")
+        questions = web_server._inspection_state.get("questions", {})
+        failed = sum(
+            1 for q in questions.values()
+            if not q.get("overall_passed", True)
+        )
+        return jsonify({
+            "path": path if (path and Path(path).exists()) else "",
+            "failed": failed,
+            "total": len(questions),
+            "ready": bool(path and Path(path).exists()),
+        })
