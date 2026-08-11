@@ -109,28 +109,23 @@ def register(app):
         if ids:
             questions = {k: v for k, v in questions.items() if k in ids}
 
-        # ===== C 在这里实现 =====
-        # TODO(C): 调用 src.report_exporter.ReportExporter
-        # exporter = ReportExporter(save_dir)
-        # report_path = exporter.export_html(questions)
-        
-        # 骨架：生成一个简单的HTML
-        report_dir = Path(save_dir)
-        report_dir.mkdir(parents=True, exist_ok=True)
-        
-        total = len(questions)
-        passed = sum(1 for q in questions.values() if q.get("overall_passed"))
-        failed_qs = {k: v for k, v in questions.items() if not v.get("overall_passed")}
-        
-        html = _build_html_report(questions, total, passed, failed_qs)
-        report_path = report_dir / f"inspect_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
-        report_path.write_text(html, encoding="utf-8")
-        
+        # 调用新的 ReportExporter
+        from src.report_exporter import ReportExporter
+        exporter = ReportExporter(save_dir)
+        qlist = list(questions.values()) if isinstance(questions, dict) else questions
+        report_path = exporter.export_html_full(qlist, metadata={
+            "version": st.get("version", ""),
+            "unit": st.get("unit", 0),
+            "stage": st.get("stage", ""),
+        })
+
+        total = len(qlist)
+        passed_count = sum(1 for q in qlist if q.get("overall_passed"))
         return jsonify({
             "success": True,
             "path": str(report_path),
-            "url": f"/api/export/download/{report_path.name}",
-            "stats": {"total": total, "passed": passed, "failed": total - passed}
+            "url": f"/api/export/download/{Path(report_path).name}",
+            "stats": {"total": total, "passed": passed_count, "failed": total - passed_count}
         })
 
 
@@ -154,24 +149,11 @@ def register(app):
         # 只导出错误题
         failed = {k: v for k, v in questions.items() if not v.get("overall_passed")}
         
-        # ===== C 在这里实现 =====
-        # TODO(C): 调用 src.report_exporter.ReportExporter.export_csv()
-        import csv, io
-        buf = io.StringIO()
-        writer = csv.writer(buf)
-        writer.writerow(["题号", "题型", "综合得分", "通过", "题干理由", "内容理由", "配图理由", "作答理由"])
-        for qid, q in failed.items():
-            writer.writerow([
-                qid, q.get("question_type", ""), q.get("overall_score", 0),
-                "是" if q.get("overall_passed") else "否",
-                q.get("stem_reason", ""), q.get("content_reason", ""),
-                q.get("image_reason", ""), q.get("answer_reason", "")
-            ])
-        
-        report_dir = Path(save_dir)
-        report_dir.mkdir(parents=True, exist_ok=True)
-        csv_path = report_dir / f"errors_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        csv_path.write_text(buf.getvalue(), encoding="utf-8-sig")  # utf-8-sig 兼容Excel
+        # 使用 ReportExporter
+        from src.report_exporter import ReportExporter
+        exporter = ReportExporter(save_dir)
+        qlist = list(questions.values()) if isinstance(questions, dict) else questions
+        csv_path = exporter.export_csv(qlist)
         
         return jsonify({
             "success": True,
@@ -198,20 +180,12 @@ def register(app):
         failed = {k: v for k, v in questions.items() if not v.get("overall_passed")}
         if not failed:
             return jsonify({"error": "没有不通过的题目"}), 400
-        
-        # 打包截图
-        import zipfile
-        shots_dir = Path(__file__).parent.parent / "screenshots"
-        zip_path = Path(__file__).parent.parent / "outputs" / "reports" / f"error_screenshots_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
-        zip_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        with zipfile.ZipFile(zip_path, "w") as zf:
-            for qid, q in failed.items():
-                shot = q.get("screenshot", "")
-                if shot:
-                    shot_full = shots_dir / shot
-                    if shot_full.exists():
-                        zf.write(shot_full, f"{qid}_{shot}")
+
+        # 使用 ReportExporter
+        from src.report_exporter import ReportExporter
+        exporter = ReportExporter()
+        qlist = list(questions.values()) if isinstance(questions, dict) else questions
+        zip_path = exporter.export_screenshots_zip(qlist)
         
         return jsonify({
             "success": True,
@@ -275,54 +249,3 @@ def register(app):
         """导出管理页面"""
         from flask import render_template
         return render_template("export.html")
-
-
-# ============================================
-# 骨架 HTML 报告生成器（C 会替换为完整的）
-# ============================================
-
-def _build_html_report(questions, total, passed, failed_qs):
-    """简单的HTML报告模板 — C 会替换为更完整的版本"""
-    failed_count = len(failed_qs)
-    
-    failed_html = ""
-    for qid, q in sorted(failed_qs.items()):
-        dims = ""
-        for d in ["stem", "content", "image", "answer"]:
-            pas = q.get(f"ai_{d[:3]}", False)
-            reason = q.get(f"{d}_reason", "")[:80] if pas is not None else ""
-            dims += f'<tr><td>{d}</td><td>{"✅" if pas else "❌"}</td><td>{reason}</td></tr>'
-        
-        shot = q.get("screenshot", "")
-        shot_html = ""
-        if shot:
-            shot_path = Path(__file__).parent.parent / "screenshots" / shot
-            if shot_path.exists():
-                import base64
-                shot_html = f'<img src="data:image/png;base64,{base64.b64encode(shot_path.read_bytes()).decode()}" style="max-width:300px;border:1px solid #ddd;border-radius:6px">'
-        
-        failed_html += f'''
-        <div style="border:1px solid #fecaca;border-radius:8px;margin:12px 0;padding:16px;background:#fef2f2">
-            <h3>{qid} [{q.get("question_type","")}] 得分:{q.get("overall_score",0):.2f}</h3>
-            {shot_html}
-            <table style="width:100%;margin-top:12px">
-                <tr style="background:#fafbfc"><th>维度</th><th>结果</th><th>理由</th></tr>
-                {dims}
-            </table>
-        </div>'''
-    
-    return f'''<!DOCTYPE html>
-<html lang="zh-CN">
-<head><meta charset="utf-8"><title>审查报告</title>
-<style>
-*{{margin:0;padding:0;box-sizing:border-box}}
-body{{font-family:"Microsoft YaHei",sans-serif;max-width:900px;margin:0 auto;padding:20px;color:#333}}
-h1{{font-size:22px;margin-bottom:8px}}
-.stat{{background:#f8fafc;padding:12px 20px;border-radius:8px;margin:12px 0}}
-</style></head>
-<body>
-<h1>英语宝题目审查报告</h1>
-<p>生成时间: {datetime.now().strftime("%Y-%m-%d %H:%M")}</p>
-<div class="stat">📊 共{total}题 | ✅通过{passed}题 | ❌不通过{failed_count}题</div>
-{failed_html if failed_html else '<p style="color:#16a34a;font-size:18px">🎉 全部通过!</p>'}
-</body></html>'''

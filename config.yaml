@@ -3,7 +3,7 @@
 
 # 璁惧閰嶇疆
 device:
-  serial: "3XQ0225715002935"        # ADB璁惧搴忓垪鍙?(adb devices 鏌ョ湅)
+  serial: "SKSCIF4T7PFMQS5X"        # ADB璁惧搴忓垪鍙?(adb devices 鏌ョ湅)
   screen_resolution: [1080, 2400]   # 鎵嬫満灞忓箷鍒嗚鲸鐜?
 
 # 鑻辫瀹滱PP

@@ -1,9 +1,9 @@
-import os
 """
 英语宝 · 模块配置表
 =================
 MODULE_CONFIG 一表管理所有模块差异。
 """
+import uiautomator2 as u2
 import time
 
 """
@@ -26,17 +26,6 @@ BOOK_VERSION = "湘少版"
 APP_PACKAGE = "com.dinoenglish.yyb"
 
 # ==================== ① 模块配置表 ====================
-
-def _env_units():
-    """从环境变量读取单元范围 (由 scheduler 设置); 未设置时默认 Unit 1"""
-    f = os.environ.get("YYB_UNIT_FROM", "")
-    t = os.environ.get("YYB_UNIT_TO", "")
-    if f.isdigit():
-        f = int(f)
-        t = int(t) if t.isdigit() else f
-        return list(range(f, t + 1))
-    return [1]
-
 MODULE_CONFIG = {
     "听力训练": {
         "entry_text": "听力训练",
@@ -75,7 +64,7 @@ MODULE_CONFIG = {
     "听力专项": {
         "entry_text": "听力专项",
         # 单元遍历：逐个点击"去练习"。有 units 时 entry_actions 里的去练习自动跳过
-        "units": _env_units(),  # 由环境变量 YYB_UNIT_FROM/TO 控制 (scheduler设置)
+        "units": [1],  # Unit 1-9, 测试先跑 U1
         "entry_actions": [],  # 由 unit loop 点击去练习
         # 子模块：每个单元内，基础巩固→综合进阶→难点突破，中间左滑
         "sub_modules": [

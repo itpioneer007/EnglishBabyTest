@@ -6,11 +6,39 @@ reviewer_common.py — 三人协作共享层 (LLM / 配置 / 公共工具)
 """
 
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 from difflib import SequenceMatcher
+
+
+# ============================================================
+# .env 文件加载（无外部依赖）
+# ============================================================
+
+def _load_dotenv(dotenv_path: str = None) -> dict:
+    """从 .env 文件加载环境变量到 os.environ，返回加载的键值对"""
+    if dotenv_path is None:
+        # 从当前文件向上找项目根目录
+        dotenv_path = Path(__file__).parent.parent / ".env"
+    dotenv_path = Path(dotenv_path)
+    if not dotenv_path.exists():
+        return {}
+    loaded = {}
+    with open(dotenv_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" in line:
+                key, _, value = line.partition("=")
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                os.environ[key] = value
+                loaded[key] = value
+    return loaded
 
 
 # ============================================================
@@ -302,24 +330,44 @@ class LLMClient:
     @classmethod
     def from_config(cls, config_path: str = None) -> "LLMClient":
         """
-        从 llm_config.json 自动读取配置
+        从 llm_config.json + .env 自动读取配置
 
-        优先级：环境变量 > config 文件 > 默认值
+        优先级：环境变量 > .env 文件 > llm_config.json > 默认值
         """
         path = config_path or cls.CONFIG_PATH
         config = {}
 
+        # 1. 加载 .env 到 os.environ（如果尚未加载）
+        _load_dotenv()
+
+        # 2. 加载 llm_config.json（不含密钥）
         if Path(path).exists():
             with open(path, "r", encoding="utf-8") as f:
                 config = json.load(f)
 
+        # 3. 按优先级合并：环境变量 > .env > config.json
+        api_key = (os.environ.get("LLM_API_KEY")
+                   or os.environ.get("OPENAI_API_KEY")
+                   or config.get("api_key", ""))
+        model = (os.environ.get("LLM_MODEL")
+                 or config.get("model", "deepseek-chat"))
+        base_url = (os.environ.get("LLM_BASE_URL")
+                    or config.get("base_url", "https://api.deepseek.com/v1"))
+        vision_api_key = (os.environ.get("VISION_API_KEY")
+                          or os.environ.get("LLM_API_KEY")
+                          or config.get("vision_api_key", ""))
+        vision_model = (os.environ.get("VISION_MODEL")
+                        or config.get("vision_model", ""))
+        vision_base_url = (os.environ.get("VISION_BASE_URL")
+                           or config.get("vision_base_url", ""))
+
         return cls(
-            api_key=os.environ.get("OPENAI_API_KEY") or config.get("api_key", ""),
-            model=os.environ.get("LLM_MODEL") or config.get("model", "deepseek-chat"),
-            base_url=os.environ.get("LLM_BASE_URL") or config.get("base_url", "https://api.deepseek.com/v1"),
-            vision_api_key=config.get("vision_api_key", ""),
-            vision_model=config.get("vision_model", ""),
-            vision_base_url=config.get("vision_base_url", ""),
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+            vision_api_key=vision_api_key,
+            vision_model=vision_model,
+            vision_base_url=vision_base_url,
         )
 
     def ask(self, prompt: str, image_path: str = None, image_paths: list = None) -> str:
@@ -458,5 +506,3 @@ def find_diff_positions(expected: str, actual: str) -> list[str]:
         if tag != "equal":
             diffs.append(f"[{tag}] 预期'{expected[i1:i2]}' vs 实际'{actual[j1:j2]}'")
     return diffs
-
-import os

@@ -1,8 +1,10 @@
 
+
 # src/ — C 同学：错误溯源与报告导出模块
 
 > 本目录是「英语宝模块检测智能体」项目里 **C 同学** 负责的全部源码。
 > 职责：把 A/B 同学跑完检测后产出的错题数据，转成**红框截图 + 错误文件夹 + 网页/CSV 报告 + 邮件**。
+
 
 # 英语宝模块检测系统
 
@@ -19,10 +21,13 @@
 | **多分辨率适配** | 所有坐标按屏幕比例动态换算，任意手机可用 |
 | **题型智能分流** | 按题目文字自动识别题型并调用对应处理逻辑 |
 
+| **错题溯源与报告** | 每道错题溯源到 维度/原因/建议 + 红框截图 + 网页/CSV/邮件报告（同学C 模块） |
+
 
 ---
 
-## 一、本目录有哪些文件
+## 一、环境要求
+
 
 | 文件 | 分工 | 干什么 |
 |---|---|---|
@@ -34,71 +39,32 @@
 
 > 另外还有 `routes/`（溯源 API、导出 API 蓝图）属于 C 同学，在上级目录 `英语宝模块检测/routes/`；本目录只放上面 4 个核心引擎。
 
+
 - Python 3.10+
 - ADB（Android Platform Tools，已加入 `PATH`）
 - Android 手机（USB 调试已开启，数据线连接电脑）
 - 手机已安装英语宝 APP
 
----
-
-## 二、每个文件怎么用（接口签名）
-
-### 1. `trace_engine.py` —— 单题处理引擎
-```python
-class TraceEngine:
-    def __init__(self, screenshots_dir: str = "screenshots")
-    def generate(self, qid: str, question_data: dict) -> dict   # C1：算一道题的错情
-    def draw_mark(self, screenshot_name: str, checks: list, out_path: str) -> str  # C2：画红框
-```
-- `generate()` 只处理**一道题**（输入该题数据，返回 `checks` 错情列表 + 题干上下文）。
-- 红框坐标：数据里带 `error_box` 就直接用；没有则用占位坐标（见下方「待办」）。
-
-### 2. `error_collector.py` —— 遍历 + 归档
-```python
-class ErrorCollector:
-    def __init__(self, output_root: str = "outputs")
-    def collect(self, questions: dict, version: str, unit) -> dict
-```
-- 收到**全部题**的字典，循环挑出 `overall_passed == False` 的错题。
-- 每道错题：复制原图 → 调 `TraceEngine` 溯源 → 画红框 → 写 `error.json`。
-- 返回 `{"failed": 出错数, "total": 总数, "output_dir": 报告根目录}`。
-- 输出目录带「时分」后缀（如 `U6_20260729_1535`），**每次运行独立文件夹，互不覆盖**。
-
-### 3. `report_exporter.py` —— 报告生成
-```python
-class ReportExporter:
-    def __init__(self, output_root: str = "outputs")
-    def export_html_full(self, questions: dict, metadata: dict) -> str    # 全貌报告 report_full.html
-    def export_html_errors(self, questions: dict, metadata: dict) -> str  # 仅错误报告 report_errors.html
-    def export_csv(self, questions: dict) -> str                          # 汇总表 summary.csv
-```
-- 报告里已加「模块」列（从 qid 第 2 段或数据 `module` 字段读取）。
-
-### 4. `email_sender.py` —— 邮件
-```python
-class EmailSender:
-    def send_report(self, to_email: str, subject: str,
-                    html_body: str = "", attachments: list = None) -> dict
-```
-- 返回 `{"success": True/False, "message": "..."}`。
-- 账号密码从**环境变量**读取（不写死在代码里）。
-
----
-
-## 三、依赖
+## 二、依赖
 
 ```bash
-<<<<<<< HEAD
+
 pip install pillow        # trace_engine / error_collector 用
-=======
+
 cd 英语宝模块检测
 pip install -r requirements.txt
 pip install uiautomator2
->>>>>>> 11ce51b981aa79e22a84830a9389d04342ca3b13
+
+cd 英语宝模块检测
+pip install -r requirements.txt
+pip install uiautomator2
+pip install pillow        # 同学C 的 trace_engine / error_collector 用（红框标注）
+
 ```
+
 `email_sender.py` 只用 Python 标准库 `smtplib`，无需额外安装。
 
-<<<<<<< HEAD
+
 > ⚠️ 这些文件用 `from src.xxx import ...` 互相引用，所以运行时要保证**项目根目录**（`英语宝模块检测/`）在 Python 路径里。本地测试用根目录的 `run_report.py` 即可。
 
 ---
@@ -108,7 +74,10 @@ pip install uiautomator2
 在项目根目录执行：
 ```bash
 python run_report.py
-=======
+
+## 三、运行
+
+
 ### 运行 Web 面板（推荐）
 
 ```bash
@@ -116,7 +85,10 @@ python web_server.py
 # 浏览器打开 http://localhost:5000
 ```
 
-面板上点按钮即可启动对应模块自动化检测。
+面板上点按钮即可启动对应模块自动化检测。页面分 3 个 Tab：
+- **① 任务配置**：一句话/手动配置要测的模块
+- **② 运行日志 · 手机画面**：左侧运行日志 + 右侧手机实时画面
+- **③ 审查结果**：左侧六维审查 + 右侧错题日志（溯源/评分/红框截图）
 
 ### 命令行单模块运行
 
@@ -128,58 +100,27 @@ python modules/单元自检.py     # 单元自检
 python modules/知识过关.py     # 知识过关
 python modules/巧记单词.py     # 巧记单词
 python modules/语音评测.py     # 语音评测
->>>>>>> 11ce51b981aa79e22a84830a9389d04342ca3b13
 ```
-会读取 `data/inspection_state.json`，生成报告到 `outputs/.../`。
 
----
+## 四、目录结构
 
-## 五、重要提醒（上传 GitHub 前必读）
-
-1. **只能改这些文件**：本目录 4 个 `.py` + `routes/` 下两个蓝图。
-   **绝对不能碰** A 同学（`review_agent.py` / `post_error_check.py` / `report_check.py` / `script_generator.py`）和 B 同学（`batch_runner.py` / `progress_tracker.py` / `recovery_handler.py` / `routes/batch_routes.py` / `web_server.py`）的文件。
-2. **红框坐标待接**：`trace_engine._compute_region()` 在数据无 `error_box` 时给占位坐标，需 A/B 把真实坐标写入 `inspection_state.json` 的题目数据里。
-3. **发邮件先配环境变量**：
-   ```bash
-   export EMAIL_USER="你的邮箱@qq.com"
-   export EMAIL_PASSWORD="邮箱授权码"   # QQ/163 用授权码，不是登录密码
-   ```
-4. **`severity` 严重程度**目前硬编码在 `trace_engine.py` 顶部的 `DIMENSIONS` 表里（内容/图片/答案=high，音频/报告=low，题干=medium）。
-5. **`outputs/` 是自动生成的**，已在项目根 `.gitignore` 忽略，不要上传。
-
----
-
-## 六、输入数据格式（来自 A/B 的 `data/inspection_state.json`）
-
-```json
-{
-  "questions": {
-    "新湘鲁六上-模块A-U6-Q03": {
-      "qid": "新湘鲁六上-模块A-U6-Q03",
-      "question_type": "听音选择词汇",
-      "screenshot": "q03.png",
-      "stem": "选出你听到的单词",
-      "script_answer": "B",
-      "ai_stem": false, "ai_content": false, "ai_image": true, "ai_answer": true,
-      "ai_audio": null, "ai_post_error": null, "ai_report": null,
-      "stem_reason": "[不通过] ...", "content_reason": "...",
-      "overall_passed": false
-    }
-  }
-}
 ```
-<<<<<<< HEAD
 - `ai_*` 为 `False` → 该项不通过，记一条错误；`null` → 未检查（当通过）；`True` → 通过。
 - qid 格式：`教材-模块-单元-题号`（模块可省略，省略时模块列留空）。
-=======
+
 英语宝模块检测/
-├── web_server.py                 # Web 控制面板（Flask）
+├── web_server.py                 # Web 控制面板（Flask，唯一启动入口）
+├── config.yaml                   # 配置（设备/APP）
 ├── templates/index.html          # 前端页面
 ├── scripts/
-│   ├── engine.py                 # ★ 核心引擎（题型处理/排序/匹配）
+│   ├── engine.py                 # ★ 核心引擎（题型处理/排序/匹配/填空）
+│   ├── scheduler.py              # ★ 多模块调度器（统一切年级+依次调模块）
 │   ├── config.py                 # 配置（模块/弹窗/年级）
 │   ├── common/
-│   │   └── tools.py              # ★ 工具函数（S() 坐标换算/广告关闭/年级切换）
+│   │   ├── logger.py             # ★ 全局日志通道（模块流程 → 前端）
+│   │   ├── tools.py              # 工具函数（坐标换算/广告关闭/年级切换）
+│   │   ├── device.py             # 设备管理（ANDROID_SERIAL 选择）
+│   │   └── setup.py              # 版本/年级切换
 │   └── modules/
 │       ├── 听力专项.py           # 听力专项（练习+测试）
 │       ├── 口语训练.py           # 口语训练（录音/小喇叭）
@@ -187,13 +128,21 @@ python modules/语音评测.py     # 语音评测
 │       ├── 知识过关.py           # 知识过关（重点词汇+重点句型）
 │       ├── 巧记单词.py           # 巧记单词（单词同步闯关）
 │       └── 语音评测.py           # 语音评测（题目未做好，仅进入）
+├── trace_engine.py               # 同学C：溯源引擎 + 截图红框标注（C1/C2）
+├── error_collector.py            # 同学C：错误输出文件夹（C3）
+├── report_exporter.py            # 同学C：HTML/CSV 报告（C4）
+├── email_sender.py               # 同学C：邮件发送（C5）
+├── src/                          # 旧版批量检查引擎（web_server 部分引用）
+├── routes/                       # Flask 路由（trace/export 蓝图，web_server 启动导入）
+├── data/                         # 知识库/检查数据
 ├── docs/                         # 早期规划文档
-└── outputs/                      # 截图/日志
+├── outputs/                      # 输出（自动生成，已 gitignore）
+├── screenshots/                  # 截图
+├── uploads/                      # 上传文件
+└── _archive/                     # 弃用文件归档（可删除）
 ```
 
----
-
-## 🎮 Web 面板操作
+## 五、Web 面板操作
 
 1. 浏览器打开 **http://localhost:5000**
 2. 点击模块按钮启动自动化：
@@ -205,9 +154,7 @@ python modules/语音评测.py     # 语音评测
    - 🧠 **巧记单词** — 单词同步闯关（`/api/qiaoji/run`）
 3. 右侧日志实时显示执行进度
 
----
-
-## 🧩 六大模块说明
+## 六、六大模块说明
 
 ### 1. 听力专项 (`听力专项.py`)
 - 入口：主页 → 专项突破 → 听力专项
@@ -241,9 +188,7 @@ python modules/语音评测.py     # 语音评测
 - 入口：主页 → 教材精学 → 语音评测
 - 题目未做好，目前仅进入模块
 
----
-
-## 🔧 多分辨率适配（S 函数）
+## 七、多分辨率适配（S 函数）
 
 所有坐标以 **1080×2400** 为基准，通过 `common/tools.py` 的 `S()` 函数动态换算：
 
@@ -262,9 +207,7 @@ if S_h(d, 700) < b[1] < S_h(d, 1900):   # 原: 700 < b[1] < 1900
 
 **换手机后无需改代码**——S() 按当前屏幕比例自动缩放。
 
----
-
-## 🎤 录音题处理（两种）
+## 八、录音题处理（两种）
 
 **知识过关/单元自检**（有"原音/点击录音/点击结束"）：
 ```
@@ -276,9 +219,7 @@ if S_h(d, 700) < b[1] < S_h(d, 1900):   # 原: 700 < b[1] < 1900
 找"点击录音"文字上方的麦克风 → 点同一位置两次（录音+结束）
 ```
 
----
-
-## 🧮 填空注入方案（FastInputIME）
+## 九、填空注入方案（FastInputIME）
 
 uiautomator2 无法定位系统键盘（搜狗/百度），用 **FastInputIME 注入**：
 
@@ -288,9 +229,7 @@ d.send_keys("cat")          # 直接注入文本（绕过搜狗拦截）
 d.press("back")             # 收起键盘
 ```
 
----
-
-## ✅ 已验证
+## 十、已验证
 
 | 验证项 | 状态 |
 |--------|------|
@@ -305,5 +244,88 @@ d.press("back")             # 收起键盘
 
 ---
 
+<<<<<<< HEAD
 *构建于 2026年8月 · WorkBuddy + ADB + uiautomator2*
 >>>>>>> 11ce51b981aa79e22a84830a9389d04342ca3b13
+=======
+## 附：同学C · 错误溯源与报告导出模块
+
+> 职责：把检测跑完后产出的错题数据，转成**红框截图 + 错误文件夹 + 网页/CSV 报告 + 邮件**。
+> 前端「错题日志」（Tab ③ 右侧）已集成溯源结果：`/api/inspect/state` 对每道错题附加
+> `_trace`（维度/原因/建议/严重度/坐标）、`_score`（透明评分明细）、`_marked`（红框标注图）。
+
+### 1. 本模块文件
+
+| 文件 | 分工 | 干什么 |
+|---|---|---|
+| `trace_engine.py` | **C1 + C2** | 溯源数据引擎（算错因/建议/坐标）+ 用 Pillow 画红框 |
+| `error_collector.py` | **C3** | 遍历所有题，把错题整理成 `errors/{版本}_{单元}/{模块}/{题号}/` 分层文件夹 |
+| `report_exporter.py` | **C4** | 生成网页报告（全貌 + 仅错误）和 CSV 汇总表 |
+| `email_sender.py` | **C5** | 把报告通过邮件发给老师 |
+| `routes/trace_routes.py` | 溯源 API 蓝图 | `/api/trace/<qid>`、`/api/trace/list`、`/api/trace/screenshot/...`（骨架） |
+| `routes/export_routes.py` | 导出 API 蓝图 | `/api/export/html`、`/api/export/csv`、`/api/export/email` 等（骨架） |
+
+### 2. 接口签名
+
+```python
+class TraceEngine:                                   # 单题溯源 + 红框
+    def __init__(self, screenshots_dir: str = "screenshots")
+    def generate(self, qid, question_data) -> dict  # C1：返回 checks（维度/原因/建议/severity/坐标）+ script_context
+    def draw_mark(self, screenshot_name, checks, out_path) -> str  # C2：画红框
+
+class ErrorCollector:                                # 遍历 + 归档
+    def __init__(self, output_root: str = "outputs")
+    def collect(self, questions, version, unit) -> dict  # 返回 {failed,total,output_dir}
+
+class ReportExporter:                                # 报告生成
+    def export_html_full(self, questions, metadata) -> str
+    def export_html_errors(self, questions, metadata) -> str
+    def export_csv(self, questions) -> str
+
+class EmailSender:                                   # 邮件
+    def send_report(self, to_email, subject, html_body="", attachments=None) -> dict
+```
+
+### 3. 数据格式（每道题）
+
+```json
+{
+  "questions": {
+    "新湘鲁六上-模块A-U6-Q03": {
+      "qid": "新湘鲁六上-模块A-U6-Q03",
+      "question_type": "听音选择词汇",
+      "screenshot": "q03.png",
+      "stem": "选出你听到的单词",
+      "script_answer": "B",
+      "ai_stem": false, "ai_content": false, "ai_image": true, "ai_answer": true,
+      "ai_audio": null, "ai_post_error": null, "ai_report": null,
+      "stem_reason": "[不通过] ...", "content_reason": "...",
+      "overall_passed": false
+    }
+  }
+}
+```
+
+- `ai_*` 为 `False` → 该项不通过，记一条错误；`null` → 未检查（当通过）；`True` → 通过。
+- qid 兼容两种格式：契约「教材-模块-单元-题号」（`新湘鲁六上-模块A-U6-Q01`）与实际
+  「版本-单元-阶段-题号」（`新湘鲁六上-U6-基础巩固-Q03`），`error_collector._parse_qid` 自动识别。
+- **评分怎么来**（透明）：每个「已检查」的维度等权，`得分 = 通过维度数 / 已检查维度数 × 100`，
+  未检查维度不计分。错题日志卡片会展示公式与每个未通过维度的原因。
+
+### 4. 重要提醒
+
+1. **红框坐标**：`trace_engine._compute_region()` 在数据无 `error_box` 时给占位坐标，
+   真实坐标接入后把 `error_box` 写进题目数据即可。
+2. **发邮件先配环境变量**：
+   ```bash
+   export EMAIL_USER="你的邮箱@qq.com"
+   export EMAIL_PASSWORD="邮箱授权码"   # QQ/163 用授权码，不是登录密码
+   ```
+3. **`severity` 严重程度**硬编码在 `trace_engine.py` 顶部 `DIMENSIONS` 表
+   （内容/图片/答案=high，音频/报告=low，题干=medium）。
+4. **`outputs/` 是自动生成的**，已在 `.gitignore` 忽略，不要上传。
+
+---
+
+*构建于 2026年8月 · WorkBuddy + ADB + uiautomator2*
+>>>>>>> c0c0e7b31289b3145e75a9adc6dfbd4707049627

@@ -15,7 +15,8 @@ import json
 import base64
 import shutil
 from datetime import datetime
-from src.trace_engine import TraceEngine
+# ★ 修复：trace_engine.py 位于项目根目录（不是 src/），改为根目录导入
+from trace_engine import TraceEngine
 
 # e英语宝 跳转链接（想跳到具体题目时，把这里换成 e英语宝提供的专属链接即可）
 # 默认指向官网：手机装了 App 时点它有机会直接唤起 App；电脑上则点开官网。
@@ -26,6 +27,24 @@ def _norm_unit(seg):
     """把单元段统一成 'U6' 这种样子（'6'→'U6'，'U6'→'U6'）。"""
     seg = str(seg)
     return seg if seg.startswith("U") else f"U{seg}"
+
+
+def _parse_qid(qid: str):
+    """从 qid 拆出 (版本, 模块, 单元, 短题号)，兼容两种格式：
+      契约格式「教材-模块-单元-题号」：新湘鲁六上-模块A-U6-Q01 → (新湘鲁六上, 模块A, U6, Q01)
+      实际格式「版本-单元-阶段-题号」：新湘鲁六上-U6-基础巩固-Q03 → (新湘鲁六上, 基础巩固, U6, Q03)
+    判断依据：第 2 段是 'U数字' 说明它是单元（实际格式），否则是模块（契约格式）。
+    """
+    parts = str(qid).split("-")
+    ver = parts[0] if len(parts) > 0 else "未知版本"
+    short = parts[-1] if parts else qid
+    if len(parts) >= 3 and str(parts[1]).startswith("U"):
+        # 实际格式：parts[1]=单元U6，parts[2]=模块/阶段
+        return ver, parts[2] or "未分类模块", _norm_unit(parts[1]), short
+    # 契约格式：parts[1]=模块，parts[2]=单元U6
+    mod = parts[1] if len(parts) >= 2 else "未分类模块"
+    unit = _norm_unit(parts[2] if len(parts) >= 3 else "U0")
+    return ver, mod, unit, short
 
 
 class ErrorCollector:
@@ -54,11 +73,9 @@ class ErrorCollector:
         for _qid, _qd in questions.items():
             if _qd.get("overall_passed") is not False:
                 continue
-            _p = _qid.split("-")
-            if _p:
-                _seen_versions.add(_p[0])
-            if len(_p) >= 3:
-                _seen_units.add(_norm_unit(_p[2]))
+            _ver, _mod, _unit, _short = _parse_qid(_qid)
+            _seen_versions.add(_ver)
+            _seen_units.add(_unit)
 
         # 输出根目录命名：
         #   单版本单单元 → 保留旧样式 版本/单元_日期_时分（如 新湘鲁六上/U6_20260730_1700）
@@ -80,17 +97,12 @@ class ErrorCollector:
 
             failed += 1
 
-            # 每题用【自己】的 qid 拆 版本/单元/题号，不再依赖整批统一的 version/unit
+            # 每题用【自己】的 qid 拆 版本/模块/单元/题号，不再依赖整批统一的 version/unit
             # —— 一批数据里混了多个版本/单元，也会各自归到正确的文件夹
-            _parts = qid.split("-")
-            _own_version = _parts[0] if len(_parts) > 0 else "未知版本"
-            _own_unit = _norm_unit(_parts[2] if len(_parts) >= 3 else "U0")
-            # 短题号：取末尾的 "Q03"
-            short = _parts[-1]
-
-            # 模块：当作子文件夹名（把 Windows 路径非法字符替换成下划线，避免报错）
-            # 优先用数据里的 module 字段；没有就从 qid 第2段读（"新湘鲁六上-模块A-U6-Q03" → "模块A"）
-            _module = qd.get("module") or (_parts[1] if len(_parts) >= 2 else "未分类模块")
+            _own_version, _module, _own_unit, short = _parse_qid(qid)
+            # 模块：优先用数据里的 module 字段；没有就用解析出的（阶段/模块名）
+            if qd.get("module"):
+                _module = str(qd["module"])
             for _ch in '/\\:*?"<>|':
                 _module = _module.replace(_ch, "_")
 
@@ -150,12 +162,8 @@ class ErrorCollector:
             rows = '<tr><td colspan="2">（无具体错因记录）</td></tr>'
 
         # 从 qid 解析可读的"归属信息"，让卡片自带单元/版本/模块，不依赖外部文件
-        # qid 格式：教材-模块-单元-题号，如 新湘鲁六上-模块A-U6-Q03
-        _parts = qid.split("-")
-        _ver = _parts[0] if len(_parts) > 0 else ""
-        _mod = _parts[1] if len(_parts) > 1 else ""
-        _unit = _parts[2] if len(_parts) > 2 else ""
-        _qnum = _parts[-1] if _parts else qid
+        # qid 兼容两种格式（见 _parse_qid）：契约「教材-模块-单元-题号」/ 实际「版本-单元-阶段-题号」
+        _ver, _mod, _unit, _qnum = _parse_qid(qid)
         ctx = f"教材：{_ver}　｜　模块：{_mod}　｜　单元：{_unit}　｜　题号：{_qnum}"
 
         sc = trace.get("script_context", {})

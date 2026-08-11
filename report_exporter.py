@@ -11,8 +11,9 @@ C4  HTML / CSV 报告
 import os
 import csv
 import html
-from src.trace_engine import TraceEngine
-from src.error_collector import EYYB_APP_LINK
+# ★ 修复：trace_engine.py / error_collector.py 位于项目根目录（不是 src/），改为根目录导入
+from trace_engine import TraceEngine
+from error_collector import EYYB_APP_LINK
 
 
 def _module_of(qid: str, qd: dict) -> str:
