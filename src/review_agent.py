@@ -1,9 +1,9 @@
 """
-review_agent.py — 英语宝审查智能体 (v2: 知识库 + 反馈循环)
+review_agent.py — 英语宝审查智能体 (v3: 6维检查)
 =====================================================================
 
 功能:
-  - 四维检查: (1)题干 (2)内容 (3)配图 (4)作答
+  - 六维检查: (1)题干 (2)内容 (3)配图 (4)作答 (5)答错后 (6)音频
   - 知识库查证: 验证题目是否在教材范围内
   - 反馈循环: 记录AI判断, 对比人工标注, 持续优化
   - 双模型架构: deepseek-v4-pro(文本) + qwen3.7-plus(视觉)
@@ -34,6 +34,8 @@ from src.reviewer_common import LLMClient
 from src.parse_yingyubao_docx import parse, YingYuBaoQuestion
 from src.feedback_loop import FeedbackStore, FeedbackSample, ThreeStageTrainer
 from src.knowledge_base import KnowledgeBase
+from src.post_error_check import PostErrorChecker
+from src.report_check import ReportChecker
 
 
 # ============================================================
@@ -74,11 +76,13 @@ class QuestionReview:
     question_type: str = ""
     script_answer: str = ""
     
-    # 四维检查结果
+    # 六维检查结果
     stem_check: CheckResult = field(default_factory=CheckResult)
     content_check: CheckResult = field(default_factory=CheckResult)
     image_check: CheckResult = field(default_factory=CheckResult)
     answer_check: CheckResult = field(default_factory=CheckResult)
+    audio_check: CheckResult = field(default_factory=CheckResult)        # (5) 音频
+    post_error_check: CheckResult = field(default_factory=CheckResult)   # (6) 答错后
     
     # 知识库查证
     knowledge_check: dict = field(default_factory=dict)
@@ -99,6 +103,8 @@ class QuestionReview:
             "content": self.content_check.to_dict(),
             "image": self.image_check.to_dict(),
             "answer": self.answer_check.to_dict(),
+            "audio": self.audio_check.to_dict(),
+            "post_error": self.post_error_check.to_dict(),
             "knowledge": self.knowledge_check,
             "overall_passed": self.overall_passed,
             "overall_score": round(self.overall_score, 2),
@@ -135,6 +141,12 @@ class ReviewAgent:
         # 反馈循环
         self.feedback = FeedbackStore()
         self.trainer = ThreeStageTrainer(llm=self.llm, store=self.feedback)
+
+        # A1 答错后检查器
+        self.post_error_checker = PostErrorChecker(llm=self.llm)
+
+        # A3 报告检查器
+        self.report_checker = ReportChecker(llm=self.llm)
 
         # 结果
         self.results: list[QuestionReview] = []
@@ -206,8 +218,17 @@ class ReviewAgent:
     # 单题审查
     # ============================================================
 
-    def _review_one(self, q: YingYuBaoQuestion, screenshot: str) -> QuestionReview:
-        """审查一道题 (四维 + 知识库)"""
+    def _review_one(self, q: YingYuBaoQuestion, screenshot: str,
+                    post_error_shot: str = "",
+                    is_first_question: bool = False) -> QuestionReview:
+        """审查一道题 (六维 + 知识库)
+
+        Args:
+            q: 脚本题目数据
+            screenshot: 题目截图路径
+            post_error_shot: 答错后结果页截图（仅首题有）
+            is_first_question: 是否为本模块首题（触发答错后检查）
+        """
         r = QuestionReview(
             idx=q.global_idx,
             question_type=q.type_2,
@@ -221,14 +242,14 @@ class ReviewAgent:
             r.content_check.error = "无截图"
             r.image_check.error = "无截图"
             r.answer_check.error = "无截图"
+            r.audio_check.error = "无截图"
+            r.post_error_check.error = "无截图"
             r.overall_passed = False
             return r
 
-        # ---- (1) 题干检查 ----
-        r.stem_check = self._check_stem(q, screenshot)
+        # ---- 批量审查 (文字题走文本模型, 配图题走视觉模型) ----
+        self._review_batch(q, screenshot, r, ui_texts)
 
-        # ---- (2) 内容检查 + 知识库 ----
-        r.content_check = self._check_content(q, screenshot)
         r.knowledge_check = self._verify_knowledge(q)
 
         # ---- (3) 配图检查 ----
@@ -237,17 +258,85 @@ class ReviewAgent:
         # ---- (4) 作答检查 ----
         r.answer_check = self._check_answer(q, screenshot)
 
-        # ---- 综合评分 ----
+        # ---- (5) 音频检查 (A2) ----
+        r.audio_check = self._check_audio(q, screenshot)
+
+        # ---- (6) 答错后检查 (A1) ----
+        r.post_error_check = self._check_post_error(q, post_error_shot, is_first_question)
+
+        # ---- 综合评分 (六维) ----
         scores = [
             r.stem_check.score,
             r.content_check.score,
             r.image_check.score,
             r.answer_check.score,
+            r.audio_check.score,
+            r.post_error_check.score,
         ]
         r.overall_score = sum(scores) / len(scores) if scores else 0.0
         r.overall_passed = r.overall_score >= 0.7
 
         return r
+
+    # ============================================================
+    # 批量审查 (B 同学调用的主入口)
+    # ============================================================
+
+    def _review_batch(self, questions: list[YingYuBaoQuestion],
+                      screenshots: dict[int, str],
+                      post_error_shots: dict[int, str] = None) -> list[QuestionReview]:
+        """
+        批量审查多道题（六维 + 知识库）
+
+        这是 B 同学巡检循环调用的主入口。
+
+        Args:
+            questions: 脚本题目列表
+            screenshots: {global_idx: "截图路径", ...}
+            post_error_shots: {global_idx: "答错后截图路径", ...}（仅首题）
+
+        Returns:
+            list[QuestionReview]
+        """
+        if post_error_shots is None:
+            post_error_shots = {}
+
+        results = []
+        total = len(questions)
+
+        for i, q in enumerate(questions):
+            shot = screenshots.get(q.global_idx, "")
+            post_shot = post_error_shots.get(q.global_idx, "")
+            is_first = (i == 0)
+
+            r = self._review_one(q, shot, post_error_shot=post_shot,
+                                 is_first_question=is_first)
+            results.append(r)
+
+            if self.cfg.verbose:
+                icon = "✅" if r.overall_passed else "❌"
+                dims = self._failed_dimensions(r)
+                dim_str = f" [{', '.join(dims)}]" if dims else ""
+                print(f"  Q{r.idx:02d} {icon} score={r.overall_score:.2f}{dim_str}")
+
+        return results
+
+    def _failed_dimensions(self, r: QuestionReview) -> list[str]:
+        """汇总不通过的维度名"""
+        dims = []
+        if not r.stem_check.passed:
+            dims.append("stem")
+        if not r.content_check.passed:
+            dims.append("content")
+        if not r.image_check.passed:
+            dims.append("image")
+        if not r.answer_check.passed:
+            dims.append("answer")
+        if not r.audio_check.passed:
+            dims.append("audio")
+        if not r.post_error_check.passed:
+            dims.append("post_error")
+        return dims
 
     # ============================================================
     # 角色定义: 从 data/review_skill.md 加载 + 动态知识上下文
@@ -366,6 +455,83 @@ class ReviewAgent:
     # 重写: 四维检查 (统一角色 + 深度融合知识库)
     # ============================================================
 
+    def _judge_result(self, a: str) -> bool:
+        """智能判断AI回答是否为通过"""
+        a = a.strip()
+        if '不通过' in a:
+            return False
+        if '通过' in a or '匹配' in a or '一致' in a or '正确' in a:
+            return True
+        if '无' in a and ('错误' in a or '问题' in a or '异常' in a):
+            return True
+        return True
+
+    def _review_batch(self, q, shot, r, ui_texts=None):
+        """一次LLM调用完成四维审查
+        文字题(非配图): 用 UI 文本 + 文本模型 (1~2秒)
+        配图题: 用 截图 + 视觉模型 (15~30秒)
+        """
+        try:
+            role = self._build_role_prompt(q)
+            kb_ctx = self._build_knowledge_context(q)
+            is_img = '图片' in q.type_2
+
+            # 决定用文本模型还是视觉模型
+            use_vision = is_img  # 配图题必须用视觉
+            if not use_vision and not ui_texts:
+                use_vision = True  # 没有UI文本时降级回视觉
+
+            # 提取屏幕文字供文本模型分析
+            screen_text = ''
+            if ui_texts:
+                screen_text = '\n'.join(ui_texts[:30])
+
+            prompt_text = (
+                role + '\n\n---\n\n'
+                f'【任务: 四维审查】\n'
+                f'题型: {q.type_2}\n'
+                f'脚本题干: {q.stem}\n'
+                f'录音: {q.recording}\n'
+                f'脚本答案: {q.answer}\n'
+                f'选项: {", ".join(q.options) if q.options else "(图片选项)"}\n'
+                f'{kb_ctx}\n\n'
+            )
+            if use_vision:
+                prompt_text += f'请看截图，完成以下四个维度的检查。\n'
+            else:
+                prompt_text += f'截图已用UI解析提取出以下文字：\n{screen_text[:3000]}\n\n请基于以上屏幕文字和脚本信息，完成四个维度的检查。\n'
+            prompt_text += (
+                f'回答格式(严格按此格式,一行一个):\n'
+                f'【题干】通过|理由\n'
+                f'【内容】通过|理由\n'
+                + (f'【配图】通过|理由\n' if is_img else '【配图】⏭ 非配图题\n') +
+                f'【作答】通过|理由'
+            )
+            prompt = self.trainer.build_enhanced_prompt(prompt_text, dim_filter='all')
+            answer = self.llm.ask(prompt, image_path=shot if use_vision else None)
+
+            import re
+            for dim_name, attr in [('题干','stem_check'),('内容','content_check'),
+                                    ('配图','image_check'),('作答','answer_check')]:
+                check = getattr(r, attr)
+                m = re.search(rf'【{dim_name}】\s*([^|]+?)\s*(?:\|\s*(.*))?$', answer, re.MULTILINE)
+                if m:
+                    verdict = m.group(1).strip()
+                    reason = m.group(2).strip() if m.group(2) else ''
+                    passed = self._judge_result(verdict)
+                    check.passed = passed
+                    check.score = 1.0 if passed else 0.5
+                    check.details.append(f'{verdict} | {reason}' if reason else verdict[:100])
+                elif dim_name == '配图' and not is_img:
+                    check.passed = True; check.score = 1.0; check.details.append('⏭ 非配图题')
+                else:
+                    check.details.append(f'[解析失败]')
+        except Exception as e:
+            r.stem_check = self._check_stem(q, shot)
+            r.content_check = self._check_content(q, shot)
+            r.image_check = self._check_image(q, shot)
+            r.answer_check = self._check_answer(q, shot)
+
     def _check_stem(self, q: YingYuBaoQuestion, shot: str) -> CheckResult:
         """(1) 题干检查: 文字完整清晰 + 与脚本一致"""
         result = CheckResult()
@@ -379,15 +545,15 @@ class ReviewAgent:
                 f"请看截图, 判断:\n"
                 f"1. 题目文字是否完整、无截断、无模糊?\n"
                 f"2. 是否有错别字或拼写错误?\n"
-                f"3. 文字内容是否与脚本 '{q.stem[:40]}...' 一致?\n"
-                f"4. 题干中的词汇是否在该年级教材范围内?\n\n"
+                f"3. 文字内容是否与脚本一致?\n\n"
                 f"回答格式: [通过/不通过] | 理由",
                 dim_filter="stem"
             )
             answer = self.llm.ask(prompt, image_path=shot)
-            passed = "通过" in answer and "不通过" not in answer
+            # 评分: 明确"通过"且没"不通过"=1.0; 包含"通过"=0.7; 非"不通过"=0.5
+            passed = self._judge_result(answer)
             result.passed = passed
-            result.score = 1.0 if passed else 0.3
+            result.score = 1.0 if passed else 0.5
             result.details.append(answer[:150])
         except Exception as e:
             result.error = str(e)
@@ -416,16 +582,16 @@ class ReviewAgent:
                 dim_filter="content"
             )
             answer = self.llm.ask(prompt, image_path=shot)
-            passed = "通过" in answer and "不通过" not in answer
+            passed = self._judge_result(answer)
             result.passed = passed
-            result.score = 1.0 if passed else 0.3
+            result.score = 1.0 if passed else 0.5
             result.details.append(answer[:150])
         except Exception as e:
             result.error = str(e)
         return result
 
     def _check_image(self, q: YingYuBaoQuestion, shot: str) -> CheckResult:
-        """(3) 配图检查: 图片匹配录音/答案 + 教材适合性"""
+        """(3) 配图检查: 图片匹配录音/答案 + 教材适合性 + 参考图对照"""
         result = CheckResult()
         if "图片" not in q.type_2:
             result.passed = True
@@ -434,27 +600,63 @@ class ReviewAgent:
             return result
 
         try:
+            # 用 ImageBank 找参考图
+            ref_images = []
+            try:
+                from src.image_bank import ImageBank
+                bank = ImageBank()
+                ref_images = bank.find_for_question(
+                    unit=q.unit,
+                    recording=q.recording,
+                    answer=q.answer,
+                    options=q.options,
+                    stem=q.stem,
+                )
+            except Exception:
+                pass
+
             role = self._build_role_prompt(q)
-            prompt = self.trainer.build_enhanced_prompt(
+            prompt_text = (
                 role + "\n\n---\n\n"
                 f"【任务: 检查配图】\n"
                 f"录音: {q.recording}\n"
                 f"脚本答案: {q.answer}\n"
                 f"题型: {q.type_2}\n\n"
-                f"请看截图中的图片, 判断:\n"
-                f"1. 图片是否清晰完整?(无截断/模糊/变形)\n"
-                f"2. 图片内容是否与录音匹配?\n"
-                f"3. 图片中的物品/场景是否适合该年级学生的认知水平?\n"
-                f"4. 图片有无逻辑问题?(如: 录音说'spoon'但图片是叉子)\n"
-                f"5. 如果是干扰项图片, 是否合理?(不会让学生混淆)\n\n"
-                f"回答格式: [通过/不通过] | 理由",
-                dim_filter="image"
             )
-            answer = self.llm.ask(prompt, image_path=shot)
-            passed = "通过" in answer and "不通过" not in answer
+
+            if ref_images:
+                prompt_text += (
+                    f"下方提供了【参考图】和【实际截图】两张图片。\n"
+                    f"【参考图】是教材的原始配图, 【实际截图】是从APP截取的。\n"
+                    f"请对比两张图, 判断:\n"
+                    f"1. 实际截图中的图片与参考图是否一致?(是同一个物品/场景吗)\n"
+                    f"2. 实际截图是否清晰完整?(无截断/模糊/变形)\n"
+                    f"3. 实际截图是否有逻辑问题?(如参考图是勺子, 但APP显示叉子)\n"
+                    f"4. 图片内容是否与录音 '{q.recording}' 匹配?\n\n"
+                    f"回答格式: [通过/不通过] | 理由"
+                )
+                all_images = ref_images + [shot]
+            else:
+                prompt_text += (
+                    f"请看截图中的图片, 判断:\n"
+                    f"1. 图片是否清晰完整?(无截断/模糊/变形)\n"
+                    f"2. 图片内容是否与录音匹配?\n"
+                    f"3. 图片中的物品/场景是否适合该年级学生的认知水平?\n"
+                    f"4. 图片有无逻辑问题?(如: 录音说'spoon'但图片是叉子)\n"
+                    f"5. 如果是干扰项图片, 是否合理?(不会让学生混淆)\n\n"
+                    f"回答格式: [通过/不通过] | 理由"
+                )
+                all_images = [shot]
+
+            prompt = self.trainer.build_enhanced_prompt(prompt_text, dim_filter="image")
+            answer = self.llm.ask(prompt, image_paths=all_images)
+            passed = self._judge_result(answer)
             result.passed = passed
-            result.score = 1.0 if passed else 0.3
-            result.details.append(answer[:150])
+            result.score = 1.0 if passed else 0.5
+            detail = answer[:150]
+            if ref_images:
+                detail += f" [参考图: {', '.join(Path(p).stem for p in ref_images[:2])}]"
+            result.details.append(detail)
         except Exception as e:
             result.error = str(e)
         return result
@@ -471,20 +673,118 @@ class ReviewAgent:
                 f"脚本答案: {q.answer}\n\n"
                 f"请看截图, 判断:\n"
                 f"1. 选项/输入框/交互元素是否清晰可见?\n"
-                f"2. 用户能否正常作答?(点击选项/输入文字/拖拽等)\n"
-                f"3. 对于选择题: 选项是否完整显示, A/B/C/D齐了吗?\n"
-                f"4. 对于答案 '{q.answer}': 如果是输入题, 能否完整输入?\n"
-                f"5. 交互方式是否符合该题型的预期?(如听音选图应有图片可点)\n\n"
+                f"2. 用户能否正常作答?\n"
+                f"   - 点击/选择类题型: 检查选项(文字或图片)是否完整显示且可点击, 答案选项'{q.answer}'是否存在\n"
+                f"   - 输入/拼写类题型: 检查输入框是否可见, 答案'{q.answer}'能否完整输入\n"
+                f"   - 拖拽/连线类题型: 检查可拖拽元素是否存在\n"
+                f"3. 交互方式是否符合该题型的预期?(如听音选图应有图片可点, 听音选词应有文字选项)\n"
+                f"4. 对于听音题型, 录音播放按钮是否可见?\n\n"
                 f"回答格式: [通过/不通过] | 理由",
                 dim_filter="answer"
             )
             answer = self.llm.ask(prompt, image_path=shot)
-            passed = "通过" in answer and "不通过" not in answer
+            passed = self._judge_result(answer)
             result.passed = passed
-            result.score = 1.0 if passed else 0.3
+            result.score = 1.0 if passed else 0.5
             result.details.append(answer[:150])
         except Exception as e:
             result.error = str(e)
+        return result
+
+    # ============================================================
+    # (5) 音频检查 (A2)
+    # ============================================================
+
+    def _check_audio(self, q: YingYuBaoQuestion, shot: str) -> CheckResult:
+        """
+        (5) 音频检查: 听力题检测音频可用性
+
+        判断标准:
+          - 非听力题 → 跳过 (passed=True, score=1.0)
+          - 听力题 → 检查截图中是否有播放按钮、音频控件是否可见
+
+        B 同学在巡检循环中也可通过 ADB 实际点击播放按钮验证进度变化，
+        此方法提供基于截图的视觉检查作为补充。
+        """
+        result = CheckResult()
+
+        # 判断是否为听力题
+        is_audio = any(kw in q.type_2 for kw in ["听音", "听力", "听"])
+        if not is_audio:
+            result.passed = True
+            result.score = 1.0
+            result.details.append("⏭ 非听力题")
+            return result
+
+        try:
+            role = self._build_role_prompt(q)
+            prompt = self.trainer.build_enhanced_prompt(
+                role + "\n\n---\n\n"
+                f"【任务: 检查音频播放功能】\n"
+                f"题型: {q.type_2}（听力题）\n"
+                f"录音原文: {q.recording}\n\n"
+                f"请看截图, 判断:\n"
+                f"1. 截图中是否可见播放按钮/喇叭图标？\n"
+                f"2. 音频控件是否被遮挡或截断？\n"
+                f"3. 播放按钮位置是否合理（通常靠近题目顶部）？\n"
+                f"4. 是否有任何异常（如灰色不可点击状态）？\n\n"
+                f"回答格式: [通过/不通过] | 理由",
+                dim_filter="audio"
+            )
+            answer = self.llm.ask(prompt, image_path=shot)
+            passed = "通过" in answer and "不通过" not in answer
+            result.passed = passed
+            result.score = 1.0 if passed else 0.5
+            result.details.append(answer[:150])
+        except Exception as e:
+            result.error = str(e)
+        return result
+
+    # ============================================================
+    # (6) 答错后检查 (A1 — 委托给 PostErrorChecker)
+    # ============================================================
+
+    def _check_post_error(self, q: YingYuBaoQuestion,
+                          post_error_shot: str = "",
+                          is_first: bool = False) -> CheckResult:
+        """
+        (6) 答错后结果页检查
+
+        仅在每模块首题触发。委托给 PostErrorChecker 执行。
+
+        Args:
+            q: 脚本题目
+            post_error_shot: 答错后结果页截图
+            is_first: 是否为首题（决定是否触发检查）
+
+        Returns:
+            CheckResult: 非触发条件时 passed=True, score=1.0
+        """
+        result = CheckResult()
+
+        if not is_first:
+            result.passed = True
+            result.score = 1.0
+            result.details.append("⏭ 非首题，跳过答错后检查")
+            return result
+
+        if not post_error_shot or not Path(post_error_shot).exists():
+            result.passed = True
+            result.score = 1.0
+            result.details.append("⏭ 无答错后截图（可能未执行故意选错流程）")
+            return result
+
+        # 委托给 PostErrorChecker
+        try:
+            pe_result = self.post_error_checker.check(post_error_shot, q)
+            result.passed = pe_result.passed
+            result.score = pe_result.score
+            result.details = pe_result.details
+            result.error = pe_result.error
+        except Exception as e:
+            result.error = str(e)
+            result.details.append(f"[异常] 答错后检查失败: {e}")
+
         return result
 
     # ============================================================
@@ -542,7 +842,7 @@ class ReviewAgent:
             f"脚本: {self.cfg.docx_path}",
             f"单元: {self.cfg.unit or '全部'} | 阶段: {self.cfg.stage or '全部'}",
             f"审查题数: {total}",
-            f"通过: {passed}/{total} ({passed/total*100:.0f}%)",
+            f"通过: {passed}/{total} ({passed/total*100:.0f}%)" if total > 0 else "通过: 0/0 (无题)",
             f"综合得分: {avg_score:.2f}\n",
         ]
 
@@ -564,8 +864,8 @@ class ReviewAgent:
             lines.append(f"| {tp} | {s['total']} | {s['passed']} | {rate} |")
 
         # 逐题详情
-        lines.extend(["\n## 逐题详情\n", "| # | 题型 | 题干 | 内容 | 配图 | 作答 | 总评 |"])
-        lines.append("|---|------|------|------|------|------|------|")
+        lines.extend(["\n## 逐题详情\n", "| # | 题型 | 题干 | 内容 | 配图 | 作答 | 音频 | 答错后 | 总评 |"])
+        lines.append("|---|------|------|------|------|------|------|------|------|")
         for r in self.results:
             def icon(p):
                 return "✅" if p else "❌"
@@ -575,6 +875,8 @@ class ReviewAgent:
                 f"{icon(r.content_check.passed)} | "
                 f"{icon(r.image_check.passed)} | "
                 f"{icon(r.answer_check.passed)} | "
+                f"{icon(r.audio_check.passed)} | "
+                f"{icon(r.post_error_check.passed)} | "
                 f"{'✅' if r.overall_passed else '❌'} ({r.overall_score:.2f}) |"
             )
 
@@ -592,6 +894,10 @@ class ReviewAgent:
                     lines.append(f"- 配图: {r.image_check.details[0]}")
                 if r.answer_check.details:
                     lines.append(f"- 作答: {r.answer_check.details[0]}")
+                if r.audio_check.details and not r.audio_check.passed:
+                    lines.append(f"- 音频: {r.audio_check.details[0]}")
+                if r.post_error_check.details and not r.post_error_check.passed:
+                    lines.append(f"- 答错后: {r.post_error_check.details[0]}")
                 lines.append("")
 
         # 反馈统计

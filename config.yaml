@@ -1,31 +1,38 @@
-# 英语宝模块检测 - 全局配置
-# 修改此文件即可配置设备、账号、输出路径等
+﻿# 鑻辫瀹濇ā鍧楁娴?- 鍏ㄥ眬閰嶇疆
+# 淇敼姝ゆ枃浠跺嵆鍙厤缃澶囥€佽处鍙枫€佽緭鍑鸿矾寰勭瓑
 
-# 设备配置
+# 璁惧閰嶇疆
 device:
-  serial: "SKSCIF4T7PFMQS5X"        # ADB设备序列号 (adb devices 查看)
-  screen_resolution: [1080, 2400]   # 手机屏幕分辨率
+  serial: "3XQ0225715002935"        # ADB璁惧搴忓垪鍙?(adb devices 鏌ョ湅)
+  screen_resolution: [1080, 2400]   # 鎵嬫満灞忓箷鍒嗚鲸鐜?
 
-# 英语宝APP
+# 鑻辫瀹滱PP
 app:
-  package: "com.dinoenglish.yyb"    # APP包名 (英语宝)
-  # activity: ""                    # 启动Activity (留空则用monkey启动)
+  package: "com.dinoenglish.yyb"    # APP鍖呭悕 (鑻辫瀹?
+  # activity: ""                    # 鍚姩Activity (鐣欑┖鍒欑敤monkey鍚姩)
 
-# 灰度账号
+# 鐏板害璐﹀彿
 account:
   username: "10010005"
   password: "123456"
 
-# 输出配置
+# 杈撳嚭閰嶇疆
 output:
-  dir: "outputs"                    # 输出根目录
+  dir: "outputs"                    # 杈撳嚭鏍圭洰褰?
   screenshot_dir: "outputs/screenshots"
-  save_pass_screenshots: false      # 是否保存通过题目的截图
-  question_timeout: 120             # 单题超时(秒)
-  max_retries: 2                    # 最大重试次数
+  save_pass_screenshots: false      # 鏄惁淇濆瓨閫氳繃棰樼洰鐨勬埅鍥?
+  question_timeout: 120             # 鍗曢瓒呮椂(绉?
+  max_retries: 2                    # 鏈€澶ч噸璇曟鏁?
 
-# 流程引擎配置
+# 娴佺▼寮曟搸閰嶇疆
 flow:
   default_timeout: 10               # 默认等待超时(秒)
   poll_interval: 1.0                # 轮询间隔(秒)
   step_delay: 0.5                   # 步骤间延迟(秒)
+
+# 参考图片目录 (可选, 可配置多个)
+# 审查时会加载这些目录下所有 U6图片/ U7图片/... 子目录的图片
+# AI将参考图与APP截图做对比, 提高配图判断准确度
+image_dir:
+  - 'D:\压缩包存储\听力专项新湘鲁五上U6-9'
+  - 'D:\压缩包存储\听力专项新湘鲁六上U6-9'

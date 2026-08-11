@@ -60,7 +60,7 @@ class ADBController:
 
     def _adb(self, args: list[str], timeout: int = 15) -> tuple[int, str]:
         """执行ADB命令"""
-        cmd = ["adb"]
+        cmd = ['C:/Users/bunana/AppData/Local/Microsoft/WinGet/Packages/Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe/platform-tools/adb.exe']
         if self.serial:
             cmd.extend(["-s", self.serial])
         cmd.extend(args)

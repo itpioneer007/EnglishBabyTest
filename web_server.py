@@ -26,10 +26,26 @@ PROJECT_ROOT = Path(__file__).parent.absolute()
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from flask import Flask, jsonify, request, send_from_directory, render_template, Response
-from adb_controller import ADBController
+try:
+    from adb_controller import ADBController
+except ImportError:
+    # 依赖缺失时占位，保证服务可启动（听力专项新引擎不依赖 ADBController）
+    class ADBController:
+        def __init__(self, *a, **kw): pass
 from config_loader import load_config
 
 app = Flask(__name__)
+
+# ============================================================
+# 三人协作路由注册（按角色拆分）
+#   A: routes/trace_routes.py  → 溯源系统
+#   B: routes/batch_routes.py  → 批量自动化
+#   C: routes/export_routes.py → 报告输出分发
+# ============================================================
+from routes import register_trace, register_batch, register_export
+register_trace(app)
+register_batch(app)
+register_export(app)
 
 # ============================================================
 # 全局状态
@@ -127,12 +143,63 @@ def detect_module_from_filename(filename: str):
 # 工具函数
 # ============================================================
 
+
+# ============================================================
+# 自动坐标缩放 — 适配不同分辨率手机
+# ============================================================
+REFERENCE_RES = (1080, 2400)
+_detected_res = None
+_scale_x = 1.0
+_scale_y = 1.0
+
+def detect_screen_resolution(adb_serial: str = ""):
+    """通过 ADB 检测手机实际分辨率，更新缩放比"""
+    global _detected_res, _scale_x, _scale_y
+    try:
+        adb_path = r"C:\Users\bunana\AppData\Local\Microsoft\WinGet\Packages\Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe\platform-tools\adb.exe"
+        cmd = [adb_path]
+        if adb_serial:
+            cmd.extend(["-s", adb_serial])
+        cmd.extend(["shell", "wm", "size"])
+        r = sp.run(cmd, capture_output=True, text=True, timeout=5,
+                   encoding="utf-8", errors="replace")
+        m = re.search(r"(\d+)x(\d+)", r.stdout)
+        if m:
+            w, h = int(m.group(1)), int(m.group(2))
+            _detected_res = (w, h)
+            _scale_x = w / REFERENCE_RES[0]
+            _scale_y = h / REFERENCE_RES[1]
+            print(f"  [坐标缩放] 检测到分辨率 {w}x{h}, 缩放比 X={_scale_x:.3f} Y={_scale_y:.3f}")
+        else:
+            print(f"  [坐标缩放] 无法解析分辨率: {r.stdout}")
+    except Exception as e:
+        print(f"  [坐标缩放] 检测失败: {e}, 使用默认1:1")
+
+def sc(x: int, y: int) -> tuple:
+    """缩放单个坐标点"""
+    return (int(x * _scale_x + 0.5), int(y * _scale_y + 0.5))
+
+def sc_xy(xy: tuple) -> tuple:
+    """缩放一个 (x, y) 元组"""
+    return sc(xy[0], xy[1])
+
+def scale_all_coords():
+    """原地缩放所有坐标字典，使之适配当前手机分辨率"""
+    global MODULE_COORDS, TABS, SETTINGS_ICON, AD_CLOSE
+    if _scale_x == 1.0 and _scale_y == 1.0:
+        return
+    MODULE_COORDS = {k: sc_xy(v) for k, v in MODULE_COORDS.items()}
+    TABS = {k: sc_xy(v) for k, v in TABS.items()}
+    SETTINGS_ICON = sc_xy(SETTINGS_ICON)
+    AD_CLOSE = sc_xy(AD_CLOSE)
+    print(f"  [坐标缩放] 所有坐标已缩放 ({REFERENCE_RES[0]}x{REFERENCE_RES[1]} -> {_detected_res})")
+
+
 def get_adb():
-    """获取 ADBController 实例"""
+    """获取 ADBController 实例 (截图保存到 screenshots/)"""
     config = load_config()
-    out_dir = PROJECT_ROOT / "outputs" / "web"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    return ADBController(serial=config.device.serial, screenshot_dir=str(out_dir))
+    # 用相对路径避免 adb pull 在 Windows 上拼接出错
+    return ADBController(serial=config.device.serial, screenshot_dir="screenshots")
 
 
 def log_msg(msg: str, level: str = "info"):
@@ -732,6 +799,219 @@ def run_inspect_loop():
         set_done()
 
 
+
+def run_quick_inspect_task(docx_file: str = "", unit: int = 0):
+    """⚡ 快速检查：从手机当前页面直接开始逐题巡检（跳过启动/关广告/登录/导航）
+
+    前提: 用户已手动将手机调到题目页 (如 听力专项-基础巩固-第1题)
+    流程: 截图 → AI六维审查(若提供脚本) → 写入巡检状态 → 点选项 → 点底部按钮x2 → 循环
+    坐标自动缩放 (适配不同分辨率手机)
+    """
+    try:
+        set_running("quick_inspect")
+        config = load_config()
+        adb = get_adb()
+
+        # 清空旧巡检状态
+        _inspection_state["questions"] = {}
+        _inspection_state["workflow_steps"] = []
+        _inspection_state["current_question_idx"] = 0
+        _save_inspection_state()
+
+        # 加载脚本 + AI审查agent (可选)
+        agent = None
+        if docx_file:
+            docx_path = str(UPLOAD_DIR / docx_file)
+            if Path(docx_path).exists():
+                try:
+                    from src.review_agent import ReviewAgent, ReviewConfig
+                    cfg = ReviewConfig(docx_path=docx_path, unit=int(unit or 0),
+                                       screenshot_dir=str(PROJECT_ROOT / "screenshots"),
+                                       verbose=False)
+                    agent = ReviewAgent(cfg)
+                    log_msg(f"📄 脚本已加载: {docx_file} (共{len(agent.script_questions)}题) → AI六维审查开启", "success")
+                except Exception as e:
+                    log_msg(f"⚠ 脚本加载失败: {e}，降级为仅截图", "warning")
+            else:
+                log_msg(f"⚠ 脚本不存在: {docx_path}，降级为仅截图", "warning")
+        else:
+            log_msg("⚡ 未指定脚本，仅截图+推进（选脚本可开启AI六维审查）", "info")
+
+        log_msg("⚡ 快速检查启动（从当前页面开始，跳过导航）", "success")
+        time.sleep(1)
+
+        # 1. 尝试检测当前题目进度 (如 1/40)
+        elements = adb.dump_ui(retries=2)
+        cur = None
+        total_q = 0
+        for e in elements:
+            m = re.match(r'^(\d+)/(\d+)$', (e.text or "").strip())
+            if m:
+                cur = int(m.group(1))
+                total_q = int(m.group(2))
+                break
+
+        if cur:
+            log_msg(f"✅ 检测到题目进度 {cur}/{total_q or 40}，开始逐题检查", "success")
+        else:
+            log_msg("⚠ 未检测到题目进度(如 1/40)。若您已在题目页将正常检查，", "warning")
+            log_msg("   否则请先手动进入题目页再点「快速检查」", "warning")
+            time.sleep(2)
+
+        # 2. 逐题巡检
+        last = 0
+        q_count = 0
+        for step in range(80):
+            if not task_status["running"]:
+                break
+
+            idx = cur if cur else (last + 1)
+
+            # 截图 (保存到 outputs/web, 前端可预览)
+            shot = f"q{idx:02d}.png"
+            adb.screenshot(shot)
+            log_msg(f"📸 Q{idx} 已截图", "success")
+            update_progress(idx, total_q or 40, f"Q{idx}")
+            q_count += 1
+
+            # ====== AI 六维审查 (若有脚本) ======
+            ai = {
+                "ai_stem": None, "ai_content": None, "ai_image": None,
+                "ai_answer": None, "ai_audio": None, "ai_post_error": None,
+                "overall_passed": None, "overall_score": None,
+                "stem_reason": "", "content_reason": "", "image_reason": "",
+                "answer_reason": "", "audio_reason": "", "post_error_reason": "",
+                "question_type": "快速检查",
+                "script_answer": "", "stem": "",
+            }
+            if agent:
+                try:
+                    # 匹配脚本题目
+                    shot_path = str(PROJECT_ROOT / "outputs" / "web" / shot)
+                    matching = [q for q in agent.script_questions if q.global_idx == idx]
+                    if matching:
+                        script_q = matching[0]
+                        r = agent._review_one(script_q, shot_path)
+                        ai = {
+                            "ai_stem": r.stem_check.passed,
+                            "ai_content": r.content_check.passed,
+                            "ai_image": r.image_check.passed,
+                            "ai_answer": r.answer_check.passed,
+                            "ai_audio": r.audio_check.passed if r.audio_check is not None else None,
+                            "ai_post_error": r.post_error_check.passed if r.post_error_check is not None else None,
+                            "overall_passed": r.overall_passed,
+                            "overall_score": round(r.overall_score, 2),
+                            "stem_reason": r.stem_check.details[0][:100] if r.stem_check.details else "",
+                            "content_reason": r.content_check.details[0][:100] if r.content_check.details else "",
+                            "image_reason": r.image_check.details[0][:100] if r.image_check.details else "",
+                            "answer_reason": r.answer_check.details[0][:100] if r.answer_check.details else "",
+                            "audio_reason": r.audio_check.details[0][:100] if r.audio_check and r.audio_check.details else "",
+                            "post_error_reason": r.post_error_check.details[0][:100] if r.post_error_check and r.post_error_check.details else "",
+                            "question_type": script_q.type_2 or "快速检查",
+                            "script_answer": script_q.answer or "",
+                            "stem": script_q.stem[:60] if script_q.stem else "",
+                        }
+                        log_msg(f"  AI: 题干{ai['ai_stem']} 内容{ai['ai_content']} 配图{ai['ai_image']} 作答{ai['ai_answer']} 音频{ai['ai_audio']} 答错后{ai['ai_post_error']} 得分{ai['overall_score']}")
+                    else:
+                        log_msg(f"  ⚠ 脚本中无 Q{idx}，跳过AI审查", "warning")
+                except Exception as e:
+                    log_msg(f"  ⚠ AI审查失败 Q{idx}: {e}", "warning")
+
+            # ====== 写入巡检状态 → 前端中栏显示 ======
+            qid = f"quick-Q{idx:02d}"
+            _inspection_state["questions"][qid] = {
+                "idx": idx,
+                "total": total_q or 40,
+                "question_type": ai["question_type"],
+                "screenshot": shot,
+                "progress": f"{idx}/{total_q or 40}",
+                "ai_stem": ai["ai_stem"], "ai_content": ai["ai_content"],
+                "ai_image": ai["ai_image"], "ai_answer": ai["ai_answer"],
+                "ai_audio": ai["ai_audio"], "ai_post_error": ai["ai_post_error"],
+                "overall_passed": ai["overall_passed"],
+                "overall_score": ai["overall_score"],
+                "stem_reason": ai["stem_reason"], "content_reason": ai["content_reason"],
+                "image_reason": ai["image_reason"], "answer_reason": ai["answer_reason"],
+                "audio_reason": ai["audio_reason"], "post_error_reason": ai["post_error_reason"],
+                "script_answer": ai["script_answer"],
+                "stem": ai["stem"],
+                "note": "",
+                "human_label": None,
+                "human_note": "",
+                "timestamp": datetime.now().isoformat(),
+            }
+            _inspection_state["current_question_idx"] = idx
+            _save_inspection_state()
+
+            # 点选项: 优先找UI元素，找不到则点默认右侧选项区(缩放)
+            elements = adb.dump_ui(retries=2)
+            clicked_option = False
+            for e in elements:
+                if e.clickable and 700 < e.bounds[1] < 1700:
+                    if e.center[0] > 450:
+                        adb.tap(e.center[0], e.bounds[1] + 30)
+                    else:
+                        adb.tap((e.bounds[0] + e.bounds[2]) // 2,
+                                (e.bounds[1] + e.bounds[3]) // 2)
+                    clicked_option = True
+                    break
+            if not clicked_option:
+                tx, ty = sc(970, 1500)   # 默认点右侧选项区
+                adb.tap(tx, ty)
+            time.sleep(1)
+
+            # 点底部按钮 x2 (检查答案 → 下一题)
+            bx, by = sc(540, 2174)
+            adb.tap(bx, by)
+            time.sleep(1.5)
+            adb.tap(bx, by)
+            time.sleep(1.5)
+
+            # 检测进度变化
+            elements_after = adb.dump_ui(retries=2)
+            new_cur = None
+            new_total = 0
+            for e in elements_after:
+                m = re.match(r'^(\d+)/(\d+)$', (e.text or "").strip())
+                if m:
+                    new_cur = int(m.group(1))
+                    new_total = int(m.group(2))
+                    break
+
+            if new_cur and new_cur == last and cur:
+                log_msg(f"  ⚠ Q{new_cur} 进度未变，重试一次", "warning")
+                time.sleep(2)
+                adb.tap(bx, by)
+                time.sleep(1.5)
+                continue
+
+            if new_cur:
+                last = new_cur
+                cur = new_cur
+                total_q = new_total or total_q
+                if new_cur >= (total_q or 40):
+                    log_msg(f"✅ {new_cur}题完成!", "success")
+                    break
+            else:
+                last += 1
+                log_msg(f"  未检测到进度文字, 继续下一题 (Q{last})", "info")
+
+        # 3. 保存报告
+        out = PROJECT_ROOT / "outputs" / "questions" / "quick_report.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with open(out, "w", encoding="utf-8") as f:
+            json.dump({"questions": list(_inspection_state["questions"].values())},
+                      f, ensure_ascii=False, indent=2)
+        log_msg(f"✅ 快速检查完成: 共 {q_count} 题", "success")
+
+    except Exception as e:
+        log_msg(f"❌ 异常: {e}", "error")
+        import traceback
+        traceback.print_exc()
+    finally:
+        set_done()
+
+
 def run_inspect_questions_task():
     """自动化巡检 AI检测 题目：
     1. 启动APP, 关广告, 进英语tab
@@ -748,9 +1028,9 @@ def run_inspect_questions_task():
 
         # 1. 启动APP
         log_msg("启动APP...")
-        sp.run(['adb', '-s', config.device.serial, 'shell', 'am', 'force-stop', 'com.dinoenglish.yyb'])
+        sp.run(['C:/Users/bunana/AppData/Local/Microsoft/WinGet/Packages/Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe/platform-tools/adb.exe', '-s', config.device.serial, 'shell', 'am', 'force-stop', 'com.dinoenglish.yyb'])
         time.sleep(2)
-        sp.run(['adb', '-s', config.device.serial, 'shell', 'am', 'start', '-n', 'com.dinoenglish.yyb/.base.SplashActivity'])
+        sp.run(['C:/Users/bunana/AppData/Local/Microsoft/WinGet/Packages/Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe/platform-tools/adb.exe', '-s', config.device.serial, 'shell', 'am', 'start', '-n', 'com.dinoenglish.yyb/.base.SplashActivity'])
         time.sleep(5)
         adb.tap(540, 1821)  # 关启动广告
         time.sleep(3)
@@ -812,9 +1092,9 @@ def run_inspect_questions_task():
 
             # 截图
             shot_path = out_dir / f"q_{q_idx+1:02d}.png"
-            sp.run(['adb', '-s', config.device.serial, 'shell', 'screencap', '-p', '/sdcard/_q.png'])
-            sp.run(['adb', '-s', config.device.serial, 'pull', '/sdcard/_q.png', str(shot_path)])
-            sp.run(['adb', '-s', config.device.serial, 'shell', 'rm', '/sdcard/_q.png'])
+            sp.run(['C:/Users/bunana/AppData/Local/Microsoft/WinGet/Packages/Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe/platform-tools/adb.exe', '-s', config.device.serial, 'shell', 'screencap', '-p', '/sdcard/_q.png'])
+            sp.run(['C:/Users/bunana/AppData/Local/Microsoft/WinGet/Packages/Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe/platform-tools/adb.exe', '-s', config.device.serial, 'pull', '/sdcard/_q.png', str(shot_path)])
+            sp.run(['C:/Users/bunana/AppData/Local/Microsoft/WinGet/Packages/Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe/platform-tools/adb.exe', '-s', config.device.serial, 'shell', 'rm', '/sdcard/_q.png'])
 
             # 检测题目类型
             question_type = "未知"
@@ -880,6 +1160,16 @@ def run_inspect_questions_task():
 # Flask 路由
 # ============================================================
 
+
+@app.after_request
+def _no_cache(resp):
+    """禁用页面缓存：确保浏览器始终加载最新 HTML/JS"""
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
+
+
 @app.route("/")
 def index():
     """前端页面"""
@@ -892,8 +1182,12 @@ def api_status():
     config = load_config()
     device_ok = False
     try:
-        r = sp.run(["adb", "-s", config.device.serial, "get-state"],
-                   capture_output=True, text=True, timeout=5,
+        # 预启动 ADB 守护进程，避免首次调用超时
+        sp.run(["C:/Users/bunana/AppData/Local/Microsoft/WinGet/Packages/Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe/platform-tools/adb.exe", "start-server"],
+               capture_output=True, text=True, timeout=10,
+               encoding="utf-8", errors="replace")
+        r = sp.run(["C:/Users/bunana/AppData/Local/Microsoft/WinGet/Packages/Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe/platform-tools/adb.exe", "-s", config.device.serial, "get-state"],
+                   capture_output=True, text=True, timeout=10,
                    encoding="utf-8", errors="replace")
         device_ok = r.returncode == 0 and "device" in r.stdout.lower()
     except Exception:
@@ -915,6 +1209,27 @@ def api_login():
     t = threading.Thread(target=run_login_task, daemon=True)
     t.start()
     return jsonify({"status": "started", "task": "login"})
+
+
+
+@app.route("/api/versions/available")
+def api_versions_available():
+    """可用版本列表 = 预设湘鲁版本 + 知识库中的版本（含湘少版等），去重"""
+    preset = ["新湘鲁五上", "新湘鲁五下", "新湘鲁六上", "新湘鲁六下"]
+    versions = list(preset)
+    try:
+        from src.knowledge_base import KnowledgeBase
+        kb = KnowledgeBase()
+        summary = kb.summary()
+        for s in summary:
+            key = s.get("key", "")
+            # 知识库key形如 "湘少版:五上" / "湘鲁版:六上" → 转成 "湘少版五上"
+            label = key.replace(":", "") if ":" in key else key
+            if label and label not in versions:
+                versions.append(label)
+    except Exception:
+        pass
+    return jsonify({"versions": versions, "preset": preset})
 
 
 @app.route("/api/versions", methods=["GET", "POST"])
@@ -1075,22 +1390,24 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
     自动从文件名识别模块(巧记单词/听力专项/知识过关...),导航到对应区域,逐题检查
     """
     def record_step(step, status, detail=""):
-        """记录流程步骤到后端"""
+        """记录流程步骤到后端 (用urllib避免依赖requests)"""
         try:
-            import requests
-            requests.post("http://127.0.0.1:5000/api/inspect/workflow-step",
-                          json={"step": step, "status": status, "detail": detail},
-                          timeout=2)
+            import urllib.request, json
+            data = json.dumps({"step": step, "status": status, "detail": detail}).encode()
+            req = urllib.request.Request("http://127.0.0.1:5000/api/inspect/workflow-step",
+                                        data=data, headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=2)
         except Exception:
-            pass  # 即使失败也不影响主流程
+            pass
 
     def record_q_result(qid, **kwargs):
         """记录每题结果到后端"""
         try:
-            import requests
-            requests.post("http://127.0.0.1:5000/api/inspect/question-result",
-                          json={"qid": qid, **kwargs},
-                          timeout=2)
+            import urllib.request, json
+            data = json.dumps({"qid": qid, **kwargs}).encode()
+            req = urllib.request.Request("http://127.0.0.1:5000/api/inspect/question-result",
+                                        data=data, headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=2)
         except Exception:
             pass
 
@@ -1098,8 +1415,10 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
         # 重置巡检状态
         record_step("初始化", "running", f"{version_label} U{unit} {stage}")
         try:
-            import requests
-            requests.post("http://127.0.0.1:5000/api/inspect/reset", timeout=2)
+            import urllib.request, json
+            req = urllib.request.Request("http://127.0.0.1:5000/api/inspect/reset",
+                                        data=b"{}", headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=2)
         except Exception:
             pass
 
@@ -1107,11 +1426,32 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
         config = load_config()
         adb = get_adb()
 
-        log_msg(f"🚀 听力专项巡检: {version_label} Unit{unit} {stage}")
+        # ===== B: 通用导航引擎 =====
+        from src.universe_navigator import UniverseNavigator
+        nav = UniverseNavigator(adb)
+
+        log_msg(f"🚀 巡检: {version_label} Unit{unit} {stage}")
         record_step("1.启动APP", "running", "")
 
-        # 0. 强制返回首页 + 关闭教程页(防止上次停留在教程页)
+        # 强制回首页
         log_msg("强制回到首页")
+        nav.universal_reset()
+        record_step("1.启动APP", "done")
+        time.sleep(1)
+
+        # 通用导航: 首页 → 答题页
+        record_step("2.导航到模块", "running")
+        ok = nav.navigate_to("question_page", {
+            "version": version_label,
+            "unit": unit,
+            "stage": stage,
+        })
+        if not ok:
+            log_msg("⚠ 导航失败，尝试通用重置后重试...", "warning")
+            nav.universal_reset()
+            time.sleep(3)
+            nav.navigate_to("question_page", {"version": version_label, "unit": unit, "stage": stage})
+        record_step("2.导航到模块", "done")
         record_step("0.回到首页", "running", "")
         for _ in range(3):
             adb.press_back()
@@ -1319,8 +1659,19 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
             # 教材精学区: 跳过专项突破+模块搜索
             record_step("5.听力专项", "done", f"教材精学: {module_name}")
 
-        # 6. 选择对应版本年级 (五上/六上等)
-        log_msg(f"选择版本: {version_label}")
+        # 5.5 关"已完成"弹窗 (如果之前跑过该单元)
+        time.sleep(1)
+        elements = adb.dump_ui()
+        for e in elements:
+            t = (e.text or '').strip()
+            if t in ['先走一步', '继续练习', '已完成', '完成']:
+                adb.tap(e.center[0], e.center[1])
+                log_msg(f"  关完成弹窗: '{t}' at {e.center}")
+                time.sleep(1.5)
+                break
+
+        # 6. 版本检查: 如果页面上已经显示正确版本, 跳过
+        log_msg(f"检查版本: {version_label}")
         time.sleep(2)
         elements = adb.dump_ui()
         # 检查是否跑到消息页/错误页
@@ -1328,13 +1679,30 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
             adb.press_back()
             time.sleep(2)
             elements = adb.dump_ui()
+        
+        # 从version_label提取年级关键词
         grade_keywords = {"五上": "五上", "五下": "五下", "六上": "六上", "六下": "六下"}
         target_kw = ""
+        full_grade_map = {"五上":"五年级上册","五下":"五年级下册","六上":"六年级上册","六下":"六年级下册"}
+        target_grade_full = ""
         for k, v in grade_keywords.items():
             if k in version_label:
                 target_kw = v
+                target_grade_full = full_grade_map.get(k, "")
                 break
-        if target_kw:
+        
+        # 检查当前页面是否已经显示正确版本
+        page_text = ' '.join([(e.text or '') for e in elements])
+        version_already_set = False
+        if target_grade_full and target_grade_full in page_text:
+            version_already_set = True
+            log_msg(f"  版本已正确: {target_grade_full}")
+        elif target_kw and target_kw in page_text:
+            version_already_set = True
+            log_msg(f"  版本已正确(含 {target_kw})")
+        
+        if target_kw and not version_already_set:
+            # 需要手动点击切换版本
             found_grade = False
             for e in elements:
                 if e.text and target_kw in (e.text or ''):
@@ -1347,19 +1715,40 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
             if not found_grade:
                 log_msg(f"  ⚠ 未找到 {target_kw}, 尝试兜底", "warning")
                 adb.tap(540, 1200)
-        time.sleep(3)
+            time.sleep(3)
+        elif version_already_set:
+            log_msg(f"  版本一致, 跳过选择")
+            time.sleep(1)
 
-        # 7. 选择Unit - 必须同时点"去练习"按钮才能进入
+        # 7. 选择Unit - 先关可能出现的完成弹窗
+        time.sleep(1)
+        elements = adb.dump_ui()
+        for e in elements:
+            t = (e.text or '').strip()
+            if t in ['先走一步', '继续练习', '已完成', '完成']:
+                adb.tap(e.center[0], e.center[1])
+                log_msg(f"  关完成弹窗: '{t}' at {e.center}")
+                time.sleep(1.5)
+                break
+
         log_msg(f"选择 Unit {unit}")
         elements = adb.dump_ui()
-        # 找到Unit文本的位置
+        # 找到Unit文本的位置 (如果不在当前屏幕, 滚动查找)
         unit_y = None
-        for e in elements:
-            if e.text and re.match(rf'^Unit {unit}\b', (e.text or '').strip()):
-                unit_y = e.center[1]
-                log_msg(f"  Unit {unit} 文本 at y={unit_y}")
+        for scroll_attempt in range(6):  # 最多滚动5次
+            for e in elements:
+                if e.text and re.match(rf'^Unit {unit}\b', (e.text or '').strip()):
+                    unit_y = e.center[1]
+                    log_msg(f"  Unit {unit} 文本 at y={unit_y} (scroll={scroll_attempt})")
+                    break
+            if unit_y:
                 break
-        # 兜底: 模糊匹配
+            # 没找到, 向下滚动
+            if scroll_attempt < 5:
+                adb.swipe(540, 1800, 540, 500, 400)  # 大幅下滚
+                time.sleep(0.8)
+                elements = adb.dump_ui()
+        # 兜底: 模糊匹配 (针对Unit数字小但文本格式不同)
         if not unit_y:
             for e in elements:
                 if e.text and f"Unit {unit}" in (e.text or ''):
@@ -1398,13 +1787,7 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
         found_stage = False
         for wait_i in range(5):
             elements = adb.dump_ui()
-            # 先确认不在Unit列表页 (没看到"去练习"才说明已经进入下一页)
-            on_unit_list = any('去练习' in (e.text or '') and e.clickable for e in elements)
-            if on_unit_list:
-                log_msg(f"  还在Unit列表,再等等 ({wait_i+1}/5)")
-                time.sleep(1)
-                continue
-            # 找阶段按钮 — 三种匹配方式
+            # 直接找阶段按钮, 不判断"是否还在Unit列表"(避免误判)
             for e in elements:
                 t = (e.text or '').strip()
                 if not t: continue
@@ -1537,11 +1920,15 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
             review_result = None
             if agent:
                 try:
-                    # 找对应脚本题目
-                    matching_qs = [q for q in agent.script_questions if q.global_idx == cur]
-                    if matching_qs:
-                        script_q = matching_qs[0]
-                        r = agent._review_one(script_q, shot_path)
+                    # 找对应脚本题目 — 用列表索引而非global_idx
+                    # APP题号是相对位置的(1/15), 脚本按unit+stage过滤后也是有序的
+                    script_q = None
+                    if cur and 1 <= cur <= len(agent.script_questions):
+                        script_q = agent.script_questions[cur - 1]
+                    if script_q:
+                        # 从UI dump提取屏幕文字 (供文字题走文本模型加速)
+                        ui_texts = [e.text or '' for e in elements if e.text and e.text.strip()]
+                        r = agent._review_one(script_q, shot_path, ui_texts=ui_texts)
                         review_result = {
                             "stem": "✅" if r.stem_check.passed else "❌",
                             "content": "✅" if r.content_check.passed else "❌",
@@ -1598,17 +1985,51 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
                 "idx": cur, "screenshot": shot_name, "review": review_result
             })
 
-            # 点击选项
+            # 点击选项 — 根据脚本答案选择正确选项
             found_option = False
-            for e in elements:
-                if e.clickable and 400 < e.bounds[1] < 2000 and (e.bounds[2]-e.bounds[0]) > 100:
-                    # 优先选中间偏左的选项区域
-                    if e.center[0] < 150: continue  # 太左可能是返回键
-                    adb.tap(e.center[0], e.center[1])
-                    found_option = True
-                    break
+            if script_q and script_q.answer in 'ABC':
+                # 找对应选项字母的文本 (A/B/C)
+                ans_letter = script_q.answer
+                for e in elements:
+                    t = (e.text or '').strip()
+                    # 匹配 "A." / "A、" / "A" 等格式的选项文本
+                    if re.match(rf'^{ans_letter}[\.\、\)\s]', t) and e.clickable and 50 < e.center[1] < 2200:
+                        adb.tap(e.center[0], e.center[1])
+                        log_msg(f"  点选项 {ans_letter} at {e.center}")
+                        found_option = True
+                        break
+                if not found_option:
+                    # 按选项位置推定: A左/B中/C右
+                    opt_x = {'A': 250, 'B': 500, 'C': 750, 'D': 950}.get(ans_letter, 500)
+                    candidates = [e for e in elements if e.clickable and 400 < e.bounds[1] < 2000
+                                 and abs(e.center[0] - opt_x) < 200 and (e.bounds[2]-e.bounds[0]) > 60]
+                    if candidates:
+                        # 选最靠上的一个
+                        best = min(candidates, key=lambda e: e.center[1])
+                        adb.tap(best.center[0], best.center[1])
+                        log_msg(f"  点选项(位置推定) {ans_letter} at {best.center}")
+                        found_option = True
+            
+            if script_q and script_q.answer in 'TF':
+                # 判断题: 点T或F
+                ans_word = {'T': 'T', 'F': 'F'}.get(script_q.answer, '')
+                for e in elements:
+                    t = (e.text or '').strip().upper()
+                    if t == ans_word and e.clickable:
+                        adb.tap(e.center[0], e.center[1])
+                        log_msg(f"  点 {'正确' if ans_word=='T' else '错误'} at {e.center}")
+                        found_option = True
+                        break
+            
             if not found_option:
-                # 兜底: 点屏幕中央
+                # 兜底: 点中间偏左单选区域
+                for e in elements:
+                    if e.clickable and 400 < e.bounds[1] < 2000 and (e.bounds[2]-e.bounds[0]) > 100:
+                        if e.center[0] < 150: continue
+                        adb.tap(e.center[0], e.center[1])
+                        found_option = True
+                        break
+            if not found_option:
                 adb.tap(540, 800)
             time.sleep(1.5)
 
@@ -1650,6 +2071,25 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
         log_msg(f"❌ 巡检失败: {e}", "error")
         log_msg(traceback.format_exc(), "error")
         set_done()
+
+
+
+@app.route("/api/inspect/quick-run", methods=["POST"])
+def api_inspect_quick_run():
+    """⚡ 快速检查：从当前页面直接开始逐题巡检 (跳过导航)
+
+    可选参数: docx(脚本文件名), unit(单元号) — 提供后逐题做 AI 六维审查
+    """
+    if task_status["running"]:
+        return jsonify({"error": "已有任务在运行"}), 409
+    data = request.get_json() or {}
+    docx_file = data.get("docx", "")
+    unit = data.get("unit", 0)
+    t = threading.Thread(target=run_quick_inspect_task,
+                         args=(docx_file, unit), daemon=True)
+    t.start()
+    return jsonify({"status": "started", "task": "quick_inspect",
+                    "docx": docx_file, "unit": unit})
 
 
 @app.route("/api/inspect/run", methods=["POST"])
@@ -1930,12 +2370,12 @@ def api_hardware_info():
     config = load_config()
     info = {"serial": config.device.serial, "screen": "1080x2400"}
     try:
-        r = sp.run(["adb", "-s", config.device.serial, "shell", "getprop", "ro.product.model"],
+        r = sp.run(["C:/Users/bunana/AppData/Local/Microsoft/WinGet/Packages/Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe/platform-tools/adb.exe", "-s", config.device.serial, "shell", "getprop", "ro.product.model"],
                    capture_output=True, text=True, timeout=5,
                    encoding="utf-8", errors="replace")
         if r.returncode == 0:
             info["model"] = r.stdout.strip()
-        r2 = sp.run(["adb", "-s", config.device.serial, "shell", "getprop", "ro.product.brand"],
+        r2 = sp.run(["C:/Users/bunana/AppData/Local/Microsoft/WinGet/Packages/Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe/platform-tools/adb.exe", "-s", config.device.serial, "shell", "getprop", "ro.product.brand"],
                     capture_output=True, text=True, timeout=5,
                     encoding="utf-8", errors="replace")
         if r2.returncode == 0:
@@ -1957,6 +2397,25 @@ def _get_current_version_from_config() -> str:
 
 UPLOAD_DIR = PROJECT_ROOT / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
+
+
+@app.route("/api/upload", methods=["POST"])
+def api_upload():
+    """上传 DOCX/DOC 脚本文件（仅保存到 uploads 目录，供审查智能体使用）
+
+    前端 uploadFile() 调用此接口上传文件
+    """
+    if "file" not in request.files:
+        return jsonify({"error": "未选择文件"}), 400
+    file = request.files["file"]
+    ext = file.filename.lower().rsplit(".", 1)[-1] if "." in file.filename else ""
+    if ext not in ("docx", "doc"):
+        return jsonify({"error": "仅支持 .docx / .doc 文件"}), 400
+    save_path = UPLOAD_DIR / file.filename
+    file.save(str(save_path))
+    log_msg(f"📤 已上传脚本: {file.filename}", "success")
+    return jsonify({"success": True, "filename": file.filename})
+
 
 @app.route("/api/upload-docx", methods=["POST"])
 def api_upload_docx():
@@ -2080,6 +2539,580 @@ def api_review_export():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/report/teacher")
+def api_report_teacher():
+    """生成教师可读的可视化HTML报告"""
+    from datetime import datetime
+
+    st = _inspection_state
+    qs = st.get("questions", {})
+
+    total = len(qs)
+    passed = sum(1 for q in qs.values() if q.get("overall_passed"))
+    labeled = sum(1 for q in qs.values() if q.get("human_label"))
+    acc = 0
+    if labeled > 0:
+        corr = sum(1 for q in qs.values()
+                   if q.get("human_label") == "通过" and q.get("overall_passed")
+                   or q.get("human_label") == "不通过" and not q.get("overall_passed"))
+        acc = int(corr / labeled * 100)
+
+    # 构建HTML
+    questions_html = ""
+    for qid in sorted(qs.keys(), key=lambda x: int(re.findall(r'Q(\d+)', x)[0]) if re.findall(r'Q(\d+)', x) else 0):
+        q = qs[qid]
+        dims = [
+            ("题干", q.get("ai_stem"), q.get("stem_reason", "")),
+            ("内容", q.get("ai_content"), q.get("content_reason", "")),
+            ("配图", q.get("ai_image"), q.get("image_reason", "")),
+            ("作答", q.get("ai_answer"), q.get("answer_reason", "")),
+        ]
+        dim_html = "".join(
+            f'<div class="dim {"pass" if p else "fail"}">'
+            f'<div class="dim-icon">{ "✅" if p else "❌" }</div>'
+            f'<div class="dim-label">{n}</div>'
+            f'<div class="dim-reason">{r[:60] if r else "-"}</div>'
+            f'</div>'
+            for n, p, r in dims
+        )
+        hl = q.get("human_label", "")
+        hl_html = f'<span class="hl {"hl-pass" if hl=="通过" else "hl-fail"}">人工: {hl}</span>' if hl else '<span class="hl hl-pending">待标注</span>'
+        shot = q.get("screenshot", "")
+        shot_html = f'<img src="/api/screenshot/{shot}" onclick="window.open(this.src)" style="cursor:pointer">' if shot else '<div class="no-shot">无截图</div>'
+        questions_html += f'''
+        <div class="q-card">
+            <div class="q-hdr">
+                <span class="q-id">Q{str(q.get("idx","?")).zfill(2)}</span>
+                <span class="q-type">{q.get("question_type","?")}</span>
+                <span class="q-ans">脚本答案: {q.get("script_answer","-")}</span>
+                {hl_html}
+                <span class="q-ovr {"ovr-pass" if q.get("overall_passed") else "ovr-fail"}">{"通过" if q.get("overall_passed") else "不通过"} ({q.get("overall_score",0):.2f})</span>
+            </div>
+            <div class="q-bdy">
+                <div class="q-info">
+                    <div class="info-line"><b>题干:</b> {q.get("stem","-")[:80]}</div>
+                    <div class="info-line"><b>录音:</b> {q.get("recording","-")[:60]}</div>
+                    <div class="info-line"><b>答案:</b> {q.get("script_answer","-")}</div>
+                    {f'<div class="info-line kb"><b>知识库:</b> {q.get("knowledge_check","")[:80]}</div>' if q.get("knowledge_check") else ""}
+                </div>
+                <div class="q-shot">{shot_html}</div>
+            </div>
+            <div class="q-dims">{dim_html}</div>
+        </div>'''
+
+    docx_name = st.get("docx", st.get("version", "未知"))
+    version = st.get("version", "未知")
+    unit = st.get("unit", "?")
+    stage = st.get("stage", "?")
+
+    html = f'''<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>审查报告</title>
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{font-family:"Microsoft YaHei","PingFang SC",sans-serif;background:#f0f2f5;color:#1e293b;padding:20px;font-size:15px;line-height:1.8}}
+.hdr{{background:linear-gradient(135deg,#4a6cf7,#2952e8);color:#fff;border-radius:14px;padding:24px 32px;margin-bottom:20px}}
+.hdr h1{{font-size:24px}}
+.hdr .meta{{display:flex;gap:30px;margin-top:12px;font-size:14px;opacity:.9}}
+.stats{{display:flex;gap:16px;padding:16px 20px;background:#fff;border-radius:12px;box-shadow:0 1px 6px rgba(0,0,0,.06);margin-bottom:20px;flex-wrap:wrap}}
+.stat{{display:flex;align-items:center;gap:8px;font-size:15px}}
+.stat .n{{font-weight:700;font-size:22px}}
+.stat .n.g{{color:#16a34a}}
+.stat .n.r{{color:#dc2626}}
+.stat .n.b{{color:#4a6cf7}}
+.q-card{{background:#fff;border-radius:12px;margin-bottom:12px;border:1px solid #eef0f5;overflow:hidden}}
+.q-hdr{{display:flex;align-items:center;gap:12px;padding:10px 16px;background:#fafbfc;border-bottom:1px solid #f0f2f6;flex-wrap:wrap}}
+.q-id{{font-size:20px;font-weight:700;color:#4a6cf7;min-width:40px}}
+.q-type{{font-size:12px;padding:2px 10px;border-radius:6px;background:#eef2ff;color:#4a6cf7}}
+.q-ans{{font-size:12px;color:#64748b}}
+.q-ovr{{margin-left:auto;font-size:12px;padding:2px 10px;border-radius:6px;font-weight:600}}
+.ovr-pass{{background:#dcfce7;color:#166534}}
+.ovr-fail{{background:#fee2e2;color:#991b1b}}
+.hl{{font-size:12px;padding:2px 10px;border-radius:6px}}
+.hl-pass{{background:#bbf7d0;color:#14532d}}
+.hl-fail{{background:#fecaca;color:#7f1d1d}}
+.hl-pending{{background:#fef3c7;color:#92400e}}
+.q-bdy{{display:grid;grid-template-columns:1fr 180px;gap:14px;padding:12px 16px}}
+.q-info .info-line{{font-size:14px;padding:2px 0;color:#475569}}
+.q-info .info-line b{{color:#334155}}
+.q-info .kb{{color:#6b7280;font-size:12px;font-style:italic}}
+.q-shot img{{width:100%;border-radius:8px;border:1px solid #eef0f5;max-height:160px;object-fit:contain;background:#f8fafc}}
+.no-shot{{height:100px;display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:12px;background:#f8fafc;border-radius:8px}}
+.q-dims{{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;padding:0 16px 12px}}
+.dim{{text-align:center;padding:8px;border-radius:8px;border:1px solid #eef0f5;background:#fafbfc}}
+.dim.pass{{background:#f0fdf4;border-color:#bbf7d0}}
+.dim.fail{{background:#fef2f2;border-color:#fecaca}}
+.dim-icon{{font-size:20px}}
+.dim-label{{font-size:13px;font-weight:600;color:#64748b}}
+.dim-reason{{font-size:11px;color:#94a3b8;margin-top:2px;word-break:break-all}}
+.actions{{text-align:center;margin:20px 0}}
+.actions button{{padding:10px 24px;border:none;border-radius:8px;background:#4a6cf7;color:#fff;font-size:15px;cursor:pointer}}
+.actions button:hover{{background:#2952e8}}
+@media print{{.actions{{display:none}} .q-card{{break-inside:avoid}}}}
+</style></head>
+<body>
+<div class="hdr">
+    <h1>试题审查报告</h1>
+    <div class="meta">
+        <span>脚本: {docx_name}</span>
+        <span>版本: {version}</span>
+        <span>Unit {unit} · {stage}</span>
+        <span>{datetime.now().strftime("%Y-%m-%d %H:%M")}</span>
+    </div>
+</div>
+<div class="stats">
+    <div class="stat">总题数: <span class="n b">{total}</span></div>
+    <div class="stat">AI通过: <span class="n g">{passed}</span></div>
+    <div class="stat">AI不通过: <span class="n r">{total - passed}</span></div>
+    <div class="stat">已人工标注: <span class="n b">{labeled}</span></div>
+    <div class="stat">人机一致率: <span class="n g">{acc}%</span></div>
+</div>
+{questions_html}
+<div class="actions"><button onclick="window.print()">打印 / 保存为PDF</button></div>
+</body></html>'''
+
+    return Response(html, mimetype="text/html")
+
+
+# ============================================================
+# 听力专项 · 练习+测试 全流程自动化（新引擎）
+# ============================================================
+
+_AUDIO_RUNNER = None  # 后台线程
+
+
+@app.route("/api/audio/run", methods=["POST"])
+def api_audio_run():
+    """启动听力专项自动化（练习+测试）
+    请求: {"mode": "all"|"practice"|"test", "units": [1], "test_units": [1]}
+    """
+    global _AUDIO_RUNNER
+    if task_status["running"]:
+        return jsonify({"error": "已有任务在运行"}), 409
+
+    data = request.get_json() or {}
+    mode = data.get("mode", "all")
+    units = data.get("units", [1])
+    test_units = data.get("test_units", units)
+
+    def _run():
+        try:
+            set_running(f"听力专项[{mode}]")
+            log_msg(f"启动听力专项 {mode} 模式: 练习单元{units} 测试单元{test_units}")
+            sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+            from modules.听力专项 import run_module, run_test_module
+            from common.tools import dismiss_global_popups, close_ad, ensure_grade
+            import uiautomator2 as u2
+
+            d = u2.connect()
+            log_msg("设备已连接")
+
+            # 关广告 + 确认年级
+            for _ in range(3):
+                dismiss_global_popups(d)
+            close_ad(d)
+            ok = ensure_grade(d, "五年级上册", "湘少版")
+            log_msg("年级确认: 湘少版 五年级上册" if ok else "⚠ 年级切换失败，继续尝试")
+
+            q1 = q2 = 0
+            if mode in ("all", "practice"):
+                log_msg("▶ 开始练习部分...")
+                q1 = run_module(d)
+                log_msg(f"练习部分完成: {q1} 题")
+            if mode in ("all", "test"):
+                log_msg("▶ 开始测试部分...")
+                q2 = run_test_module(d)
+                log_msg(f"测试部分完成: {q2} 题")
+
+            log_msg(f"✅ 听力专项全部完成: 练习{q1} + 测试{q2} = {q1+q2} 题")
+            set_done()
+        except Exception as e:
+            log_msg(f"❌ 任务异常: {e}", "error")
+            set_done()
+
+    _AUDIO_RUNNER = threading.Thread(target=_run, daemon=True)
+    _AUDIO_RUNNER.start()
+    return jsonify({"status": "started", "mode": mode,
+                    "units": units, "test_units": test_units})
+
+
+# ============================================================
+# 口语训练 自动化（新引擎）
+# ============================================================
+
+_ORAL_RUNNER = None  # 后台线程
+
+
+@app.route("/api/oral/run", methods=["POST"])
+def api_oral_run():
+    """启动口语训练自动化
+    请求: {"units": [1,2,3,4]}
+    """
+    global _ORAL_RUNNER
+    if task_status["running"]:
+        return jsonify({"error": "已有任务在运行"}), 409
+
+    data = request.get_json() or {}
+    units = data.get("units", [1])
+
+    def _run():
+        try:
+            set_running(f"口语训练")
+            log_msg(f"启动口语训练: 单元{units}")
+            sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+            from modules.口语训练 import run_module
+            from common.tools import dismiss_global_popups, close_ad, ensure_grade
+            import uiautomator2 as u2
+
+            d = u2.connect()
+            log_msg("设备已连接")
+
+            # 关广告 + 确认年级
+            for _ in range(3):
+                dismiss_global_popups(d)
+            close_ad(d)
+            ok = ensure_grade(d, "五年级上册", "湘少版")
+            log_msg("年级确认: 湘少版 五年级上册" if ok else "⚠ 年级切换失败，继续尝试")
+
+            q = run_module(d)
+            log_msg(f"✅ 口语训练完成: {q} 题")
+            set_done()
+        except Exception as e:
+            log_msg(f"❌ 任务异常: {e}", "error")
+            set_done()
+
+    _ORAL_RUNNER = threading.Thread(target=_run, daemon=True)
+    _ORAL_RUNNER.start()
+    return jsonify({"status": "started", "units": units})
+
+
+# ============================================================
+# 单元自检 自动化（新引擎）
+# ============================================================
+
+_UNIT_RUNNER = None  # 后台线程
+
+
+@app.route("/api/unit/run", methods=["POST"])
+def api_unit_run():
+    """启动单元自检自动化
+    请求: {"units": [1,2,3,4]}
+    """
+    global _UNIT_RUNNER
+    if task_status["running"]:
+        return jsonify({"error": "已有任务在运行"}), 409
+
+    data = request.get_json() or {}
+    units = data.get("units", [1])
+
+    def _run():
+        try:
+            set_running(f"单元自检")
+            log_msg(f"启动单元自检: 单元{units}")
+            sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+            from modules.单元自检 import run_module
+            from common.tools import dismiss_global_popups, close_ad, ensure_grade
+            import uiautomator2 as u2
+
+            d = u2.connect()
+            log_msg("设备已连接")
+
+            # 关广告 + 确认年级
+            for _ in range(3):
+                dismiss_global_popups(d)
+            close_ad(d)
+            ok = ensure_grade(d, "五年级上册", "湘少版")
+            log_msg("年级确认: 湘少版 五年级上册" if ok else "⚠ 年级切换失败，继续尝试")
+
+            q = run_module(d)
+            log_msg(f"✅ 单元自检完成: {q} 题")
+            set_done()
+        except Exception as e:
+            log_msg(f"❌ 任务异常: {e}", "error")
+            set_done()
+
+    _UNIT_RUNNER = threading.Thread(target=_run, daemon=True)
+    _UNIT_RUNNER.start()
+    return jsonify({"status": "started", "units": units})
+
+
+# ============================================================
+# 知识过关 自动化（新引擎）
+# ============================================================
+
+_KNOWLEDGE_RUNNER = None  # 后台线程
+
+
+@app.route("/api/knowledge/run", methods=["POST"])
+def api_knowledge_run():
+    """启动知识过关自动化（重点词汇+重点句型）
+    请求: {"units": [1]}
+    """
+    global _KNOWLEDGE_RUNNER
+    if task_status["running"]:
+        return jsonify({"error": "已有任务在运行"}), 409
+
+    data = request.get_json() or {}
+    units = data.get("units", [1])
+
+    def _run():
+        try:
+            set_running(f"知识过关")
+            log_msg(f"启动知识过关: 单元{units}")
+            sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+            from modules.知识过关 import run_module
+            from common.tools import dismiss_global_popups, close_ad, ensure_grade
+            import uiautomator2 as u2
+
+            d = u2.connect()
+            log_msg("设备已连接")
+
+            # 关广告 + 确认年级
+            for _ in range(3):
+                dismiss_global_popups(d)
+            close_ad(d)
+            ok = ensure_grade(d, "五年级上册", "湘少版")
+            log_msg("年级确认: 湘少版 五年级上册" if ok else "⚠ 年级切换失败，继续尝试")
+
+            q = run_module(d)
+            log_msg(f"✅ 知识过关完成: {q} 题")
+            set_done()
+        except Exception as e:
+            log_msg(f"❌ 任务异常: {e}", "error")
+            set_done()
+
+    _KNOWLEDGE_RUNNER = threading.Thread(target=_run, daemon=True)
+    _KNOWLEDGE_RUNNER.start()
+    return jsonify({"status": "started", "units": units})
+
+
+# ============================================================
+# 语音评测 自动化（题目未做好，仅进入模块）
+# ============================================================
+
+_VOICE_RUNNER = None  # 后台线程
+
+
+@app.route("/api/voice/run", methods=["POST"])
+def api_voice_run():
+    """启动语音评测模块（仅进入，题目未做好）"""
+    global _VOICE_RUNNER
+    if task_status["running"]:
+        return jsonify({"error": "已有任务在运行"}), 409
+
+    def _run():
+        try:
+            set_running(f"语音评测")
+            log_msg(f"启动语音评测（题目未做好，仅进入）")
+            sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+            from modules.语音评测 import run_module
+            from common.tools import dismiss_global_popups, close_ad, ensure_grade
+            import uiautomator2 as u2
+
+            d = u2.connect()
+            log_msg("设备已连接")
+
+            for _ in range(3):
+                dismiss_global_popups(d)
+            close_ad(d)
+            ok = ensure_grade(d, "五年级上册", "湘少版")
+            log_msg("年级确认: 湘少版 五年级上册" if ok else "⚠ 年级切换失败，继续尝试")
+
+            r = run_module(d)
+            log_msg(f"✅ 语音评测进入完成: {r}")
+            set_done()
+        except Exception as e:
+            log_msg(f"❌ 任务异常: {e}", "error")
+            set_done()
+
+    _VOICE_RUNNER = threading.Thread(target=_run, daemon=True)
+    _VOICE_RUNNER.start()
+    return jsonify({"status": "started"})
+
+
+# ============================================================
+# 巧记单词 自动化（单词同步闯关）
+# ============================================================
+
+_QIAOJI_RUNNER = None  # 后台线程
+
+
+@app.route("/api/qiaoji/run", methods=["POST"])
+def api_qiaoji_run():
+    """启动巧记单词自动化（单词同步闯关）
+    请求: {"units": [1]}  # 单元数，默认 U1-U9 全跑
+    """
+    global _QIAOJI_RUNNER
+    if task_status["running"]:
+        return jsonify({"error": "已有任务在运行"}), 409
+
+    data = request.get_json() or {}
+    units = data.get("units", list(range(1, 10)))  # 默认全部单元
+
+    def _run():
+        try:
+            set_running(f"巧记单词")
+            log_msg(f"启动巧记单词: 单元{units}")
+            sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+            from modules.巧记单词 import run_module
+            from common.tools import dismiss_global_popups, close_ad, ensure_grade
+            import uiautomator2 as u2
+
+            d = u2.connect()
+            log_msg("设备已连接")
+
+            for _ in range(3):
+                dismiss_global_popups(d)
+            close_ad(d)
+            ok = ensure_grade(d, "五年级上册", "湘少版")
+            log_msg("年级确认: 湘少版 五年级上册" if ok else "⚠ 年级切换失败，继续尝试")
+
+            q = run_module(d)
+            log_msg(f"✅ 巧记单词完成: {q} 题")
+            set_done()
+        except Exception as e:
+            log_msg(f"❌ 任务异常: {e}", "error")
+            set_done()
+
+    _QIAOJI_RUNNER = threading.Thread(target=_run, daemon=True)
+    _QIAOJI_RUNNER.start()
+    return jsonify({"status": "started", "units": units})
+
+
+# ============================================================
+# 前提设置：切换版本 / 年级
+# ============================================================
+import importlib
+_setup_mod = None
+
+def _get_setup():
+    global _setup_mod
+    if _setup_mod is None:
+        sys.path.insert(0, str(Path(__file__).parent / "scripts"))
+        _setup_mod = importlib.import_module("common.setup")
+    return _setup_mod
+
+
+@app.route("/api/setup", methods=["POST"])
+def api_setup():
+    """切换教材版本 + 年级（前提功能，模块运行前先设置）
+
+    请求: {"version": "湘少版", "grade": "五年级上册"}
+    """
+    global _SETUP_RUNNER
+    if task_status["running"]:
+        return jsonify({"error": "已有任务在运行，请等待"}), 409
+
+    data = request.get_json() or {}
+    version = (data.get("version") or "").strip()
+    grade = (data.get("grade") or "").strip()
+    if not version or not grade:
+        return jsonify({"error": "请填写版本和年级"}), 400
+
+    def _run():
+        try:
+            log_msg(f"前提设置: 切换到 {version} {grade}")
+            setup = _get_setup()
+            import uiautomator2 as u2
+            d = u2.connect()
+            ok = setup.switch_version_grade(d, version, grade)
+            if ok:
+                log_msg(f"切换成功: 当前 {version} {grade}", "success")
+            else:
+                log_msg("切换失败，请重试", "error")
+        except Exception as e:
+            log_msg(f"切换异常: {e}", "error")
+
+    _SETUP_RUNNER = threading.Thread(target=_run, daemon=True)
+    _SETUP_RUNNER.start()
+    return jsonify({"status": "started", "version": version, "grade": grade})
+
+
+# ============================================================
+# 多模块检测：版本/年级 + 多个模块依次执行
+# ============================================================
+_LAST_MODULES_RESULT = None
+
+
+@app.route("/api/modules/run", methods=["POST"])
+def api_modules_run():
+    """多模块检测：切换版本/年级后依次执行多个模块
+
+    请求: {"version": "湘少版", "grade": "五年级上册", "modules": ["听力专项", "口语训练"]}
+    返回: {"status": "started", "modules": [...]}
+    """
+    global _MODULES_RUNNER
+    if task_status["running"]:
+        return jsonify({"error": "已有任务在运行"}), 409
+
+    data = request.get_json() or {}
+    version = (data.get("version") or "湘少版").strip()
+    grade = (data.get("grade") or "五年级上册").strip()
+    unit_from = int(data.get("unit_from") or 0)
+    unit_to = int(data.get("unit_to") or 0)
+    modules = data.get("modules") or []
+    if not modules:
+        return jsonify({"error": "请至少选择一个模块"}), 400
+
+    def _run():
+        try:
+            set_running("多模块检测")
+            log_msg(f"多模块检测启动: {version} {grade} → {'、'.join(modules)}")
+            import importlib
+            sys.path.insert(0, str(Path(__file__).parent / "scripts"))
+            sched = importlib.import_module("scheduler")
+            import uiautomator2 as u2
+            d = u2.connect()
+
+            # ---- 定时截图循环: 每3秒截一张到 outputs/web/live.png (前端实时预览) ----
+            shot_dir = PROJECT_ROOT / "outputs" / "web"
+            shot_dir.mkdir(parents=True, exist_ok=True)
+            _stop_shot = {"v": False}
+            def _shot_loop():
+                while not _stop_shot["v"]:
+                    try:
+                        d.screenshot(str(shot_dir / "live.png"))
+                    except Exception:
+                        pass
+                    time.sleep(3)
+            _shot_thread = threading.Thread(target=_shot_loop, daemon=True)
+            _shot_thread.start()
+            log_msg("📸 截图预览已开启（每3秒刷新）", "info")
+
+            try:
+                results = sched.run_all(modules, d, version=version, grade=grade, unit_from=unit_from, unit_to=unit_to)
+            finally:
+                _stop_shot["v"] = True
+            # 保存结果供前端查询
+            global _LAST_MODULES_RESULT
+            _LAST_MODULES_RESULT = {
+                "done": True,
+                "version": version,
+                "grade": grade,
+                "results": results,
+            }
+            # 逐模块汇总日志
+            for name, r in results.items():
+                status = "成功" if r.get("ok") else "失败"
+                lv = "success" if r.get("ok") else "error"
+                log_msg(f"  [{status}] {name}: {r['q']}题 {r['t']}s", lv)
+            log_msg(f"多模块检测完成: {len(results)} 个模块", "success")
+        except Exception as e:
+            log_msg(f"多模块检测异常: {e}", "error")
+        finally:
+            set_done()
+
+    _MODULES_RUNNER = threading.Thread(target=_run, daemon=True)
+    _MODULES_RUNNER.start()
+    return jsonify({"status": "started", "version": version, "grade": grade, "modules": modules})
+
+
+@app.route("/api/modules/result", methods=["GET"])
+def api_modules_result():
+    """获取最近一次多模块检测的汇总结果"""
+    return jsonify(_LAST_MODULES_RESULT or {"done": False})
+
+
 # ============================================================
 # 启动
 # ============================================================
@@ -2091,4 +3124,9 @@ if __name__ == "__main__":
     print(f"  项目路径: {PROJECT_ROOT}")
     print(f"  启动: http://localhost:5000")
     print("=" * 50)
+        # 自动检测屏幕分辨率并缩放坐标
+    config = load_config()
+    detect_screen_resolution(config.device.serial)
+    scale_all_coords()
+    
     app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
