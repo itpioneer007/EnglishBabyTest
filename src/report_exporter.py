@@ -32,6 +32,8 @@ import json
 import csv
 import io
 import shutil
+import html
+import re
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
@@ -432,3 +434,188 @@ class ReportExporter:
             results["output_dir"] = str(self.organize_output_dir(version, unit, stage))
 
         return results
+
+    # 维度展示顺序：(中文名, reason字段, ai_布尔字段)
+    _LIVE_DIMS = [
+        ("题干", "stem_reason", "ai_stem"),
+        ("内容", "content_reason", "ai_content"),
+        ("配图", "image_reason", "ai_image"),
+        ("作答", "answer_reason", "ai_answer"),
+        ("音频", "audio_reason", "ai_audio"),
+        ("答错后", "post_error_reason", "ai_post_error"),
+    ]
+
+    _HTML_LIVE_CSS = """
+    <style>
+      * { margin:0; padding:0; box-sizing:border-box; }
+      body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; background:#f6f4ef; color:#333; line-height:1.6; padding:20px; }
+      .container { max-width:840px; margin:0 auto; }
+      h1 { font-size:21px; font-weight:700; color:#3a3a3a; }
+      .sub { color:#9aa5a0; font-size:13px; margin:4px 0 16px; }
+      .stats { display:flex; gap:10px; margin-bottom:18px; flex-wrap:wrap; }
+      .stat { flex:1; min-width:120px; background:#fff; border:1px solid #f0e9dd; border-radius:10px; padding:12px; text-align:center; }
+      .stat .num { font-size:22px; font-weight:800; }
+      .stat .lab { font-size:11px; color:#888; margin-top:2px; }
+      .s-fail .num { color:#bc4742; } .s-total .num { color:#3a3a3a; }
+      .s-pass .num { color:#2e7d32; } .s-shot .num { color:#c77c00; }
+      .card { background:#fff; border:1px solid #f0e9dd; border-left:4px solid #bc4742; border-radius:10px; margin-bottom:10px; overflow:hidden; }
+      .card > summary { cursor:pointer; list-style:none; padding:12px 14px; display:flex; align-items:center; gap:9px; }
+      .card > summary::-webkit-details-marker { display:none; }
+      .card > summary:hover { background:#faf8f3; }
+      .badge { background:#fee2e2; color:#bc4742; font-size:10px; font-weight:700; padding:2px 8px; border-radius:6px; }
+      .qtitle { font-size:13.5px; font-weight:600; color:#333; }
+      .src { margin-left:auto; font-size:10.5px; color:#9aa5a0; }
+      .body { padding:0 14px 14px; border-top:1px solid #f3eee4; font-size:12.5px; color:#444; }
+      .field { margin-top:9px; } .field b { color:#666; }
+      .cause { margin-top:9px; background:#fdecec; border:1px solid #f6c9c9; border-radius:8px; padding:9px 11px; }
+      .cause .h { color:#bc4742; font-weight:700; font-size:11.5px; margin-bottom:5px; }
+      .fix { margin-top:8px; background:#eafaf0; border:1px solid #bfe9cd; border-radius:8px; padding:9px 11px; }
+      .fix .h { color:#2e7d32; font-weight:700; font-size:11.5px; margin-bottom:5px; }
+      .shot { margin-top:8px; display:flex; align-items:center; gap:8px; }
+      .shot img { max-width:170px; max-height:110px; border:1px solid #d4dae0; border-radius:7px; }
+      .shot .fn { font-size:10.5px; color:#9aa5a0; }
+      .empty { text-align:center; padding:60px 0; color:#bbb; font-size:15px; }
+      .footer { text-align:center; color:#bbb; font-size:12px; margin-top:28px; }
+      @media print { body { background:#fff; padding:0; } .card { box-shadow:none; break-inside:avoid; } }
+    </style>
+    """
+
+    def export_html_live(self, questions: list[dict], metadata: dict = None) -> str:
+        """
+        生成"仅错误"的实时可折叠卡片 HTML 报告（审查中每出一道错题即调用）。
+
+        与 export_html_full 的区别：
+          - 卡片用原生 <details> 折叠（默认收起，点标题展开），无需 JS；
+          - 每张卡片内分「错误原因(红框) / 修改建议(绿框) / 截图」三块；
+          - 截图拷贝到输出目录并内嵌，文件可单独带走、双击即看。
+        """
+        meta = metadata or {}
+        qs = [q for q in questions if not q.get("overall_passed", True)]
+        html_doc = self._render_live_html(qs, meta)
+
+        version = meta.get("version", "未知版本")
+        unit = str(meta.get("unit", "全部"))
+        stage = str(meta.get("stage", "全部"))
+        date_str = datetime.now().strftime("%Y%m%d")
+        # ★ 防御：清洗 Windows 非法字符（<>:"/\|?* 等），避免 WinError 123
+        _clean = lambda s: re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", s).strip() or "全部"
+        version, unit, stage = _clean(version), _clean(unit), _clean(stage)
+        out_dir = self.save_dir / version / f"U{unit}_{stage}_{date_str}"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        # 拷贝错误截图到输出目录（HTML 用相对路径引用，文件可带走）
+        shot_dir = out_dir / "screenshots"
+        shot_dir.mkdir(parents=True, exist_ok=True)
+        shots_root = Path(__file__).parent.parent / "screenshots"
+        for q in qs:
+            shot = q.get("screenshot", "")
+            if shot:
+                src = shots_root / shot
+                if src.exists():
+                    try:
+                        shutil.copy2(src, shot_dir / shot)
+                    except Exception:
+                        pass
+
+        out_path = out_dir / "report_live.html"
+        out_path.write_text(html_doc, encoding="utf-8")
+
+        # 刷新 latest 快捷入口（复用已有的目录管理逻辑）
+        self.organize_output_dir(version, unit, stage)
+        return str(out_path)
+
+    def _render_live_html(self, questions: list[dict], meta: dict) -> str:
+        version = meta.get("version", "未知版本")
+        unit = meta.get("unit", "?")
+        stage = meta.get("stage", "?")
+        date_str = meta.get("date", datetime.now().strftime("%Y-%m-%d %H:%M"))
+        total = meta.get("total", len(questions))
+        failed = len(questions)
+        passed = total - failed
+        rate = round(passed / total * 100) if total else 0
+        with_shot = sum(1 for q in questions if q.get("screenshot"))
+        cards = "\n".join(self._render_live_card(q, meta) for q in questions)
+        title = f"实时错题报告 — {version} · U{unit} · {stage}"
+        return f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{html.escape(title)}</title>
+{self._HTML_LIVE_CSS}
+</head>
+<body>
+<div class="container">
+  <h1>{html.escape(str(version))} · U{unit} · {stage}</h1>
+  <div class="sub">生成于 {date_str} · 共 {failed} 道错题 · 审查中实时更新</div>
+
+  <div class="stats">
+    <div class="stat s-fail"><div class="num">{failed}</div><div class="lab">不通过</div></div>
+    <div class="stat s-total"><div class="num">{total}</div><div class="lab">已审查</div></div>
+    <div class="stat s-pass"><div class="num">{rate}%</div><div class="lab">通过率</div></div>
+    <div class="stat s-shot"><div class="num">{with_shot}</div><div class="lab">含截图</div></div>
+  </div>
+
+  {('<div class="empty">暂无错题 🎉 全部通过</div>' if not questions else cards)}
+
+  <div class="footer">英语宝审查智能体 · 自动生成 · 仅供参考，最终以人工确认为准</div>
+</div>
+</body>
+</html>"""
+
+    def _render_live_card(self, q: dict, meta: dict) -> str:
+        qid = q.get("qid", "?")
+        idx = q.get("idx", "?")
+        qtype = q.get("question_type", "?")
+        stem = html.escape(str(q.get("stem", "") or ""))
+        script_answer = html.escape(str(q.get("script_answer", "") or ""))
+        src = f'{html.escape(str(meta.get("version", "")))} · U{meta.get("unit", "?")} · {html.escape(str(meta.get("stage", "")))}'
+
+        failed = []
+        suggestions = []
+        for dname, rkey, akey in self._LIVE_DIMS:
+            reason = q.get(rkey, "") or ""
+            ai_pass = q.get(akey, None)
+            is_fail = (ai_pass is False) or ("不通过" in reason)
+            if is_fail:
+                reason_clean = re.split(r'建议修改[:：]', reason)[0].strip()
+                failed.append((dname, reason_clean))
+                m = re.search(r'建议修改[:：]\s*([^\n]{4,200})', reason)
+                if m:
+                    suggestions.append(m.group(1).strip())
+
+        if failed:
+            cause_html = "".join(
+                f'<div>· {html.escape(dname)}：{html.escape(r)}</div>'
+                for dname, r in failed
+            )
+        else:
+            cause_html = '<div>—（未在六维中标记，详见原始理由）</div>'
+
+        if suggestions:
+            fix_html = "".join(f'<div>· {html.escape(s)}</div>' for s in suggestions)
+        else:
+            fix_html = '<div>—（AI 未给出具体建议，请人工核对）</div>'
+
+        shot = q.get("screenshot", "")
+        shot_html = ""
+        if shot:
+            shot_html = (
+                f'<div class="shot"><img src="screenshots/{html.escape(shot)}" '
+                f'alt=""><span class="fn">{html.escape(shot)}</span></div>'
+            )
+
+        return f'''<details class="card">
+  <summary>
+    <span class="badge">不通过</span>
+    <span class="qtitle">Q{idx} · {html.escape(qtype)}</span>
+    <span class="src">{src}</span>
+  </summary>
+  <div class="body">
+    <div class="field"><b>题干：</b>{stem}</div>
+    <div class="field"><b>脚本答案：</b><span style="color:#2e7d32;">{script_answer}</span></div>
+    <div class="cause"><div class="h">✕ 错误原因</div>{cause_html}</div>
+    <div class="fix"><div class="h">✓ 修改建议</div>{fix_html}</div>
+    {shot_html}
+  </div>
+</details>'''

@@ -79,17 +79,23 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
                    "expected": qtype or "选择题",
                    "actual": qtype or "选择题", "diff": f"识别为[{qtype or '选择题'}]"})
 
-        # ② 题干文字（页面上的长文本，排除按钮/进度）
+        # ② 题干文字（页面上的长文本，排除按钮/进度/反馈弹窗/计时器）
         stems = []
         noise = ("下一题", "上一题", "检查", "提交", "开始答题", "重新答题",
                  "继续练习", "查看报告", "练习报告", "完成", "点击录音", "点击结束",
                  "原音", "小喇叭", "播放问题", "交卷", "确定交卷", "跳过",
-                 "温馨提示", "继续答题")
+                 "温馨提示", "继续答题",
+                 # ★ 反馈弹窗 / 倒计时 / 得分等非题干文字（否则"恭喜你 回答正确"会被当题干）
+                 "恭喜", "回答正确", "回答错误", "很遗憾", "答对了", "答错了",
+                 "练习结束还剩", "还剩", "得分", "用时", "获得", "本题得分", "作答正确", "作答错误")
+        # 计时器/倒计时（如 "19:58"、"还剩：19:58"）
+        _timer_pat = re.compile(r"还剩[：:]\s*\d{1,2}:\d{2}|\b\d{1,2}:\d{2}\b")
         for m in re.finditer(r'text="([^"]{6,})"', xml):
             t = m.group(1).strip()
+            t = _timer_pat.sub("", t).strip()
             if not t or t in noise or len(t) >= 60:
                 continue
-            if any(t.startswith(n) or n in t for n in noise):
+            if any(n in t for n in noise):
                 continue
             if t not in stems:
                 stems.append(t)

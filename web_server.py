@@ -16,9 +16,14 @@ import sys
 import io
 
 # Windows 控制台默认 GBK 无法输出 emoji(✅❌⚠ 等)，全局切换为 UTF-8
+# ★ 必须用 reconfigure 而非替换对象：替换 sys.stdout 会让原 wrapper 被 GC
+#   时连带关闭共享 buffer，导致 "I/O operation on closed file" 崩溃
 if sys.platform == "win32":
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 import json
 import time
 import threading
@@ -52,6 +57,9 @@ from routes import register_trace, register_batch, register_export
 register_trace(app)
 register_batch(app)
 register_export(app)
+# ★ 借鉴队友：实时错题报告路由（/api/errors/live、/api/errors/live-status）
+import routes.error_log_routes as _error_log_routes
+_error_log_routes.register(app)
 
 # ============================================================
 # 全局状态
@@ -2530,7 +2538,14 @@ _inspection_state = {
     "questions": {},           # {qid: {ai_result, human_label, timestamp, ...}}
     "workflow_steps": [],     # 当前运行的步骤
     "docx": "",
+    "version": "未知版本",
+    "unit": "全部",
+    "stage": "全部",   # ★ 不能用 "?"（Windows 文件名非法字符）
+    "live_report_path": "",    # ★ 实时错题报告(report_live.html)路径（借鉴队友）
 }
+
+# ★ 实时报告重生成锁（避免多线程下并发写同一文件）
+_live_report_lock = threading.Lock()
 
 def _save_inspection_state():
     """保存巡检状态到文件, 审查智能体下次学习"""
@@ -2541,6 +2556,35 @@ def _save_inspection_state():
         json.dumps(_inspection_state, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+
+def _live_regen_error_report():
+    """
+    ★ 实时重新生成"仅错误"的可折叠卡片 HTML 报告（审查中每出一道错题即调用）。
+    报告写入 outputs/reports/<版本>/U<单元>_<阶段>_<日期>/report_live.html，
+    并刷新 latest 入口。路径记录在 _inspection_state["live_report_path"]。
+    """
+    _live_report_lock.acquire()
+    try:
+        from src.report_exporter import ReportExporter
+        state = _inspection_state
+        qs_all = list(state.get("questions", {}).values())
+        meta = {
+            "version": state.get("version", "未知版本"),
+            "unit": state.get("unit", "全部"),
+            "stage": state.get("stage", "全部"),   # ★ "?" 是 Windows 非法字符，会 WinError 123
+            "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "total": len(qs_all),
+        }
+        exp = ReportExporter()
+        path = exp.export_html_live(qs_all, meta)
+        state["live_report_path"] = path
+        return path
+    except Exception as e:
+        log_msg(f"⚠ 实时错题报告生成失败: {e}", "warning")
+        return ""
+    finally:
+        _live_report_lock.release()
 
 
 # ★ 多模块检测每题界面级证据 → 审查结果区（无脚本也能展示 AI 通过/不通过）
@@ -2673,6 +2717,12 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list):
     if total % 10 == 0:
         try:
             _save_inspection_state()
+        except Exception:
+            pass
+    # ★ 检测过程中出现错题 → 触发实时错题报告（前端「📑 查看报告」实时更新）
+    if overall is False:
+        try:
+            _live_regen_error_report()
         except Exception:
             pass
 
@@ -2913,10 +2963,116 @@ def run_quick_inspect_task(docx_file: str = "", unit: int = 0):
 
 
 # ===== 快速检查(从当前页开始) =====
+# ============================================================
+# 错题溯源 / 透明评分 整合（复用同学C的 TraceEngine）
+# ============================================================
+_TRACE_ENGINE = None
+
+def _get_trace_engine():
+    """惰性加载同学C的 TraceEngine（缺 Pillow/文件时返回 None，不阻塞）。"""
+    global _TRACE_ENGINE
+    if _TRACE_ENGINE is None:
+        try:
+            from trace_engine import TraceEngine
+            _TRACE_ENGINE = TraceEngine(screenshots_dir=str(PROJECT_ROOT / "screenshots"))
+        except Exception:
+            _TRACE_ENGINE = False
+    return _TRACE_ENGINE or None
+
+
+def _score_breakdown(qd: dict) -> dict:
+    """透明评分：每个「已检查」的维度等权，得分 = 通过数 / 已检查数 × 100。
+
+    返回明细让检查人员一眼看懂评分怎么来的：
+      score      总分（0-100）
+      checked_count / passed_count / failed_count  已检/通过/未通过 维度数
+      formula    评分公式（如 '2/4×100=50'）
+      dims       每个已检查维度的 {name, passed, reason, severity}
+    未检查的维度（null）不参与评分（该项未检测，不算分也不扣分）。
+    """
+    dims = [
+        ("题干", qd.get("ai_stem"), qd.get("stem_reason"), "medium"),
+        ("内容", qd.get("ai_content"), qd.get("content_reason"), "high"),
+        ("图片", qd.get("ai_image"), qd.get("image_reason"), "high"),
+        ("答案", qd.get("ai_answer"), qd.get("answer_reason"), "high"),
+        ("音频", qd.get("ai_audio"), qd.get("audio_reason"), "low"),
+        ("答错检查", qd.get("ai_post_error"), qd.get("post_error_reason"), "low"),
+        ("报告", qd.get("ai_report"), qd.get("report_reason"), "low"),
+    ]
+    checked = [d for d in dims if d[1] is not None]
+    passed = [d for d in checked if d[1] is True]
+    total = len(checked)
+    score = round(len(passed) / total * 100) if total else 0
+    return {
+        "score": score,
+        "checked_count": total,
+        "passed_count": len(passed),
+        "failed_count": total - len(passed),
+        "formula": f"{len(passed)}/{total}×100={score}" if total else "未检查，无法评分",
+        "dims": [{"name": d[0], "passed": d[1], "reason": d[2] or "", "severity": d[3]} for d in checked],
+    }
+
+
+def _ensure_marked(qid: str, qd: dict, checks: list) -> str:
+    """生成红框标注图（同学C的 draw_mark），输出到 outputs/web/，已存在则复用（缓存）。
+    返回相对文件名（前端拼 /api/screenshot/<name>）；失败返回空串。"""
+    try:
+        shot = qd.get("screenshot", "")
+        if not shot or not checks:
+            return ""
+        out_name = f"marked_{shot}"
+        out_path = PROJECT_ROOT / "outputs" / "web" / out_name
+        if out_path.exists():
+            return out_name
+        eng = _get_trace_engine()
+        if not eng:
+            return ""
+        eng.draw_mark(shot, checks, str(out_path))
+        return out_name if out_path.exists() else ""
+    except Exception:
+        return ""
+
+
+def _enrich_inspect_state(state: dict):
+    """给每道错题附加溯源/评分/红框图；通过题仅附评分（供参考）。"""
+    eng = _get_trace_engine()
+    for qid, qd in (state.get("questions") or {}).items():
+        qd["_score"] = _score_breakdown(qd)
+        if qd.get("overall_passed") is not False:
+            continue  # 通过题不用溯源
+        if eng is None:
+            continue
+        try:
+            trace = eng.generate(qid, qd)
+            qd["_trace"] = trace
+            qd["_marked"] = _ensure_marked(qid, qd, trace.get("checks", []))
+        except Exception:
+            pass
+
+
 @app.route("/api/inspect/state", methods=["GET"])
 def api_inspect_state():
-    """获取当前巡检状态 (流式)"""
-    return jsonify(_inspection_state)
+    """获取当前巡检状态 (流式)。
+    ★ 集成同学C的溯源引擎：对每道错题附加 _trace（维度/原因/建议/严重度/坐标）、
+    _score（透明评分明细，说明评分怎么来的）、_marked（红框标注图URL）。
+    """
+    # 浅拷贝一层，避免污染 _inspection_state（_score/_trace/_marked 只进响应）
+    # ★ 必须带全 version/unit/stage/docx/live_report_path（前端"查看报告"/分组展示依赖）
+    state = {
+        "questions": {k: dict(v) for k, v in (_inspection_state.get("questions") or {}).items()},
+        "workflow_steps": _inspection_state.get("workflow_steps", []),
+        "current_question_idx": _inspection_state.get("current_question_idx", 0),
+        "version": _inspection_state.get("version", ""),
+        "unit": _inspection_state.get("unit", ""),
+        "stage": _inspection_state.get("stage", ""),
+        "docx": _inspection_state.get("docx", ""),
+        "live_report_path": _inspection_state.get("live_report_path", ""),
+    }
+    try:
+        _enrich_inspect_state(state)
+    except Exception:
+        pass
+    return jsonify(state)
 
 
 @app.route("/api/inspect/question-result", methods=["POST"])
@@ -2935,6 +3091,10 @@ def api_inspect_question_result():
     }
     _inspection_state["current_question_idx"] = data.get("idx", 0)
     _save_inspection_state()
+
+    # ★ 借鉴队友：该题不通过 → 实时重生成错题报告（前端「📑 查看报告」弹窗即时更新）
+    if not data.get("overall_passed"):
+        _live_regen_error_report()
 
     # ★ 推送审查证据到前端日志(收集各维度的 evidence)
     idx = data.get("idx", "?")
@@ -3029,6 +3189,7 @@ def api_inspect_reset():
     _inspection_state["questions"] = {}
     _inspection_state["workflow_steps"] = []
     _inspection_state["current_question_idx"] = 0
+    _inspection_state["live_report_path"] = ""   # ★ 清空实时报告路径
     _save_inspection_state()
     return jsonify({"success": True})
 
@@ -3155,6 +3316,40 @@ def api_screenshot_latest():
     if png_files:
         return send_from_directory(str(screenshot_dir), png_files[0].name)
     return jsonify({"error": "无截图"}), 404
+
+
+# ★ 常驻实时截图线程：web_server 启动即开始，每 3 秒截一张 outputs/web/live.png，
+#   供前端「手机画面」实时预览。设备未连接时静默重试（10s 间隔），不阻塞启动。
+#   （原实现只在任务运行时启动截图循环，任务一结束前端就显示最后一张旧图）
+_LIVE_SHOT = {"dev": None, "fail": 0}
+
+def _start_live_screenshot_daemon():
+    def _loop():
+        shot_dir = PROJECT_ROOT / "outputs" / "web"
+        try:
+            shot_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        while True:
+            try:
+                if _LIVE_SHOT["dev"] is None:
+                    try:
+                        _LIVE_SHOT["dev"] = _connect_device()
+                        _LIVE_SHOT["fail"] = 0
+                    except Exception:
+                        _LIVE_SHOT["dev"] = None
+                        _LIVE_SHOT["fail"] += 1
+                if _LIVE_SHOT["dev"] is not None:
+                    try:
+                        _LIVE_SHOT["dev"].screenshot(str(shot_dir / "live.png"))
+                        _LIVE_SHOT["fail"] = 0
+                    except Exception:
+                        _LIVE_SHOT["dev"] = None
+                        _LIVE_SHOT["fail"] += 1
+                time.sleep(3 if _LIVE_SHOT["fail"] == 0 else 10)
+            except Exception:
+                time.sleep(10)
+    threading.Thread(target=_loop, daemon=True).start()
 
 
 @app.route("/api/log")
@@ -3877,6 +4072,99 @@ def api_modules_stop():
     return jsonify({"status": "stopping", "message": message})
 
 
+# ============================================================
+# 脚本对照 LLM 知识性审查（有脚本的模块：基础自动化后追加）
+# ============================================================
+
+def _qreview_to_state(module: str, docx: str, unit, r, stage: str = "") -> dict:
+    """把 ReviewAgent 的 QuestionReview 转成六维面板 questions 记录。"""
+    def _cr(chk):
+        if chk is None:
+            return None, "", "skip"
+        det = "；".join((chk.details or [])[:4])
+        # ★ skip = 该维度无法核对（听音/图片题无截图），计为「未检」而非「不通过」
+        if getattr(chk, "method", "") == "skip":
+            return None, det[:300], "skip"
+        return chk.passed, det[:300], chk.method or ""
+    dims = {
+        "stem": _cr(r.stem_check), "content": _cr(r.content_check),
+        "image": _cr(r.image_check), "answer": _cr(r.answer_check),
+        "audio": _cr(r.audio_check), "post_error": _cr(r.post_error_check),
+    }
+    checked = [v for v, _, _ in dims.values() if v is not None]
+    passed = [v for v, _, _ in dims.values() if v is True]
+    overall = None
+    if checked:
+        # ★ 修复：用 checked（非 None 的实际判定维度）判断，None=未检维度不计入
+        #   （原写法遍历全部 dims 含 None，`None is True` 恒 False → 有任一未检维度时
+        #    整体永远判 None，维度全通过也显示不出来）
+        if any(v is False for v in checked):
+            overall = False
+        elif all(v is True for v in checked):
+            overall = True
+        # 部分检查（无 False 但未全过，如仅 1 维）→ 保持 None（未定），不误报不通过
+    return {
+        "idx": r.idx, "total": 0,
+        "question_type": r.question_type or "脚本题",
+        "module": module,            # ★ 模块（分组展示用）
+        "stage": stage or "",        # ★ 子模块阶段（基础巩固/综合进阶/难点突破）
+        "screenshot": "",
+        "progress": f"Q{r.idx:02d}",
+        "ai_stem": dims["stem"][0], "ai_content": dims["content"][0],
+        "ai_image": dims["image"][0], "ai_answer": dims["answer"][0],
+        "ai_audio": dims["audio"][0], "ai_post_error": dims["post_error"][0],
+        "stem_reason": dims["stem"][1], "content_reason": dims["content"][1],
+        "image_reason": dims["image"][1], "answer_reason": dims["answer"][1],
+        "audio_reason": dims["audio"][1], "post_error_reason": dims["post_error"][1],
+        "overall_passed": overall,
+        "overall_score": round(len(passed) / max(len(checked), 1), 2) if checked else 0.0,
+        "stem": f"第{r.idx}题（{r.question_type or '脚本题'}）",
+        "options": "", "script_answer": r.script_answer or "",
+        "note": f"LLM 知识性审查 · 脚本 {docx}",
+    }
+
+
+def _run_llm_script_review(module: str, docx: str, version: str, unit):
+    """用 ReviewAgent 对照脚本做 LLM 知识性审查（文字核对 + 有截图时图片识别），
+    结果写入 _inspection_state["questions"]（前端六维面板实时展示）。"""
+    global _inspection_state
+    docx_path = PROJECT_ROOT / "uploads" / docx
+    if not docx_path.exists():
+        log_msg(f"❌ 脚本文件不存在: {docx}（请在页面上传脚本）", "error")
+        return
+    log_msg(f"🧠 {module} 正在用脚本「{docx}」做 LLM 知识性审查…（逐题核对题干/选项/答案，耗时较长）", "info")
+    try:
+        sys.path.insert(0, str(PROJECT_ROOT))
+        from src.review_agent import ReviewAgent, ReviewConfig
+        _u = 0
+        try:
+            _u = int(str(unit).split("-")[0])
+        except Exception:
+            pass
+        agent = ReviewAgent(ReviewConfig(
+            docx_path=str(docx_path),
+            screenshot_dir=str(PROJECT_ROOT / "screenshots"),
+            unit=_u, verbose=False,
+        ))
+        # ★ 不传 screenshots：自动化过程只有答错截图，旧截图与本次题目对不上会误导 LLM 判定
+        #   → 统一走 LLM 脚本审查（_review_script_llm：脚本信息 → LLM 六维判定，理由具体有说服力）
+        results = agent.review(screenshots={})
+        n_pass = sum(1 for rr in results if rr.overall_passed)
+        for q, rr in zip(agent.script_questions, results):
+            qid = f"{module}-脚本-Q{rr.idx:02d}"
+            _inspection_state["questions"][qid] = _qreview_to_state(
+                module, docx, unit, rr, stage=getattr(q, "stage", "") or "")
+        _save_inspection_state()
+        # ★ 触发实时错题报告（前端「📑 查看报告」）
+        try:
+            _live_regen_error_report()
+        except Exception:
+            pass
+        log_msg(f"✅ {module} LLM 知识性审查完成: {len(results)}题（通过{n_pass}，未检维度不计入不通过）", "success")
+    except Exception as e:
+        log_msg(f"❌ {module} LLM 知识性审查失败: {e}", "error")
+
+
 @app.route("/api/modules/run", methods=["POST"])
 def api_modules_run():
     """多模块检测：切换版本/年级后依次执行多个模块
@@ -3900,6 +4188,9 @@ def api_modules_run():
     unit_to = int(data.get("unit_to") or 0)
     modules = data.get("modules") or []
     units = data.get("units") or {}  # 可选：{模块名: 单元范围}
+    docx_map = data.get("docxMap") or data.get("docx_map") or {}  # 可选：{模块名: 上传脚本文件名}
+    if not isinstance(docx_map, dict):
+        docx_map = {}
 
     # ★ 兼容两种 modules 格式：
     #   旧: ["听力专项", "口语训练"]
@@ -3943,6 +4234,12 @@ def api_modules_run():
         _register_task_thread()  # 记录线程 id，供"立即停止"注入异常
         try:
             set_running("多模块检测")
+            # ★ 记录版本/单元到巡检状态（实时错题报告标题/路径需要）
+            _inspection_state["version"] = version
+            _inspection_state["grade"] = grade
+            if units:
+                _first_unit = str(next(iter(units.values()), "?"))
+                _inspection_state["unit"] = _first_unit
             units_desc = f"（单元: {units}）" if units else ""
             log_msg(f"多模块检测启动: {version} {grade} → {'、'.join(module_names)}{units_desc}")
             import importlib
@@ -3960,22 +4257,26 @@ def api_modules_run():
                 pass
             d = _connect_device()
 
-            # ---- 定时截图循环: 每3秒截一张到 outputs/web/live.png (前端实时预览) ----
-            shot_dir = PROJECT_ROOT / "outputs" / "web"
-            shot_dir.mkdir(parents=True, exist_ok=True)
-            _stop_shot = {"v": False}
-            def _shot_loop():
-                while not _stop_shot["v"]:
+            # ★ 逐模块分流：有匹配脚本 → 基础自动化 + 追加 LLM 知识性审查；
+            #              无脚本 → 仅基础完整性检查
+            results = {}
+            for _mod in module_names:
+                _docx = (docx_map or {}).get(_mod, "")
+                if _docx:
+                    log_msg(f"📖 {_mod} 有匹配脚本「{_docx}」→ 自动化后追加 LLM 知识性审查", "info")
+                    _r = sched.run_all([_mod], d, version=version, grade=grade, units=units, stop_check=_is_stop_requested)
+                    # ★ run_all 返回 {模块名: {q,t,ok}}，取该模块自己的结果（否则后续 r['q'] 取到嵌套 dict 报 KeyError 'q'）
+                    results[_mod] = _r.get(_mod) or {"q": 0, "t": 0, "ok": False}
                     try:
-                        d.screenshot(str(shot_dir / "live.png"))
-                    except Exception:
-                        pass
-                    time.sleep(3)
-            _shot_thread = threading.Thread(target=_shot_loop, daemon=True)
-            _shot_thread.start()
-            log_msg("📸 截图预览已开启（每3秒刷新）", "info")
-
-            results = sched.run_all(module_names, d, version=version, grade=grade, units=units, stop_check=_is_stop_requested)
+                        _run_llm_script_review(_mod, _docx, version, units.get(_mod, "") or 0)
+                    except Exception as _e:
+                        log_msg(f"❌ {_mod} LLM 知识性审查失败: {_e}", "error")
+                else:
+                    log_msg(f"🔍 {_mod} 无匹配脚本 → 仅基础完整性检查", "info")
+                    _r = sched.run_all([_mod], d, version=version, grade=grade, units=units, stop_check=_is_stop_requested)
+                    results[_mod] = _r.get(_mod) or {"q": 0, "t": 0, "ok": False}
+                if _is_stop_requested():
+                    break
             # 保存结果供前端查询
             global _LAST_MODULES_RESULT
             _LAST_MODULES_RESULT = {
@@ -4052,5 +4353,8 @@ if __name__ == "__main__":
     config = load_config()
     detect_screen_resolution(config.device.serial)
     scale_all_coords()
-    
+
+    # ★ 常驻实时截图（前端「手机画面」随时可见，不再只在任务运行时才有）
+    _start_live_screenshot_daemon()
+
     app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
