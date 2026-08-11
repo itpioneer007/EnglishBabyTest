@@ -16,9 +16,14 @@ import sys
 import io
 
 # Windows 控制台默认 GBK 无法输出 emoji(✅❌⚠ 等)，全局切换为 UTF-8
+# ★ 必须用 reconfigure 而非替换对象：替换 sys.stdout 会让原 wrapper 被 GC
+#   时连带关闭共享 buffer，导致 "I/O operation on closed file" 崩溃
 if sys.platform == "win32":
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 import json
 import time
 import threading
