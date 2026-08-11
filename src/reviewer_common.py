@@ -1,16 +1,44 @@
 """
-reviewer_common.py — 双人协作共享层
+reviewer_common.py — 三人协作共享层 (LLM / 配置 / 公共工具)
 
 职责: 数据模型、LLM 客户端、题目加载器
 原则: 两个人都不需要改这个文件（除非要加新数据类型）
 """
 
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 from difflib import SequenceMatcher
+
+
+# ============================================================
+# .env 文件加载（无外部依赖）
+# ============================================================
+
+def _load_dotenv(dotenv_path: str = None) -> dict:
+    """从 .env 文件加载环境变量到 os.environ，返回加载的键值对"""
+    if dotenv_path is None:
+        # 从当前文件向上找项目根目录
+        dotenv_path = Path(__file__).parent.parent / ".env"
+    dotenv_path = Path(dotenv_path)
+    if not dotenv_path.exists():
+        return {}
+    loaded = {}
+    with open(dotenv_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" in line:
+                key, _, value = line.partition("=")
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                os.environ[key] = value
+                loaded[key] = value
+    return loaded
 
 
 # ============================================================
@@ -302,50 +330,77 @@ class LLMClient:
     @classmethod
     def from_config(cls, config_path: str = None) -> "LLMClient":
         """
-        从 llm_config.json 自动读取配置
+        从 llm_config.json + .env 自动读取配置
 
-        优先级：环境变量 > config 文件 > 默认值
+        优先级：环境变量 > .env 文件 > llm_config.json > 默认值
         """
         path = config_path or cls.CONFIG_PATH
         config = {}
 
+        # 1. 加载 .env 到 os.environ（如果尚未加载）
+        _load_dotenv()
+
+        # 2. 加载 llm_config.json（不含密钥）
         if Path(path).exists():
             with open(path, "r", encoding="utf-8") as f:
                 config = json.load(f)
 
+        # 3. 按优先级合并：环境变量 > .env > config.json
+        api_key = (os.environ.get("LLM_API_KEY")
+                   or os.environ.get("OPENAI_API_KEY")
+                   or config.get("api_key", ""))
+        model = (os.environ.get("LLM_MODEL")
+                 or config.get("model", "deepseek-chat"))
+        base_url = (os.environ.get("LLM_BASE_URL")
+                    or config.get("base_url", "https://api.deepseek.com/v1"))
+        vision_api_key = (os.environ.get("VISION_API_KEY")
+                          or os.environ.get("LLM_API_KEY")
+                          or config.get("vision_api_key", ""))
+        vision_model = (os.environ.get("VISION_MODEL")
+                        or config.get("vision_model", ""))
+        vision_base_url = (os.environ.get("VISION_BASE_URL")
+                           or config.get("vision_base_url", ""))
+
         return cls(
-            api_key=os.environ.get("OPENAI_API_KEY") or config.get("api_key", ""),
-            model=os.environ.get("LLM_MODEL") or config.get("model", "deepseek-chat"),
-            base_url=os.environ.get("LLM_BASE_URL") or config.get("base_url", "https://api.deepseek.com/v1"),
-            vision_api_key=config.get("vision_api_key", ""),
-            vision_model=config.get("vision_model", ""),
-            vision_base_url=config.get("vision_base_url", ""),
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+            vision_api_key=vision_api_key,
+            vision_model=vision_model,
+            vision_base_url=vision_base_url,
         )
 
-    def ask(self, prompt: str, image_path: str = None) -> str:
+    def ask(self, prompt: str, image_path: str = None, image_paths: list = None) -> str:
         """
         智能路由：
           - 无图片 → 主模型 (DeepSeek)
           - 有图片 + 有视觉模型 → 视觉模型 (qwen3.7-plus)
           - 有图片 + 无视觉模型 → 主模型 (OCR 降级)
+          
+        参数:
+          prompt: 提示词
+          image_path: 单张图片路径 (兼容)
+          image_paths: 多张图片路径列表 (优先于 image_path)
         """
-        if image_path and Path(image_path).exists() and self.vision_model:
+        paths = image_paths if image_paths else ([image_path] if image_path else None)
+
+        if paths and self.vision_model:
             # 有视觉模型：直接发图
             try:
-                return self._call_api(prompt, image_path,
+                return self._call_api(prompt, paths,
                     model=self.vision_model,
                     base_url=self.vision_base_url or self.base_url,
                     api_key=self.vision_api_key)
             except Exception as e:
-                return f"[视觉模型失败: {e}] → 降级为纯文本分析\n{self._call_api(prompt, image_path=None)}"
+                return f"[视觉模型失败: {e}] → 降级为纯文本分析\n{self._call_api(prompt, image_paths=None)}"
 
-        if image_path and Path(image_path).exists():
+        if paths:
             # 无视觉模型：OCR 降级
-            return self._ask_with_ocr(prompt, image_path)
+            return self._ask_with_ocr(prompt, paths[0])
 
         # 纯文本
         try:
-            return self._call_api(prompt, image_path=None)
+            return self._call_api(prompt, image_paths=None)
         except Exception as e:
             return f"[LLM 调用失败] {e}"
 
@@ -385,12 +440,12 @@ class LLMClient:
                 "如果题目是配图类题目，标注为[无法判断图文匹配--缺少视觉模型]。)"
             )
 
-        return self._call_api(enhanced_prompt, image_path=None)
+        return self._call_api(enhanced_prompt, image_paths=None)
 
-    def _call_api(self, prompt: str, image_path: str = None,
+    def _call_api(self, prompt: str, image_paths: list = None,
                   model: str = None, base_url: str = None,
                   api_key: str = None) -> str:
-        """底层 API 调用"""
+        """底层 API 调用 (支持多图)"""
         import base64
         from urllib.request import Request, urlopen
 
@@ -401,13 +456,15 @@ class LLMClient:
         messages = [{"role": "user", "content": []}]
         messages[0]["content"].append({"type": "text", "text": prompt})
 
-        if image_path and Path(image_path).exists():
-            with open(image_path, "rb") as f:
-                img_b64 = base64.b64encode(f.read()).decode("utf-8")
-            messages[0]["content"].append({
-                "type": "image_url",
-                "image_url": {"url": f"data:image/png;base64,{img_b64}"}
-            })
+        if image_paths:
+            for img_path in image_paths:
+                if img_path and Path(img_path).exists():
+                    with open(img_path, "rb") as f:
+                        img_b64 = base64.b64encode(f.read()).decode("utf-8")
+                    messages[0]["content"].append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{img_b64}"}
+                    })
 
         body = json.dumps({
             "model": use_model,
@@ -449,5 +506,3 @@ def find_diff_positions(expected: str, actual: str) -> list[str]:
         if tag != "equal":
             diffs.append(f"[{tag}] 预期'{expected[i1:i2]}' vs 实际'{actual[j1:j2]}'")
     return diffs
-
-import os

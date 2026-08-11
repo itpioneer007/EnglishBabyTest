@@ -1,273 +1,331 @@
-# E英语宝模块检测系统
 
-基于 ADB + uiautomator 的英语宝 APP 自动化检测工具。
-通过 YAML 定义检测流程，自动完成登录、模块导航、内容校验、缺陷上报。
+
+# src/ — C 同学：错误溯源与报告导出模块
+
+> 本目录是「英语宝模块检测智能体」项目里 **C 同学** 负责的全部源码。
+> 职责：把 A/B 同学跑完检测后产出的错题数据，转成**红框截图 + 错误文件夹 + 网页/CSV 报告 + 邮件**。
+
+
+# 英语宝模块检测系统
+
+基于 **ADB + uiautomator2** 的英语宝 APP 自动化检测工具。
+自动完成 6 大模块的答题检测：听力专项、口语训练、单元自检、知识过关、巧记单词、语音评测。
 
 ## ✨ 特性
 
 | 特性 | 说明 |
 |------|------|
-| **全自动登录** | 勾协议 → 点登录 → 同意弹窗 → 关广告，一键完成 |
-| **版本切换** | 自动检测所有教材版本，支持动态选择切换 |
-| **模块检测** | 教材精学(4个) + 专项突破(8个)，一键逐个进入截图 |
-| **双模式** | CLI 命令行 + Web 可视化面板，任意选择 |
-| **YAML 流程** | 检测流程用 YAML 定义，可读可改 |
-| **精确坐标** | uiautomator dump 获取像素级坐标，无需肉眼估算 |
-| **适应轮播图** | 直接 tap 坐标绕过轮播图干扰 |
+| **6 大模块自动化** | 听力专项/口语训练/单元自检/知识过关/巧记单词/语音评测 |
+| **多题型支持** | 选择/判断/填空/排序/匹配/录音/连词成句/填字母 |
+| **Web 控制面板** | 一键启动任一模块，日志实时显示 |
+| **多分辨率适配** | 所有坐标按屏幕比例动态换算，任意手机可用 |
+| **题型智能分流** | 按题目文字自动识别题型并调用对应处理逻辑 |
+
+| **错题溯源与报告** | 每道错题溯源到 维度/原因/建议 + 红框截图 + 网页/CSV/邮件报告（同学C 模块） |
+
 
 ---
 
-## 🚀 快速开始
+## 一、环境要求
 
-### 环境要求
+
+| 文件 | 分工 | 干什么 |
+|---|---|---|
+| `trace_engine.py` | **C1 + C2** | 溯源数据引擎（算错因/建议/坐标）+ 用 Pillow 画红框 |
+| `error_collector.py` | **C3** | 遍历所有题，把错题整理成 `errors/{版本}_{单元}/{模块}/{题号}/` 分层文件夹 |
+| `report_exporter.py` | **C4** | 生成网页报告（全貌 + 仅错误）和 CSV 汇总表 |
+| `email_sender.py` | **C5** | 把报告通过邮件发给老师 |
+
+
+> 另外还有 `routes/`（溯源 API、导出 API 蓝图）属于 C 同学，在上级目录 `英语宝模块检测/routes/`；本目录只放上面 4 个核心引擎。
+
 
 - Python 3.10+
 - ADB（Android Platform Tools，已加入 `PATH`）
-- Android 手机（已开启 USB 调试，通过数据线连接电脑）
+- Android 手机（USB 调试已开启，数据线连接电脑）
+- 手机已安装英语宝 APP
 
-### 安装
+## 二、依赖
 
 ```bash
+
+pip install pillow        # trace_engine / error_collector 用
+
 cd 英语宝模块检测
 pip install -r requirements.txt
+pip install uiautomator2
+
+cd 英语宝模块检测
+pip install -r requirements.txt
+pip install uiautomator2
+pip install pillow        # 同学C 的 trace_engine / error_collector 用（红框标注）
+
 ```
 
-### 配置
+`email_sender.py` 只用 Python 标准库 `smtplib`，无需额外安装。
 
-编辑 `config.yaml`，填入设备序列号和账号：
 
-```yaml
-device:
-  serial: "SKSCIF4T7PFMQS5X"    # adb devices 查看
+> ⚠️ 这些文件用 `from src.xxx import ...` 互相引用，所以运行时要保证**项目根目录**（`英语宝模块检测/`）在 Python 路径里。本地测试用根目录的 `run_report.py` 即可。
 
-account:
-  username: "10010005"
-  password: "123456"
-```
+---
 
-### 运行
+## 四、本地运行（测试用）
 
-**方式 A：Web 面板（推荐）**
+在项目根目录执行：
+```bash
+python run_report.py
+
+## 三、运行
+
+
+### 运行 Web 面板（推荐）
+
 ```bash
 python web_server.py
 # 浏览器打开 http://localhost:5000
 ```
 
-面板上点按钮即可：**自动登录 → 刷新版本列表 → 选版本 → 勾模块 → 开始检测**
+面板上点按钮即可启动对应模块自动化检测。页面分 3 个 Tab：
+- **① 任务配置**：一句话/手动配置要测的模块
+- **② 运行日志 · 手机画面**：左侧运行日志 + 右侧手机实时画面
+- **③ 审查结果**：左侧六维审查 + 右侧错题日志（溯源/评分/红框截图）
 
-**方式 B：命令行**
+### 命令行单模块运行
+
 ```bash
-# 一键登录
-python main.py login
-
-# 运行完整检测流程（版本切换 + 4个模块）
-python -m src.flow_runner flows/version_and_module_test.yaml
-
-# 查看设备
-python main.py devices
-
-# 调试：查看当前页面所有可点击元素
-python main.py dump
+cd scripts
+python modules/听力专项.py     # 听力专项
+python modules/口语训练.py     # 口语训练
+python modules/单元自检.py     # 单元自检
+python modules/知识过关.py     # 知识过关
+python modules/巧记单词.py     # 巧记单词
+python modules/语音评测.py     # 语音评测
 ```
 
----
-
-## 📁 项目结构
+## 四、目录结构
 
 ```
-英语宝模块检测/                    # ← 根目录
-├── main.py                       # CLI 命令行入口
-├── web_server.py                 # Web 控制面板服务器（Flask）
-├── config.yaml                   # 全局配置（设备/账号）
-├── requirements.txt              # Python 依赖
-├── .gitignore
-├── .vscode/
-│   ├── launch.json               # VS Code 调试配置（F5）
-│   └── settings.json
-│
-├── src/                          # 核心源码
-│   ├── __init__.py
-│   ├── adb_controller.py         # ★ ADB 智能控制器（核心）
-│   ├── flow_runner.py            # YAML 流程执行引擎
-│   └── config_loader.py          # 配置加载器
-│
-├── templates/                    # Web 前端
-│   └── index.html                # Web 控制面板页面
-│
-├── flows/                        # YAML 检测流程定义
-│   ├── login.yaml                # 自动登录流程
-│   ├── close_popup.yaml          # 关闭弹窗流程
-│   └── version_and_module_test.yaml  # 版本切换+模块测试
-│
-├── docs/                         # 项目文档
-│   ├── 实施方案.md               # 原始需求分析与实施方案
-│   ├── 操作日志.md               # 开发过程操作记录
-│   ├── 检测流程规范.md            # 9步流程 + 6项检查标准
-│   ├── 环境搭建指南.md            # ADB/设备/API 搭建步骤
-│   └── 脚本数据格式.md            # 题库数据结构规范
-│
-├── outputs/                      # 运行结果（自动生成）
-│   ├── screenshots/              # 模块截图
-│   └── flow_log_*.json           # 操作日志
-│
-└── assets/
-    └── report_template.html      # HTML 报告模板
+- `ai_*` 为 `False` → 该项不通过，记一条错误；`null` → 未检查（当通过）；`True` → 通过。
+- qid 格式：`教材-模块-单元-题号`（模块可省略，省略时模块列留空）。
+
+英语宝模块检测/
+├── web_server.py                 # Web 控制面板（Flask，唯一启动入口）
+├── config.yaml                   # 配置（设备/APP）
+├── templates/index.html          # 前端页面
+├── scripts/
+│   ├── engine.py                 # ★ 核心引擎（题型处理/排序/匹配/填空）
+│   ├── scheduler.py              # ★ 多模块调度器（统一切年级+依次调模块）
+│   ├── config.py                 # 配置（模块/弹窗/年级）
+│   ├── common/
+│   │   ├── logger.py             # ★ 全局日志通道（模块流程 → 前端）
+│   │   ├── tools.py              # 工具函数（坐标换算/广告关闭/年级切换）
+│   │   ├── device.py             # 设备管理（ANDROID_SERIAL 选择）
+│   │   └── setup.py              # 版本/年级切换
+│   └── modules/
+│       ├── 听力专项.py           # 听力专项（练习+测试）
+│       ├── 口语训练.py           # 口语训练（录音/小喇叭）
+│       ├── 单元自检.py           # 单元自检（36题/单元）
+│       ├── 知识过关.py           # 知识过关（重点词汇+重点句型）
+│       ├── 巧记单词.py           # 巧记单词（单词同步闯关）
+│       └── 语音评测.py           # 语音评测（题目未做好，仅进入）
+├── trace_engine.py               # 同学C：溯源引擎 + 截图红框标注（C1/C2）
+├── error_collector.py            # 同学C：错误输出文件夹（C3）
+├── report_exporter.py            # 同学C：HTML/CSV 报告（C4）
+├── email_sender.py               # 同学C：邮件发送（C5）
+├── src/                          # 旧版批量检查引擎（web_server 部分引用）
+├── routes/                       # Flask 路由（trace/export 蓝图，web_server 启动导入）
+├── data/                         # 知识库/检查数据
+├── docs/                         # 早期规划文档
+├── outputs/                      # 输出（自动生成，已 gitignore）
+├── screenshots/                  # 截图
+├── uploads/                      # 上传文件
+└── _archive/                     # 弃用文件归档（可删除）
 ```
 
----
-
-## 🎮 使用说明
-
-### Web 面板操作流程
+## 五、Web 面板操作
 
 1. 浏览器打开 **http://localhost:5000**
-2. 确认左上角设备显示 **✅ 已连接**
-3. 点击 **🔑 自动登录**（等待完成）
-4. 点击 **📚 刷新版本列表**（自动检测所有可用版本）
-5. **下拉选择目标版本**
-6. **勾选要检测的模块**（教材精学/专项突破）
-7. 点击 **▶ 开始检测**
+2. 点击模块按钮启动自动化：
+   - 🎧 **听力专项** — 练习+测试（`/api/audio/run`）
+   - 🗣 **口语训练** — 录音/小喇叭（`/api/oral/run`）
+   - 📋 **单元自检** — 36题全题型（`/api/unit/run`）
+   - ✅ **知识过关** — 重点词汇+句型（`/api/knowledge/run`）
+   - 🎤 **语音评测** — 仅进入模块（`/api/voice/run`）
+   - 🧠 **巧记单词** — 单词同步闯关（`/api/qiaoji/run`）
+3. 右侧日志实时显示执行进度
 
-面板会实时显示：
-- 📋 执行进度条
-- 📋 运行日志（每步操作）
-- 📸 自动加载最新截图
+## 六、六大模块说明
 
-### 编写新检测流程
+### 1. 听力专项 (`听力专项.py`)
+- 入口：主页 → 专项突破 → 听力专项
+- 练习部分（基础巩固→综合进阶→难点突破）+ 测试部分
+- 题型：听力选择/判断/填空（FastInputIME 注入）
 
-在 `flows/` 下新建 `.yaml` 文件：
+### 2. 口语训练 (`口语训练.py`)
+- 入口：主页 → 专项突破 → 口语训练
+- 4 大题 × 5 小题（朗读单词/句子/看图回答/阅读短文）
+- 题型：录音（点录音→点结束）/ 小喇叭（先点喇叭再录音）
 
-```yaml
-name: "单词听写检测"
-description: "进入单词听写模块逐题检查"
-steps:
-  - action: tap
-    x: 919
-    y: 2033          # 坐标: 单词听写
+### 3. 单元自检 (`单元自检.py`)
+- 入口：主页下滑 → 专项突破 → 单元自检
+- 每单元 36 题
+- 题型：选择/判断(TF)/匹配(点A-E)/排序(图片直点/句子激活+序号)/填空/阅读
 
-  - action: wait
-    seconds: 3
+### 4. 知识过关 (`知识过关.py`)
+- 入口：主页 → 知识过关 → 单元 → 收到了 → 重点词汇/重点句型
+- 重点词汇 108 题 + 重点句型 8 题
+- 题型：选择/判断/录音/填字母（10个字母按钮）/连词成句（点方框+点单词）/系统键盘填空
+- 答过模块按钮变「重新闯关」；最后一题检测后出「提交」
 
-  - action: screenshot
-    name: "word_dictation"
+### 5. 巧记单词 (`巧记单词.py`)
+- 入口：主页 → 教材精学 → 巧记单词 → 单词同步闯关
+- 每单元 6 关（关卡 1-5 + boss 关），关卡序号跨单元递增（U1: 1-6 → U2: 7-12...）
+- 每关 15 题：听力选释义/填字母/录音题/选择
+- 答错：检查 → 重新答题 → 二次错 → 跳过；答对：检查 → 下一题
+- 最后一题：检查 → 提交 → 报告页 → back 两次回地图
 
-  - action: press_back
+### 6. 语音评测 (`语音评测.py`)
+- 入口：主页 → 教材精学 → 语音评测
+- 题目未做好，目前仅进入模块
+
+## 七、多分辨率适配（S 函数）
+
+所有坐标以 **1080×2400** 为基准，通过 `common/tools.py` 的 `S()` 函数动态换算：
+
+```python
+from common.tools import S, S_swipe, S_h, S_w
+
+# 坐标换算（d.click 硬编码 → 动态）
+d.click(*S(d, 540, 1192))          # 原: d.click(540, 1192)
+
+# 滑动换算
+S_swipe(d, 540, 1800, 540, 600)   # 原: d.swipe(540,1800,540,600)
+
+# 范围判断换算
+if S_h(d, 700) < b[1] < S_h(d, 1900):   # 原: 700 < b[1] < 1900
 ```
 
-### 支持的操作（action）
+**换手机后无需改代码**——S() 按当前屏幕比例自动缩放。
 
-| action | 说明 | 关键参数 |
-|--------|------|---------|
-| `tap` | 坐标点击（推荐） | `x`, `y` |
-| `click_element` | 智能点击（需 dump） | `text`, `resource_id`, `exact` |
-| `swipe` | 滑动 | `x1,y1,x2,y2,duration` |
-| `scroll_down` / `scroll_up` | 页面滚动 | `distance` |
-| `wait_for_element` | 等待元素出现 | `text`, `timeout` |
-| `wait` | 等待时间 | `seconds` |
-| `screenshot` | 截图 | `name` |
-| `press_back` / `press_home` | 按键 | — |
-| `launch_app` | 启动APP | `package` |
-| `list_clickable` | 列出可点击元素（调试） | — |
+## 八、录音题处理（两种）
 
----
-
-## 🧩 已验证的模块坐标
-
-| 分组 | 模块 | 坐标 |
-|------|------|------|
-| 年级切换器 | 点击打开弹窗 | `(346, 275)` |
-| 年级选择 | 一年级上/下, 二年级上/下, 三年级上/下, 四年级上/下, 五年级上 | 行1: `(180/540/900, 670)` 行2: `(180/540/900, 1172)` 行3: `(180/540/900, 1674)` |
-| 教材精学 | 课本点读(左) / (中) / 巧记单词 / 语音评测 | `(203,1191)` `(540,1191)` `(876,1191)` `(203,1358)` |
-| 专项突破(第一行) | 听课文 / 课文动画 / 基础训练 / 一课一练 | `(161,1792)` `(414,1792)` `(666,1792)` `(919,1792)` |
-| 专项突破(第二行) | 课文配音 / 口语训练 / 复习回顾 / 全脑记词 | `(161,2033)` `(414,2033)` `(666,2033)` `(919,2033)` |
-| 底部导航 | 英语 / 我 | `(108,2233)` `(972,2220)` |
-| 设置图标 | ⚙️ (我页右上) | `(1000,170)` |
-| 关闭广告 | × | `(540,1821)` |
-
----
-
-## 🔄 已知版本列表
-
-从英语宝版本选择页自动检测：
-
-- `湘少版(2024审定)` — 四年级
-- `湘鲁版(2024审定)` — 四年级（默认）
-- `人教版(PEP)(2024审定)` — 四年级 下册
-- `教科版(2024审定)` — 四年级 下册
-- `教科版`
-
----
-
-## 📦 输出文件
-
-每次运行后，结果保存在 `outputs/`：
-
+**知识过关/单元自检**（有"原音/点击录音/点击结束"）：
 ```
-outputs/
-├── screenshots/
-│   ├── login_success.png          # 登录成功
-│   ├── 01_version_select_page.png # 版本选择页
-│   ├── 02_after_switch_renjiao.png# 切换后人教版
-│   ├── 03_back_to_home.png       # 回到首页
-│   ├── 04_module_kebendianfu.png  # 课本点读模块
-│   ├── 05_module_qiaojidanci.png  # 巧记单词模块
-│   ├── 06_module_tingkewen.png    # 听课文模块
-│   └── ...更多模块
-├── flow_log_*.json                # 操作日志
-└── screenshot_*.png               # Web 面板截图
+点原音 → 点点击录音 → 点点击结束 → 点检测 → 下一题
 ```
 
----
-
-## 🛠️ 技术原理
-
+**口语训练**（麦克风图标）：
 ```
-浏览器 / 命令行
-    │
-    ▼
-Web Server / Flow Runner
-    │
-    ▼
-ADB Controller
-    ├── uiautomator dump    ← 获取元素精确坐标
-    ├── adb shell input tap ← 点击操作
-    ├── adb shell swipe     ← 滑动操作
-    └── adb shell screencap ← 截图
-    │
-    ▼
-手机 英语宝APP
+找"点击录音"文字上方的麦克风 → 点同一位置两次（录音+结束）
 ```
 
-**核心优势**：
-- `uiautomator dump` 提供像素级精准坐标
-- ADB 直连手机操作系统，不受电脑桌面状态影响
-- 直接 tap 坐标绕过轮播图/动画 idle state 限制
+## 九、填空注入方案（FastInputIME）
 
----
+uiautomator2 无法定位系统键盘（搜狗/百度），用 **FastInputIME 注入**：
 
-## 📚 文档
+```python
+d.set_fastinput_ime(True)   # 切换专用输入法
+d.send_keys("cat")          # 直接注入文本（绕过搜狗拦截）
+d.press("back")             # 收起键盘
+```
 
-| 文档 | 内容 |
-|------|------|
-| [实施方案](docs/实施方案.md) | 原始需求分析与四阶段16步实施方案 |
-| [操作日志](docs/操作日志.md) | 开发全过程操作记录（含踩坑经验） |
-| [检测流程规范](docs/检测流程规范.md) | 9步流程 + 6项检查判定标准 |
-| [环境搭建指南](docs/环境搭建指南.md) | ADB / 设备 / API 搭建步骤 |
-| [脚本数据格式](docs/脚本数据格式.md) | 题库数据结构规范 |
-
----
-
-## ✅ 已验证
+## 十、已验证
 
 | 验证项 | 状态 |
 |--------|------|
-| ADB 设备连接 | ✅ SKSCIF4T7PFMQS5X (OnePlus PJB110) |
-| 全自动登录 | ✅ 54/54 通过 |
-| 版本切换 | ✅ 5个版本可检测可切换 |
-| 模块进入 | ✅ 4个模块全部正确进入 |
-| 返回首页 | ✅ back / tap 英语 tab |
-| Web 面板 | ✅ Flask 服务正常启动 |
+| ADB 设备连接 | ✅ PJB110H1 |
+| 听力专项 | ✅ 练习+测试跑通 |
+| 口语训练 | ✅ U1 20题跑通 |
+| 单元自检 | ✅ 36题跑通（含填空/排序/匹配） |
+| 知识过关 | ✅ 重点词汇108题+重点句型8题 |
+| 巧记单词 | ✅ 关卡1-5+boss+下一单元循环 |
+| 语音评测 | ✅ 进入模块 |
+| 多分辨率 | ✅ S() 换算全部模块 |
 
 ---
 
-*构建于 2026年7月 · WorkBuddy + ADB + uiautomator*
+<<<<<<< HEAD
+*构建于 2026年8月 · WorkBuddy + ADB + uiautomator2*
+>>>>>>> 11ce51b981aa79e22a84830a9389d04342ca3b13
+=======
+## 附：同学C · 错误溯源与报告导出模块
+
+> 职责：把检测跑完后产出的错题数据，转成**红框截图 + 错误文件夹 + 网页/CSV 报告 + 邮件**。
+> 前端「错题日志」（Tab ③ 右侧）已集成溯源结果：`/api/inspect/state` 对每道错题附加
+> `_trace`（维度/原因/建议/严重度/坐标）、`_score`（透明评分明细）、`_marked`（红框标注图）。
+
+### 1. 本模块文件
+
+| 文件 | 分工 | 干什么 |
+|---|---|---|
+| `trace_engine.py` | **C1 + C2** | 溯源数据引擎（算错因/建议/坐标）+ 用 Pillow 画红框 |
+| `error_collector.py` | **C3** | 遍历所有题，把错题整理成 `errors/{版本}_{单元}/{模块}/{题号}/` 分层文件夹 |
+| `report_exporter.py` | **C4** | 生成网页报告（全貌 + 仅错误）和 CSV 汇总表 |
+| `email_sender.py` | **C5** | 把报告通过邮件发给老师 |
+| `routes/trace_routes.py` | 溯源 API 蓝图 | `/api/trace/<qid>`、`/api/trace/list`、`/api/trace/screenshot/...`（骨架） |
+| `routes/export_routes.py` | 导出 API 蓝图 | `/api/export/html`、`/api/export/csv`、`/api/export/email` 等（骨架） |
+
+### 2. 接口签名
+
+```python
+class TraceEngine:                                   # 单题溯源 + 红框
+    def __init__(self, screenshots_dir: str = "screenshots")
+    def generate(self, qid, question_data) -> dict  # C1：返回 checks（维度/原因/建议/severity/坐标）+ script_context
+    def draw_mark(self, screenshot_name, checks, out_path) -> str  # C2：画红框
+
+class ErrorCollector:                                # 遍历 + 归档
+    def __init__(self, output_root: str = "outputs")
+    def collect(self, questions, version, unit) -> dict  # 返回 {failed,total,output_dir}
+
+class ReportExporter:                                # 报告生成
+    def export_html_full(self, questions, metadata) -> str
+    def export_html_errors(self, questions, metadata) -> str
+    def export_csv(self, questions) -> str
+
+class EmailSender:                                   # 邮件
+    def send_report(self, to_email, subject, html_body="", attachments=None) -> dict
+```
+
+### 3. 数据格式（每道题）
+
+```json
+{
+  "questions": {
+    "新湘鲁六上-模块A-U6-Q03": {
+      "qid": "新湘鲁六上-模块A-U6-Q03",
+      "question_type": "听音选择词汇",
+      "screenshot": "q03.png",
+      "stem": "选出你听到的单词",
+      "script_answer": "B",
+      "ai_stem": false, "ai_content": false, "ai_image": true, "ai_answer": true,
+      "ai_audio": null, "ai_post_error": null, "ai_report": null,
+      "stem_reason": "[不通过] ...", "content_reason": "...",
+      "overall_passed": false
+    }
+  }
+}
+```
+
+- `ai_*` 为 `False` → 该项不通过，记一条错误；`null` → 未检查（当通过）；`True` → 通过。
+- qid 兼容两种格式：契约「教材-模块-单元-题号」（`新湘鲁六上-模块A-U6-Q01`）与实际
+  「版本-单元-阶段-题号」（`新湘鲁六上-U6-基础巩固-Q03`），`error_collector._parse_qid` 自动识别。
+- **评分怎么来**（透明）：每个「已检查」的维度等权，`得分 = 通过维度数 / 已检查维度数 × 100`，
+  未检查维度不计分。错题日志卡片会展示公式与每个未通过维度的原因。
+
+### 4. 重要提醒
+
+1. **红框坐标**：`trace_engine._compute_region()` 在数据无 `error_box` 时给占位坐标，
+   真实坐标接入后把 `error_box` 写进题目数据即可。
+2. **发邮件先配环境变量**：
+   ```bash
+   export EMAIL_USER="你的邮箱@qq.com"
+   export EMAIL_PASSWORD="邮箱授权码"   # QQ/163 用授权码，不是登录密码
+   ```
+3. **`severity` 严重程度**硬编码在 `trace_engine.py` 顶部 `DIMENSIONS` 表
+   （内容/图片/答案=high，音频/报告=low，题干=medium）。
+4. **`outputs/` 是自动生成的**，已在 `.gitignore` 忽略，不要上传。
+
+---
+
+*构建于 2026年8月 · WorkBuddy + ADB + uiautomator2*
+>>>>>>> c0c0e7b31289b3145e75a9adc6dfbd4707049627

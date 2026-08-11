@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>报告导出 — 英语宝模块审查</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:"Microsoft YaHei","PingFang SC",sans-serif;background:#f1f5f9;color:#1e293b;font-size:15px}
+
+.nav{background:#fff;border-bottom:1px solid #e2e8f0;padding:0 24px;display:flex;align-items:center;height:56px;gap:32px}
+.nav .logo{font-size:18px;font-weight:700;color:#1e40af}
+.nav a{color:#64748b;text-decoration:none;font-size:14px;padding:6px 14px;border-radius:6px}
+.nav a:hover,.nav a.active{background:#eff6ff;color:#1e40af}
+
+.main{max-width:900px;margin:0 auto;padding:24px}
+
+.card{background:#fff;border-radius:12px;border:1px solid #eef0f5;margin-bottom:20px}
+.card-hdr{padding:14px 20px;background:#fafbfc;border-bottom:1px solid #f0f2f6;font-weight:600}
+.card-body{padding:20px}
+
+.form-row{margin-bottom:14px}
+.form-label{font-size:13px;font-weight:600;color:#64748b;margin-bottom:4px;display:block}
+input[type=text],input[type=email]{width:100%;padding:8px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px;outline:none}
+input:focus{border-color:#4a6cf7}
+
+.btn{padding:10px 20px;border:none;border-radius:8px;font-size:14px;cursor:pointer;font-weight:500}
+.btn-primary{background:#4a6cf7;color:#fff}
+.btn-primary:hover{background:#2952e8}
+.btn-success{background:#16a34a;color:#fff}
+.btn-row{display:flex;gap:10px;margin-top:16px;flex-wrap:wrap}
+
+.result-box{background:#f8fafc;border-radius:8px;padding:14px;margin-top:12px;font-size:13px}
+.result-box .ok{color:#16a34a}
+.result-box a{color:#4a6cf7;text-decoration:none}
+</style>
+</head>
+<body>
+
+<div class="nav">
+  <div class="logo">🔍 英语宝模块审查</div>
+  <a href="/">📋 批量检查</a>
+  <a href="/trace">🔎 错误溯源</a>
+  <a href="/export" class="active">📤 报告导出</a>
+</div>
+
+<div class="main">
+  <h2 style="margin-bottom:16px">📤 报告导出 & 分发</h2>
+
+  <!-- 导出操作 -->
+  <div class="card">
+    <div class="card-hdr">📦 导出操作</div>
+    <div class="card-body">
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="exportHTML()">📄 生成 HTML 报告</button>
+        <button class="btn btn-primary" onclick="exportCSV()">📊 导出 CSV 表格</button>
+        <button class="btn btn-primary" onclick="exportScreenshots()">📸 打包错误截图</button>
+        <button class="btn btn-success" onclick="sendEmail()">📧 发送邮件</button>
+      </div>
+      <div id="exportResult" class="result-box" style="display:none"></div>
+    </div>
+  </div>
+
+  <!-- 配置 -->
+  <div class="card">
+    <div class="card-hdr">⚙️ 输出配置</div>
+    <div class="card-body">
+      <div class="form-row">
+        <span class="form-label">报告保存目录</span>
+        <input type="text" id="cfgSaveDir" placeholder="D:\审查报告">
+      </div>
+      <div class="form-row">
+        <span class="form-label">邮件接收人</span>
+        <input type="email" id="cfgEmail" placeholder="teacher@school.com">
+      </div>
+      <div class="form-row">
+        <label style="font-size:14px;cursor:pointer">
+          <input type="checkbox" id="cfgEmailEnabled"> 跑完自动发送邮件
+        </label>
+      </div>
+      <div class="form-row">
+        <label style="font-size:14px;cursor:pointer">
+          <input type="checkbox" id="cfgScreenshots" checked> 保留错误截图
+        </label>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="saveConfig()">💾 保存配置</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 上次导出记录 -->
+  <div class="card" id="historyCard">
+    <div class="card-hdr">📁 上次导出</div>
+    <div class="card-body" id="historyBody" style="color:#94a3b8">
+      暂无导出记录
+    </div>
+  </div>
+</div>
+
+<script>
+function $(id){return document.getElementById(id)}
+
+async function init(){
+  const cfg=await(await fetch('/api/export/config')).json()
+  $('cfgSaveDir').value=cfg.save_dir||''
+  $('cfgEmail').value=cfg.email_to||''
+  $('cfgEmailEnabled').checked=cfg.email_enabled||false
+  $('cfgScreenshots').checked=cfg.save_screenshots!==false
+}
+init()
+
+async function saveConfig(){
+  const cfg={
+    save_dir:$('cfgSaveDir').value,
+    email_to:$('cfgEmail').value,
+    email_enabled:$('cfgEmailEnabled').checked,
+    save_screenshots:$('cfgScreenshots').checked
+  }
+  await fetch('/api/export/config',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)})
+  showResult('✅ 配置已保存')
+}
+
+async function exportHTML(){
+  showResult('⏳ 生成中...')
+  const r=await(await fetch('/api/export/html',{method:'POST'})).json()
+  if(r.error){showResult('❌ '+r.error);return}
+  showResult(`✅ 报告已生成<br>📊 ${r.stats.total||0}题, 通过${r.stats.passed||0}, 错误${r.stats.failed||0}<br><a href="${r.url}" target="_blank">📄 打开报告</a>`)
+}
+
+async function exportCSV(){
+  showResult('⏳ 导出中...')
+  const r=await(await fetch('/api/export/csv',{method:'POST'})).json()
+  if(r.error){showResult('❌ '+r.error);return}
+  showResult(`✅ CSV已导出 (${r.count||0}条错误)<br><a href="${r.url}">📥 下载CSV</a>`)
+}
+
+async function exportScreenshots(){
+  showResult('⏳ 打包中...')
+  const r=await(await fetch('/api/export/screenshots',{method:'POST'})).json()
+  if(r.error){showResult('❌ '+r.error);return}
+  showResult(`✅ 截图已打包 (${r.count||0}题)<br><a href="${r.url}">📥 下载</a>`)
+}
+
+async function sendEmail(){
+  showResult('📧 发送中...')
+  const r=await(await fetch('/api/export/email',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({to:$('cfgEmail').value})})).json()
+  if(r.error){showResult('❌ '+r.error);return}
+  showResult(`✅ ${r.message}`)
+}
+
+function showResult(msg){
+  const el=$('exportResult')
+  el.style.display=''; el.innerHTML=msg
+}
+</script>
+</body>
+</html>

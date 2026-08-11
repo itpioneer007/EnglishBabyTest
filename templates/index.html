@@ -1,695 +1,1694 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-cn">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>E英语宝 · 审查智能体平台</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>英语宝 · 自动化检测与审查</title>
+<script src="/static/vendor/tailwind.min.js"></script>
 <style>
-* { margin:0; padding:0; box-sizing:border-box }
-body { font-family:-apple-system,"Microsoft YaHei","PingFang SC",sans-serif; background:#f0f2f5; color:#1e293b; font-size:16px; line-height:1.7 }
-
-/* ===== Header ===== */
-.header { background:linear-gradient(135deg,#4a6cf7,#2952e8); color:white; padding:18px 32px; display:flex; align-items:center; gap:22px; box-shadow:0 2px 16px rgba(74,108,247,.3); position:sticky; top:0; z-index:999 }
-.header h1 { font-size:22px; font-weight:700; letter-spacing:.8px }
-.header .sub { font-size:14px; opacity:.9; display:flex; align-items:center; gap:8px }
-.header .dot-inline { width:10px; height:10px; border-radius:50%; display:inline-block }
-.header .tag { background:rgba(255,255,255,.18); padding:3px 16px; border-radius:14px; font-size:13px; font-weight:500; margin-left:auto }
-
-/* ===== 三列布局 ===== */
-.container {
-  max-width:1460px; margin:0 auto; padding:20px;
-  display:grid;
-  grid-template-columns:340px 1fr 320px;
-  gap:18px;
-  min-height:calc(100vh - 72px);
+:root{
+  --green:#2d6a4f;--green-light:#40916c;--green-deep:#1b4332;
+  --beige:#faf7f2;--cream:#fdfcf9;--warm:#e9c46a;--warn-bg:#fef3c7;--warn-ink:#92400e;
+  --red:#bc4742;--red-bg:#fce4e4;
+  --gray:#6b7280;--gray-2:#9aa5a0;--line:#e6dfd4;--white:#fff;
+  --ok-bg:#e8f5ee;--ok-ink:#1d6f3c;
 }
-@media (max-width:1100px) { .container { grid-template-columns:1fr } }
+html,body{height:100%}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",Roboto,sans-serif;color:#3d3226;overflow:hidden;background:#f5f3ee}
 
-/* ===== 卡片 ===== */
-.card {
-  background:white; border-radius:14px; padding:20px;
-  box-shadow:0 1px 6px rgba(0,0,0,.05); margin-bottom:16px;
-  border:1px solid #eef0f5;
-}
-.card-title {
-  font-size:17px; font-weight:700; color:#1e293b;
-  margin-bottom:4px; display:flex; justify-content:space-between; align-items:center;
-}
-.card-desc {
-  font-size:13px; color:#94a3b8; margin-bottom:14px; line-height:1.6;
-}
-.card-desc strong { color:#64748b }
+/* 区块说明条 */
+.sec-note{font-size:11.5px;color:#5c6f66;line-height:1.6;margin-bottom:10px;background:#f4f8f5;border-left:3px solid #2d6a4f;border-radius:0 8px 8px 0;padding:7px 11px}
+.sec-note b{color:#1b4332}
 
-/* ===== 表单标签 ===== */
-.form-label { display:block; font-size:14px; font-weight:600; color:#475569; margin-bottom:4px }
-.form-hint { display:block; font-size:12px; color:#94a3b8; margin-bottom:8px }
+/* ===== 日志区（合并：点击 + 审查 一条流） ===== */
+.log-wrap{flex:1;overflow-y:auto;padding:10px 14px;min-height:100px}
+.log-empty{text-align:center;color:var(--gray);padding:30px 0;font-size:12.5px;line-height:2}
+.log-empty .big{font-size:22px;display:block;margin-bottom:4px;color:var(--line)}
+.log-item{font-family:"SF Mono","Cascadia Code",Consolas,monospace;font-size:12px;line-height:1.6;padding:4px 9px;border-radius:5px;margin:1px 0;display:flex;gap:9px;white-space:pre-wrap;word-break:break-all}
+.log-item .t{color:var(--gray-2);min-width:52px;font-size:11px;flex-shrink:0}
+.log-item.info{}.log-item.info .t{color:#94a3b8}
+.log-item.success{background:var(--ok-bg);color:var(--ok-ink)}
+.log-item.error{background:var(--red-bg);color:var(--red)}
+.log-item.warning{background:var(--warn-bg);color:var(--warn-ink)}
+.log-item.step{background:#eef4ef;color:var(--green-deep);font-weight:500}
+.review-log{flex-direction:column!important;gap:4px!important;padding:8px 11px!important}
+.review-evidence{margin:4px 0 0 60px;border-left:3px solid var(--line);padding-left:11px}
+.evidence-row{padding:4px 0;border-bottom:1px solid #f1f5f9;font-family:-apple-system,"Microsoft YaHei",sans-serif;font-size:11.5px}
+.evidence-row:last-child{border-bottom:none}
+.evidence-field{display:inline-block;background:#e2e8f0;color:#475569;padding:1px 8px;border-radius:3px;font-weight:600;margin-bottom:4px}
+.evidence-row.text_ok .evidence-field{background:#c8e6c9;color:#1b5e20}
+.evidence-row.text_mismatch .evidence-field{background:#ffcdd2;color:#b71c1c}
+.evidence-diff{font-family:monospace;font-size:11px;line-height:1.5;padding:4px 8px;background:#fff;border:1px solid var(--line);border-radius:4px;margin:3px 0}
+.evidence-desc{color:#64748b;margin:2px 0;font-size:11px}
+.evidence-pair{display:flex;gap:16px;margin-top:3px;font-size:11px}
+.evidence-pair .exp{color:var(--ok-ink);max-width:50%}
+.evidence-pair .act{color:#e65100;max-width:50%}
 
-/* ===== 输入控件 ===== */
-.input-group { display:flex; gap:10px; margin-bottom:12px }
-.input-group select,
-.input-group input {
-  flex:1; padding:10px 14px;
-  border:1.5px solid #e2e8f0; border-radius:8px;
-  font-size:15px; background:white; color:#1e293b;
-  outline:none; transition:border .2s,box-shadow .2s;
-}
-.input-group select:focus,
-.input-group input:focus {
-  border-color:#4a6cf7; box-shadow:0 0 0 3px rgba(74,108,247,.12);
-}
+/* 流程步骤条 */
+.flow-strip{display:flex;gap:5px;padding:7px 14px;background:#fbfaf6;border-bottom:1px solid var(--line);overflow-x:auto;flex-wrap:nowrap}
+.flow-item{display:flex;align-items:center;gap:5px;padding:3px 9px;border-radius:13px;font-size:11px;white-space:nowrap;background:#fff;border:1px solid var(--line);color:var(--gray)}
+.flow-item .fd{width:6px;height:6px;border-radius:50%;background:var(--gray-2)}
+.flow-item.running{color:var(--warn-ink);border-color:var(--warm);background:var(--warn-bg)}
+.flow-item.running .fd{background:var(--warm);animation:pulse 1s infinite}
+.flow-item.done{color:var(--ok-ink);border-color:#92bfa9;background:var(--ok-bg)}
+.flow-item.done .fd{background:var(--green)}
+.flow-item.error{color:var(--red);border-color:var(--red);background:var(--red-bg)}
+.flow-item.error .fd{background:var(--red)}
+.flow-strip:empty{display:none}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(1.3)}}
 
-/* ===== 按钮 ===== */
-.btn {
-  display:inline-flex; align-items:center; justify-content:center; gap:6px;
-  padding:10px 20px; border:none; border-radius:9px;
-  font-size:15px; font-weight:600; cursor:pointer;
-  transition:all .2s; letter-spacing:.3px;
-}
-.btn:disabled { opacity:.45; cursor:not-allowed; transform:none!important }
-.btn-primary { background:linear-gradient(135deg,#4a6cf7,#2952e8); color:white; box-shadow:0 2px 10px rgba(74,108,247,.28) }
-.btn-primary:hover:not(:disabled) { transform:translateY(-2px); box-shadow:0 6px 20px rgba(74,108,247,.35) }
-.btn-success { background:linear-gradient(135deg,#22c55e,#16a34a); color:white }
-.btn-success:hover:not(:disabled) { transform:translateY(-1px); box-shadow:0 4px 12px rgba(34,197,94,.3) }
-.btn-danger { background:linear-gradient(135deg,#ef4444,#dc2626); color:white }
-.btn-danger:hover:not(:disabled) { transform:translateY(-1px); box-shadow:0 4px 12px rgba(239,68,68,.3) }
-.btn-outline { background:transparent; border:1.5px solid #4a6cf7; color:#4a6cf7; padding:8px 16px }
-.btn-outline:hover:not(:disabled) { background:#4a6cf7; color:white }
-.btn-row { display:flex; gap:10px; margin-top:8px }
-.btn-row .btn { flex:1 }
+/* 题目六维卡片 */
+.q-card{background:#fff;border:1px solid var(--line);border-radius:12px;margin-bottom:10px;overflow:hidden;transition:box-shadow .2s}
+.q-card:hover{box-shadow:0 3px 12px rgba(0,0,0,.06)}
+.q-head{display:flex;align-items:center;gap:12px;padding:9px 14px;background:#fbfaf6;border-bottom:1px solid var(--line)}
+.q-head .qnum{font-size:18px;font-weight:700;color:var(--green);min-width:44px}
+.q-head .qtype{font-size:11px;padding:3px 10px;border-radius:6px;background:#e8f5ee;color:var(--green-deep);font-weight:500}
+.q-head .qstatus{margin-left:auto;display:flex;gap:6px;align-items:center}
+.tag{padding:3px 10px;border-radius:6px;font-size:11px;font-weight:600}
+.tag.pass{background:var(--ok-bg);color:var(--ok-ink)}
+.tag.fail{background:var(--red-bg);color:var(--red)}
+.tag.human-pass{background:#bbf7d0;color:#14532d}
+.tag.human-fail{background:#fecaca;color:#7f1d1d}
+.tag.pending-label{background:var(--warn-bg);color:var(--warn-ink);cursor:pointer;animation:blink 1.5s infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.5}}
+.q-body{padding:11px 14px}
+.q-dims{display:grid;grid-template-columns:repeat(6,1fr);gap:5px;margin-bottom:9px}
+.q-dim{text-align:center;padding:6px 2px;border-radius:8px;border:1px solid var(--line);background:#faf8f3}
+.q-dim .label{font-size:10.5px;font-weight:600;color:var(--gray)}
+.q-dim .st{font-size:10px;margin-top:2px;color:var(--gray-2)}
+.q-dim.pass{background:var(--ok-bg);border-color:#bbf7d0}
+.q-dim.pass .label{color:var(--ok-ink)}
+.q-dim.pass .st{color:var(--ok-ink)}
+.q-dim.fail{background:var(--red-bg);border-color:#fecaca}
+.q-dim.fail .label{color:var(--red)}
+.q-dim.fail .st{color:var(--red)}
+.q-dim.skip{background:#faf8f3;border-color:var(--line)}
+.q-dim.skip .st{color:var(--gray-2)}
+.q-reasons{font-size:12.5px;color:#475569;background:#faf8f3;border-radius:8px;padding:9px 13px;margin-bottom:9px;line-height:1.8}
+.q-reasons.ok{color:var(--ok-ink);background:var(--ok-bg)}
+.q-reasons b{color:var(--green-deep)}
+.q-reason-line{font-size:11.5px;margin-bottom:2px}
+/* ★ 题目内容展示区 */
+.q-content{margin-bottom:8px;padding:8px 11px;background:#f0f7f4;border-radius:8px;border-left:3px solid var(--green-deep)}
+.q-stem{font-size:13px;color:#1a202c;font-weight:500;line-height:1.6;word-break:break-all}
+.q-opts{font-size:12px;color:#475569;margin-top:4px;line-height:1.5}
+/* ★ 错误报告汇总卡片 */
+.q-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.q-actions .note{flex:1;min-width:100px;padding:6px 10px;border:1.5px solid var(--line);border-radius:7px;font-size:12.5px;outline:none;background:#fff}
+.q-actions .note:focus{border-color:var(--green-light)}
+.q-actions .action-label{font-size:12px;color:var(--gray);font-weight:600;margin-right:2px}
+.q-actions .done-tag{font-size:12px;padding:5px 12px;border-radius:7px;background:var(--warn-bg);color:var(--warn-ink);display:flex;align-items:center;gap:4px}
 
-/* ===== 设备信息 (网格) ===== */
-.device-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px }
-.device-item {
-  background:#f8fafc; border-radius:10px; padding:12px 14px;
-  border:1px solid #f1f5f9;
-}
-.device-item .label { font-size:12px; color:#94a3b8; margin-bottom:2px }
-.device-item .value { font-size:16px; font-weight:600; color:#1e293b; display:flex; align-items:center; gap:8px }
+/* 截图（手机相框样式，竖屏比例） */
+.phone-frame{background:#1b4332;border:1px solid var(--line);border-radius:18px;padding:8px;display:flex;flex-direction:column;align-items:center;max-width:280px;margin:0 auto;box-shadow:0 4px 16px rgba(27,67,50,.15)}
+.phone-frame::before{content:"";width:60px;height:4px;border-radius:2px;background:rgba(255,255,255,.25);margin-bottom:8px}
+.screenshot-box{background:#fff;border-radius:12px;overflow:hidden;width:100%;display:flex;align-items:center;justify-content:center;min-height:380px;position:relative}
+.screenshot-box img{width:100%;height:auto;display:block;border-radius:12px;cursor:zoom-in;transition:transform .15s}
+.screenshot-box img:hover{transform:scale(1.01)}
+.screenshot-box .ph{color:var(--gray-2);font-size:12px;padding:16px;text-align:center}
+/* 截图放大弹层（lightbox） */
+.shot-lightbox{position:fixed;inset:0;background:rgba(10,20,15,.85);z-index:3000;display:none;align-items:center;justify-content:center;padding:24px;cursor:zoom-out}
+.shot-lightbox.open{display:flex}
+.shot-lightbox img{max-width:92vw;max-height:92vh;border-radius:8px;box-shadow:0 8px 40px rgba(0,0,0,.5)}
+.shot-lightbox .lb-close{position:absolute;top:16px;right:20px;background:rgba(255,255,255,.15);color:#fff;border:none;border-radius:8px;padding:6px 14px;font-size:13px;cursor:pointer}
+.shot-lightbox .lb-close:hover{background:rgba(255,255,255,.3)}
+.shot-hint{text-align:center;font-size:10.5px;color:var(--gray-2);margin-top:6px}
 
-/* ===== 流程步骤 ===== */
-.flow-step { display:flex; align-items:center; gap:12px; padding:9px 12px; margin-bottom:6px; border-radius:10px; transition:all .2s; border-left:4px solid transparent }
-.flow-step .num { width:26px; height:26px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:white; flex-shrink:0 }
-.flow-step .content { flex:1; min-width:0 }
-.flow-step .name { font-size:15px; font-weight:500 }
-.flow-step .detail { font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
-.flow-step.pending { background:#f8fafc; border-left-color:#d1d5db }
-.flow-step.pending .num { background:#d1d5db }
-.flow-step.pending .detail { color:#94a3b8 }
-.flow-step.running { background:#fffbeb; border-left-color:#f59e0b }
-.flow-step.running .num { background:#f59e0b; animation:pulse 1.5s infinite }
-.flow-step.running .detail { color:#d97706 }
-.flow-step.done { background:#f0fdf4; border-left-color:#22c55e }
-.flow-step.done .num { background:#22c55e }
-.flow-step.done .detail { color:#166534 }
-.flow-step.error { background:#fef2f2; border-left-color:#ef4444 }
-.flow-step.error .num { background:#ef4444 }
-.flow-step.error .detail { color:#991b1b }
-@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+/* 结果汇总 */
+.serve-wrap{padding:10px 14px;border-top:1px solid var(--line);background:#fff;max-height:180px;overflow-y:auto}
+.serve-wrap:empty{display:none}
+.serve-hdr{font-size:13.5px;font-weight:700;color:var(--green-deep);margin-bottom:8px}
+.serve-cards{display:flex;flex-wrap:wrap;gap:8px}
+.serve-card{flex:1;min-width:150px;border:1.5px solid var(--line);border-radius:10px;padding:10px}
+.serve-card.ok{border-color:#92bfa9;background:var(--ok-bg)}
+.serve-card.fail{border-color:var(--red);background:var(--red-bg)}
+.serve-card .sc-name{font-size:12.5px;font-weight:600;margin-bottom:3px}
+.serve-card .sc-stat{display:flex;align-items:baseline;gap:6px}
+.serve-card .sc-q{font-size:19px;font-weight:700;color:var(--ok-ink)}
+.serve-card.fail .sc-q{color:var(--red)}
+.serve-card .sc-q small{font-size:11.5px;font-weight:400;color:var(--gray)}
+.serve-card .sc-detail{font-size:11px;color:var(--gray);margin-top:3px}
+.serve-summary{font-size:12px;color:var(--gray);text-align:center;margin-top:8px;padding:7px;background:#f5f3ee;border-radius:8px}
 
-/* ===== 日志框 (固定在左栏下方不滚动) ===== */
-.log-wrapper {  }
-.log-box {
-  height:180px; overflow-y:auto;
-  font-size:13px; font-family:"Cascadia Code","Fira Code","Consolas",monospace;
-  background:#1e293b; color:#e2e8f0;
-  border-radius:10px; padding:12px;
-}
-.log-entry { padding:2px 0; display:flex; gap:8px; line-height:1.6 }
-.log-entry .t { color:#64748b; flex-shrink:0; font-size:12px }
-.log-entry .lv { flex-shrink:0; font-weight:600; font-size:12px }
-.log-entry .lv.info { color:#60a5fa }
-.log-entry .lv.success { color:#4ade80 }
-.log-entry .lv.error { color:#f87171 }
-.log-entry .lv.warning { color:#fbbf24 }
+/* 使用指南弹层 */
+.guide-mask{position:fixed;inset:0;background:rgba(27,67,50,.5);z-index:2000;display:none;align-items:center;justify-content:center;padding:20px}
+.guide-mask.open{display:flex}
+.guide{width:min(880px,94vw);max-height:86vh;background:#fff;border-radius:14px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 12px 48px rgba(0,0,0,.3)}
+.guide-body{overflow-y:auto;padding:15px 19px;line-height:1.7}
+.g-sec{border:1px solid var(--line);border-radius:10px;margin-bottom:11px;overflow:hidden}
+.g-sec-h{display:flex;align-items:center;gap:10px;padding:9px 13px;background:#fbfaf6;border-bottom:1px solid var(--line);font-size:13px;font-weight:700;color:var(--green-deep)}
+.g-no{width:23px;height:23px;border-radius:50%;background:var(--green);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0}
+.g-sec-h .g-pos{font-size:10.5px;font-weight:500;color:var(--gray);margin-left:auto;background:#fff;border:1px solid var(--line);padding:1px 8px;border-radius:8px}
+.g-sec-b{padding:9px 13px;font-size:12px;color:#475569}
+.g-sec-b p{margin:3px 0}
+.g-sec-b .g-how{color:var(--gray);margin-top:3px}
+.g-sec-b .g-how b{color:var(--green)}
+.g-tip{font-size:11.5px;color:var(--warn-ink);background:var(--warn-bg);border-radius:8px;padding:8px 12px;margin:7px 0}
+.g-tip b{color:#7c4a03}
+/* ★ 精简版指南：横向流程条 */
+.g-flow{display:flex;align-items:stretch;gap:6px;margin:10px 0 14px}
+.g-step{flex:1;border:1px solid var(--line);border-radius:10px;padding:9px 10px;background:#fbfaf6;text-align:center;min-width:0}
+.g-sno{width:24px;height:24px;border-radius:50%;background:var(--green);color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;margin:0 auto 5px}
+.g-stitle{font-size:12.5px;font-weight:700;color:var(--green-deep);margin-bottom:3px}
+.g-sdesc{font-size:10.5px;color:#6b7280;line-height:1.45}
+.g-arrow{display:flex;align-items:center;color:#c9c2b2;font-size:15px;font-weight:700;flex-shrink:0}
+@media(max-width:680px){.g-flow{flex-direction:column}.g-arrow{transform:rotate(90deg);justify-content:center;padding:1px 0}}
 
-/* ===== 统计数据条 ===== */
-.q-stats-bar {
-  display:flex; gap:16px; padding:12px 16px;
-  background:linear-gradient(135deg,#f8fafc,#f1f5f9);
-  border-radius:10px; margin-bottom:14px; font-size:15px;
-  flex-wrap:wrap;
-}
-.q-stats-bar .stat { display:flex; align-items:center; gap:8px }
-.q-stats-bar .num { font-weight:700; font-size:20px }
-.q-stats-bar .num.green { color:#16a34a }
-.q-stats-bar .num.red { color:#dc2626 }
-.q-stats-bar .num.blue { color:#4a6cf7 }
+/* ★ Tab 切换（每个 Tab 一屏显示，避免页面内嵌滚动条） */
+.tabs-bar{display:flex;gap:4px;padding:8px 14px 0;background:#fbfaf6;border-bottom:1px solid var(--line);flex-shrink:0}
+.tab-btn{padding:8px 20px;font-size:13px;font-weight:600;color:var(--gray);background:transparent;border:1px solid transparent;border-bottom:none;border-radius:10px 10px 0 0;cursor:pointer;transition:all .15s;white-space:nowrap}
+.tab-btn:hover{color:var(--green-deep);background:#fff}
+.tab-btn.active{color:var(--green-deep);background:#fff;border-color:var(--line);box-shadow:0 -2px 6px rgba(0,0,0,.04)}
+.tab-btn .tb-no{display:inline-flex;width:18px;height:18px;border-radius:50%;background:var(--green);color:#fff;align-items:center;justify-content:center;font-size:10.5px;font-weight:700;margin-right:6px}
+.tab-btn.active .tb-no{background:var(--green-deep)}
 
-/* ===== 题目卡片 ===== */
-.q-card { background:white; border:1px solid #eef0f5; border-radius:12px; margin-bottom:12px; overflow:hidden; transition:all .2s }
-.q-card:hover { box-shadow:0 3px 12px rgba(0,0,0,.07) }
-.q-head {
-  display:flex; align-items:center; gap:12px;
-  padding:12px 16px; background:#fafbfc; border-bottom:1px solid #f0f2f6;
-}
-.q-head .qnum { font-size:22px; font-weight:700; color:#4a6cf7; min-width:48px }
-.q-head .qtype { font-size:12px; padding:3px 10px; border-radius:6px; background:#eef2ff; color:#4a6cf7; font-weight:500 }
-.q-head .qstatus { margin-left:auto; display:flex; gap:6px; align-items:center }
-.q-head .qstatus .tag { padding:3px 10px; border-radius:6px; font-size:12px; font-weight:600 }
-.q-head .qstatus .tag.pass { background:#dcfce7; color:#166534 }
-.q-head .qstatus .tag.fail { background:#fee2e2; color:#991b1b }
-.q-head .qstatus .tag.human-pass { background:#bbf7d0; color:#14532d }
-.q-head .qstatus .tag.human-fail { background:#fecaca; color:#7f1d1d }
-.q-head .qstatus .tag.pending-label { background:#fef3c7; color:#92400e; cursor:pointer; animation:blink 1.5s infinite }
-@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.5} }
-
-.q-body { padding:14px 16px }
-
-/* 四个维度网格 */
-.q-dims { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:10px }
-.q-dim { text-align:center; padding:10px 4px; border-radius:10px; border:1px solid #eef0f5; background:#fafbfc }
-.q-dim .icon { font-size:22px; margin-bottom:3px }
-.q-dim .label { font-size:13px; font-weight:600; color:#64748b }
-.q-dim .score { font-size:12px; margin-top:2px }
-.q-dim.pass { background:#f0fdf4; border-color:#bbf7d0 }
-.q-dim.pass .label { color:#166534 }
-.q-dim.fail { background:#fef2f2; border-color:#fecaca }
-.q-dim.fail .label { color:#991b1b }
-.q-dim.skip { background:#f8fafc; border-color:#f1f5f9 }
-.q-dim.skip .label { color:#94a3b8 }
-
-/* AI理由区域 */
-.q-reasons {
-  font-size:14px; color:#475569;
-  background:#f8fafc; border-radius:8px; padding:10px 14px;
-  margin-bottom:10px; line-height:1.8;
-}
-.q-reasons b { color:#334155 }
-
-/* 人工标注区 */
-.q-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap }
-.q-actions .note { flex:1; min-width:120px; padding:8px 12px; border:1.5px solid #e2e8f0; border-radius:7px; font-size:14px; outline:none; transition:border .2s }
-.q-actions .note:focus { border-color:#4a6cf7 }
-.q-actions .action-label { font-size:13px; color:#64748b; font-weight:500; margin-right:4px }
-.q-actions .done-tag { font-size:13px; padding:5px 12px; border-radius:7px; background:#fef3c7; color:#92400e; display:flex; align-items:center; gap:4px }
-
-/* ===== 上传区域 ===== */
-.upload-area { border:2px dashed #d1d5db; border-radius:12px; padding:24px; text-align:center; transition:all .2s; background:#fafbfc }
-.upload-area.dragover { border-color:#4a6cf7; background:#eef2ff }
-.upload-area .icon { font-size:40px; color:#4a6cf7; margin-bottom:8px }
-.upload-area .txt { font-size:15px; color:#64748b; margin-bottom:10px }
-
-/* ===== 截图区域 ===== */
-.screenshot-box {
-  background:#f8fafc; border-radius:10px; overflow:hidden;
-  min-height:140px; display:flex; align-items:center; justify-content:center;
-  border:1px solid #eef0f5;
-}
-.screenshot-box img { max-width:100%; max-height:300px; display:block; border-radius:8px }
-.screenshot-box .ph { color:#94a3b8; font-size:14px; padding:24px; text-align:center }
-
-/* ===== 信息行 ===== */
-.info-row { display:flex; justify-content:space-between; padding:8px 0; font-size:15px; border-bottom:1px solid #f1f5f9 }
-.info-row:last-child { border:none }
-.info-row .key { color:#64748b }
-.info-row .val { font-weight:600; color:#1e293b }
-.file-list { font-size:14px; max-height:80px; overflow-y:auto; margin-top:8px }
-.file-list .item { padding:3px 0; color:#475569; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
-.file-list .item::before { content:"📄 "; }
-
-/* ===== 小徽标 ===== */
-.badge {
-  display:inline-block; background:#f1f4f9; color:#64748b;
-  padding:3px 12px; border-radius:12px; font-size:12px; font-weight:500;
-}
+/* 齿轮/单元 */
+.unit-gear{opacity:.55;cursor:pointer;color:var(--green);display:inline-flex}
+.unit-gear:hover{opacity:1}
+.unit-input-wrap{display:none;align-items:center;gap:4px;font-size:11px;color:var(--gray);font-weight:400;margin-left:2px;padding:2px 0}
+.unit-input-wrap input{width:50px;padding:2px 5px;border:1px solid var(--line);border-radius:6px;font-size:11px;background:#fff;color:#3d3226}
+.unit-input-wrap input:focus{outline:none;border-color:var(--green-light)}
+/* ★ 模块卡片 + 单元勾选栏（替代齿轮展开，常驻展示） */
+.mod-card{border:1.5px solid var(--line);border-radius:10px;padding:6px 9px;background:#fff;transition:border-color .15s,background .15s}
+.mod-card-head{display:flex;align-items:center;justify-content:space-between;gap:6px}
+.mod-sel-label{display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;color:#3d3226;cursor:pointer;flex:1;min-width:0;user-select:none}
+.mod-sel-label input{accent-color:var(--green);width:14px;height:14px;flex-shrink:0;cursor:pointer}
+.unit-clear{font-size:10px;color:var(--gray);cursor:pointer;padding:1px 8px;border-radius:6px;border:1px solid var(--line);background:#fff;flex-shrink:0}
+.unit-clear:hover{color:var(--red);border-color:var(--red)}
+/* 单元输入行（空格/横线分隔，常驻显示） */
+.unit-input-row{display:flex;align-items:center;gap:6px;margin-top:5px;flex-wrap:wrap}
+.unit-val{width:130px;padding:3px 9px;border:1.5px solid var(--line);border-radius:7px;font-size:11.5px;background:#faf8f3;color:#3d3226;outline:none;transition:border-color .15s,background .15s}
+.unit-val:focus{border-color:var(--green-light);background:#fff}
+.unit-val::placeholder{color:#a8b3ae;font-size:10.5px}
+.file-list .item{font-size:11.5px;padding:2px 0;color:#475569;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file-list .item::before{content:"· ";color:var(--green)}
+.info-row{display:flex;justify-content:space-between;padding:5px 0;font-size:12.5px;border-bottom:1px dashed var(--line)}
+.info-row:last-child{border:none}
+.info-row .key{color:var(--gray)}
+.info-row .val{font-weight:600;color:var(--green-deep)}
+.review-result{margin-top:6px;font-size:12.5px;color:var(--gray);line-height:1.5}
 </style>
 </head>
 <body>
 
-<!-- ===== HEADER ===== -->
-<div class="header">
-  <h1>E英语宝 · 审查智能体</h1>
-  <div class="sub">
-    <span class="dot-inline" id="hDot" style="background:#94a3b8"></span>
-    <span id="hDeviceText">检测连接中...</span>
+<!-- ===== 顶部 ===== -->
+<header class="bg-[#1b4332] text-white shadow-md">
+  <div class="flex items-center gap-4 px-5 py-2.5 flex-wrap">
+    <div class="flex items-center gap-2.5">
+      <span class="w-8 h-8 rounded-lg bg-white/15 flex items-center justify-center font-extrabold text-sm">E</span>
+      <div class="leading-tight">
+        <div class="font-bold text-[15px] tracking-wide">英语宝 · 自动化检测与审查</div>
+        <div class="text-[11px] text-white/60">选模块 → 开始 → 点击与审查日志一条流展示</div>
+      </div>
+    </div>
+    <div class="ml-auto flex items-center gap-3 text-[12.5px] flex-wrap">
+      <button onclick="openGuide()" class="bg-white/15 hover:bg-white/25 border border-white/25 px-3 py-1.5 rounded-lg transition">使用指南</button>
+      <span class="flex items-center gap-1.5"><span id="devDot" class="w-2.5 h-2.5 rounded-full bg-amber-400"></span><span id="devStatus">检测中…</span></span>
+      <select id="devSelect" onchange="selectDevice(this.value)" class="bg-white/15 border border-white/30 rounded-lg px-2 py-1.5 text-[12.5px] max-w-[190px]">
+        <option value="">选择设备…</option>
+      </select>
+      <span class="hidden md:inline text-white/60 text-[11.5px]" id="devMeta"></span>
+      <span class="bg-white/20 rounded-full px-3 py-1 text-[11.5px]" id="taskBadge">空闲</span>
+    </div>
   </div>
-  <span class="tag" id="hTaskTag">空闲</span>
+</header>
+
+<!-- ===== 主体 ===== -->
+<div class="flex flex-col h-[calc(100vh-52px)]">
+
+  <!-- Tab 导航条（每个 Tab 一屏，不用在页面里滚） -->
+  <div class="tabs-bar">
+    <button class="tab-btn active" data-tab="1" onclick="switchTab(1)"><span class="tb-no">1</span>任务配置</button>
+    <button class="tab-btn" data-tab="2" onclick="switchTab(2)"><span class="tb-no">2</span>运行日志 · 手机画面</button>
+    <button class="tab-btn" data-tab="3" onclick="switchTab(3)"><span class="tb-no">3</span>审查结果</button>
+  </div>
+
+  <!-- ===== Tab1 任务配置：两栏布局（左配置+按钮 / 右脚本+自动匹配），宽屏充分利用、一屏放下 ===== -->
+  <aside id="tabAside" class="flex-1 min-h-0 overflow-y-auto p-3 bg-[#fbfaf6]">
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 max-w-[1600px] mx-auto h-full">
+
+    <!-- 左卡：任务配置 + 一键检测按钮 -->
+    <div class="bg-white rounded-xl border border-[#e6dfd4] p-4 shadow-sm flex flex-col min-h-0">
+      <h3 class="font-bold text-[14px] text-[#1b4332] mb-2 flex items-center gap-2 shrink-0"><span class="w-5 h-5 rounded-full bg-[#2d6a4f] text-white flex items-center justify-center text-[10.5px] font-bold">1</span>任务配置 · 一键自动检测</h3>
+      <div class="sec-note shrink-0">
+        <b>选好模块、上传脚本，一键全自动：</b>有脚本 → LLM 知识性审查；无脚本 → 基础完整性检查。
+      </div>
+
+      <!-- 一句话描述 + 版本/年级（并排，省高度） -->
+      <div class="grid grid-cols-3 gap-2 shrink-0">
+        <div class="col-span-2">
+          <textarea id="orderInput" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();tryParseOrder()}"
+            placeholder="一句话描述，如：湘少版五年级上册 听力专项U1难点突破 口语训练U1&#10;回车自动识别 版本/年级/模块/单元"
+            class="w-full min-h-[46px] border-[1.5px] border-dashed border-[#e6dfd4] rounded-lg p-2 text-[12.5px] resize-y leading-relaxed focus:outline-none focus:border-[#40916c] focus:bg-white bg-[#faf7f2]"></textarea>
+          <div class="text-[10.5px] text-[#6b7280] mt-1 leading-relaxed">回车自动识别 · 或 <span class="text-[#2d6a4f] underline underline-offset-2 cursor-pointer" onclick="$('fileOrder').click()">上传任务清单</span> · 支持 期中/期末/AI检测</div>
+        </div>
+        <div class="flex flex-col gap-2">
+          <div>
+            <label class="block text-[11px] text-[#6b7280] mb-0.5">教材版本 <span class="text-[10px]" id="versionLoading"></span></label>
+            <select id="setupVersion" onchange="renderGrades(this.value)" class="w-full border-[1.5px] border-[#e6dfd4] rounded-lg px-2 py-1.5 text-[12px] bg-white">
+              <option selected>湘少版</option><option>湘少版(2024审定)</option><option>人教版</option><option>人教版(PEP)</option><option>外研版(三起)</option><option>外研版(一起)</option><option>湘鲁版</option><option>冀教版</option><option>教科版</option><option>陕旅版</option><option>新概念青少版</option><option>通用</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-[11px] text-[#6b7280] mb-0.5">年级 <span class="text-[10px]" id="gradeLoading"></span></label>
+            <select id="setupGrade" class="w-full border-[1.5px] border-[#e6dfd4] rounded-lg px-2 py-1.5 text-[12px] bg-white">
+              <option selected>五年级上册</option><option>五年级下册</option><option>六年级上册</option><option>六年级下册</option><option>四年级下册</option><option>三年级下册</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <input type="file" id="fileOrder" accept=".txt,.docx,.xlsx,.doc,.xls" onchange="uploadOrder(event)" class="hidden">
+
+      <div class="flex items-center justify-between text-[11px] text-[#6b7280] mt-2.5 mb-1 shrink-0">
+        <span>要测的模块（可多选）· 单元默认全选，取消勾选可指定范围</span>
+        <span>已选 <b id="moduleSelCount" class="text-[#2d6a4f]">0</b></span>
+      </div>
+            <div class="space-y-1.5 shrink-0">
+        <!-- 听力专项：练/测 两组单元 -->
+        <div class="mod-card mod-tag">
+          <div class="mod-card-head">
+            <label class="mod-sel-label"><input type="checkbox" class="mod-sel" value="听力专项">听力专项</label>
+            <button type="button" class="unit-clear" onclick="clearUnitPicks(this)">清空单元</button>
+          </div>
+          <div class="unit-input-row"><span class="up-k">练</span><input class="unit-val unit-val-p" placeholder="1-5 或 1 3 5，留空=全部" title="练习单元范围：支持 1-5 / 1,3,5 / 空格分隔"></div>
+          <div class="unit-input-row"><span class="up-k">测</span><input class="unit-val unit-val-t" placeholder="1-5 或 1 3 5，留空=全部" title="测试单元范围：支持 1-5 / 1,3,5 / 空格分隔"></div>
+        </div>
+        <!-- 口语训练 -->
+        <div class="mod-card mod-tag">
+          <div class="mod-card-head">
+            <label class="mod-sel-label"><input type="checkbox" class="mod-sel" value="口语训练">口语训练</label>
+            <button type="button" class="unit-clear" onclick="clearUnitPicks(this)">清空单元</button>
+          </div>
+          <div class="unit-input-row"><span class="up-k">单元</span><input class="unit-val" placeholder="1-5 或 1 3 5，留空=全部" title="单元范围：支持 1-5 / 1,3,5 / 空格分隔"></div>
+        </div>
+        <!-- 单元自检 -->
+        <div class="mod-card mod-tag">
+          <div class="mod-card-head">
+            <label class="mod-sel-label"><input type="checkbox" class="mod-sel" value="单元自检">单元自检</label>
+            <button type="button" class="unit-clear" onclick="clearUnitPicks(this)">清空单元</button>
+          </div>
+          <div class="unit-input-row"><span class="up-k">单元</span><input class="unit-val" placeholder="1-5 或 1 3 5，留空=全部" title="单元范围：支持 1-5 / 1,3,5 / 空格分隔"></div>
+        </div>
+        <!-- 知识过关 -->
+        <div class="mod-card mod-tag">
+          <div class="mod-card-head">
+            <label class="mod-sel-label"><input type="checkbox" class="mod-sel" value="知识过关">知识过关</label>
+            <button type="button" class="unit-clear" onclick="clearUnitPicks(this)">清空单元</button>
+          </div>
+          <div class="unit-input-row"><span class="up-k">单元</span><input class="unit-val" placeholder="1-5 或 1 3 5，留空=全部" title="单元范围：支持 1-5 / 1,3,5 / 空格分隔"></div>
+        </div>
+        <!-- 语音评测 -->
+        <div class="mod-card mod-tag">
+          <div class="mod-card-head">
+            <label class="mod-sel-label"><input type="checkbox" class="mod-sel" value="语音评测">语音评测</label>
+            <button type="button" class="unit-clear" onclick="clearUnitPicks(this)">清空单元</button>
+          </div>
+          <div class="unit-input-row"><span class="up-k">单元</span><input class="unit-val" placeholder="1-5 或 1 3 5，留空=全部" title="单元范围：支持 1-5 / 1,3,5 / 空格分隔"></div>
+        </div>
+        <!-- 巧记单词 -->
+        <div class="mod-card mod-tag">
+          <div class="mod-card-head">
+            <label class="mod-sel-label"><input type="checkbox" class="mod-sel" value="巧记单词">巧记单词</label>
+            <button type="button" class="unit-clear" onclick="clearUnitPicks(this)">清空单元</button>
+          </div>
+          <div class="unit-input-row"><span class="up-k">单元</span><input class="unit-val" placeholder="1-5 或 1 3 5，留空=全部" title="单元范围：支持 1-5 / 1,3,5 / 空格分隔"></div>
+        </div>
+      </div>
+
+      <!-- 行动：极简——一个「解析并自动检测」按钮（有脚本→LLM审查 / 无脚本→基础完整性） -->
+      <div class="mt-auto pt-3 mb-[30px] shrink-0">
+        <button id="btnCook" onclick="startCooking()" class="w-full py-3 bg-gradient-to-r from-[#1b4332] to-[#2d6a4f] text-white rounded-xl font-bold text-[14px] shadow-md hover:shadow-lg hover:-translate-y-px transition active:scale-[.98] disabled:opacity-60 flex items-center justify-center gap-2"><span class="text-[15px] leading-none">▶</span>解析并自动检测</button>
+        <!-- ↓ 以下旧按钮/区块隐藏保留（JS 引用安全，界面不展示） -->
+        <div class="hidden grid grid-cols-2 gap-2 mt-2">
+          <button id="quickBtn" onclick="quickInsp()" class="py-2 rounded-lg bg-[#e9c46a] text-[#5c4506] text-[12px] font-semibold">快速检查</button>
+          <button id="stopBtn2" onclick="stopInsp()" class="py-2 rounded-lg bg-[#bc4742] text-white text-[12px] font-semibold">停止</button>
+        </div>
+        <button id="runBtn" onclick="startInsp()" class="hidden mt-2 w-full py-2 rounded-lg bg-[#2d6a4f] text-white text-[12px] font-semibold">开始检查</button>
+        <div class="hidden mt-2 border-t border-dashed border-[#e6dfd4] pt-2">
+          <span class="block text-[11px] font-semibold text-[#475569] mb-1">按脚本一键审查（不连手机）</span>
+          <select id="reviewDocx" class="w-full border-[1.5px] border-[#e6dfd4] rounded-lg px-2 py-1.5 text-[12px] bg-white mb-1.5"></select>
+          <div class="flex gap-1.5">
+            <input type="number" id="reviewUnit" placeholder="单元(0=全部)" class="flex-1 border-[1.5px] border-[#e6dfd4] rounded-lg px-2 py-1.5 text-[12px]">
+            <button class="bg-[#2d6a4f] text-white rounded-lg px-4 text-[12px] font-semibold" onclick="runReview()">审查</button>
+          </div>
+          <div class="review-result" id="reviewResult"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 右卡：审查脚本 · 自动匹配（模块+版本+年级） -->
+    <div class="bg-white rounded-xl border border-[#e6dfd4] p-4 shadow-sm flex flex-col min-h-0">
+      <div class="flex items-center justify-between mb-2 shrink-0">
+        <h3 class="font-bold text-[14px] text-[#1b4332] flex items-center gap-2"><span class="w-5 h-5 rounded-full bg-[#5f9d7f] text-white flex items-center justify-center text-[10.5px] font-bold">2</span>审查脚本 · 自动匹配</h3>
+        <span id="matchSummary" class="text-[10.5px] text-[#6b7280]"></span>
+      </div>
+      <div class="sec-note shrink-0">
+        <b>上传后按 模块+版本+年级 自动匹配。</b> 有脚本 → LLM 知识性审查；无脚本 → 基础完整性检查。
+      </div>
+
+      <!-- 中间内容区：超高时卡内滚动，不撑高整页 -->
+      <div class="flex-1 min-h-0 overflow-y-auto pr-1 -mr-1">
+
+        <!-- 上传 -->
+        <div id="dropZone" class="border-2 border-dashed border-[#e6dfd4] rounded-lg p-2.5 text-center bg-[#faf7f2] transition hover:border-[#40916c] hover:bg-[#e8f5ee]">
+          <div class="text-[20px] text-[#2d6a4f] font-light leading-none">+</div>
+          <div class="text-[11px] text-[#6b7280] my-1">拖拽 DOCX / DOC 到此处，或点按钮选择</div>
+          <input type="file" id="fileInput" accept=".docx,.doc" class="hidden">
+          <button class="border-[1.5px] border-[#2d6a4f] text-[#2d6a4f] rounded-lg px-3 py-1 text-[11px] font-semibold hover:bg-[#e8f5ee] transition" onclick="document.getElementById('fileInput').click()">选择文件</button>
+        </div>
+        <div id="uploadStatus" class="text-[11px] text-[#6b7280] mt-1.5"></div>
+        <div class="file-list" id="uploadList"></div>
+
+        <!-- 自动匹配展示（按选中模块分组） -->
+        <div class="mt-2.5">
+          <span class="block text-[11px] font-semibold text-[#475569] mb-1">脚本自动匹配（按选中模块）</span>
+          <div id="moduleMatchList" class="space-y-1 text-[11.5px]">
+            <div class="text-[#9aa5a0] text-center py-2 bg-[#faf8f3] rounded-lg">尚未选模块</div>
+          </div>
+        </div>
+      </div>
+
+        <!-- 知识库状态（精简三栏，界面隐藏，JS 引用保留） -->
+        <div class="mt-2.5 grid grid-cols-3 gap-2 text-[11px] hidden">
+          <div class="bg-[#faf8f3] rounded-lg px-2 py-1.5 text-center"><span class="text-[#6b7280]">知识点</span> <b id="kbTotal" class="text-[#2d6a4f]">—</b></div>
+          <div class="bg-[#faf8f3] rounded-lg px-2 py-1.5 text-center"><span class="text-[#6b7280]">年级</span> <b id="kbGrades" class="text-[#2d6a4f]">—</b></div>
+          <div class="bg-[#faf8f3] rounded-lg px-2 py-1.5 text-center"><span class="text-[#6b7280]">一致率</span> <b id="fbAccuracy" class="text-[#2d6a4f]">—</b></div>
+        </div>
+
+      <!-- 审查选项（隐藏保留，JS 引用安全；界面不展示） -->
+      <details class="mt-3 border-t border-dashed border-[#e6dfd4] pt-2 hidden">
+        <summary class="text-[11.5px] font-semibold text-[#475569] cursor-pointer hover:text-[#2d6a4f] select-none">审查选项（开始检查参数，可不展开）</summary>
+        <div class="grid grid-cols-3 gap-1.5 mt-2">
+          <div>
+            <span class="block text-[10.5px] text-[#6b7280] mb-0.5">脚本版本</span>
+            <select id="inspectVersion" class="w-full border-[1.5px] border-[#e6dfd4] rounded-lg px-1.5 py-1.5 text-[11.5px] bg-white">
+              <option>新湘鲁五上</option><option>新湘鲁五下</option>
+              <option selected>新湘鲁六上</option><option>新湘鲁六下</option>
+            </select>
+          </div>
+          <div>
+            <span class="block text-[10.5px] text-[#6b7280] mb-0.5">单元</span>
+            <select id="inspectUnit" class="w-full border-[1.5px] border-[#e6dfd4] rounded-lg px-1.5 py-1.5 text-[11.5px] bg-white"><option>6</option><option>7</option><option>8</option><option>9</option></select>
+          </div>
+          <div>
+            <span class="block text-[10.5px] text-[#6b7280] mb-0.5">阶段（可多选）</span>
+            <label class="flex items-center gap-1 text-[11px] text-[#475569] mb-0.5 cursor-pointer">
+              <input type="checkbox" id="inspStageAll" checked onchange="inspStageAllChange()"> 全部子模块
+            </label>
+            <div id="inspStageBox" class="text-[11px] text-[#475569] space-y-0.5">
+              <label class="flex items-center gap-1 cursor-pointer"><input type="checkbox" class="inspStageCb" value="基础巩固" checked> 基础巩固</label>
+              <label class="flex items-center gap-1 cursor-pointer"><input type="checkbox" class="inspStageCb" value="综合进阶" checked> 综合进阶</label>
+              <label class="flex items-center gap-1 cursor-pointer"><input type="checkbox" class="inspStageCb" value="难点突破" checked> 难点突破</label>
+            </div>
+          </div>
+        </div>
+      </details>
+    </div>
+  </div>
+  </aside>
+
+  <!-- ===== Tab2/3/4 容器：运行日志 / 审查结果 / 手机画面 ===== -->
+  <main id="tabMain" class="flex-1 flex flex-col overflow-hidden">
+
+    <!-- 状态条（Tab2 显示） -->
+    <div id="statusSec" class="flex items-center gap-3 px-4 py-2 bg-white border-b border-[#e6dfd4]">
+      <span id="kitchenPulse" class="w-2.5 h-2.5 rounded-full bg-[#9aa5a0]"></span>
+      <span class="font-semibold text-[13px] text-[#1b4332]" id="kitchenMsg">就绪，等待开始…</span>
+      <button id="btnStop" onclick="stopCooking()" class="ml-auto bg-[#bc4742] text-white rounded-lg px-3.5 py-1.5 text-[12px] font-semibold hover:bg-[#a33b36] transition hidden">停止检测</button>
+      <span class="text-[11px] text-[#6b7280]" id="kitchenSub"></span>
+    </div>
+
+    <!-- 流程步骤条 -->
+    <div class="flow-strip" id="flowStrip"></div>
+
+    <!-- Tab2：运行日志(左) + 手机画面(右) 同屏 -->
+    <div id="logShotSec" class="flex-1 flex min-h-0">
+      <div class="flex-1 flex flex-col min-w-0 min-h-0">
+
+      <!-- 合并日志（点击 + 审查 一条流） -->
+      <div id="logSec" class="flex-1 flex flex-col min-h-0">
+        <div class="flex items-center gap-2 px-4 pt-2">
+          <h3 class="font-bold text-[13px] text-[#1b4332]">运行过程日志</h3>
+          <span class="text-[10.5px] text-[#9aa5a0]">自动化点击步骤 + 每题审查判断与证据，按时间合并</span>
+          <span class="ml-auto text-[11px] text-[#6b7280] cursor-pointer hover:text-[#2d6a4f]" onclick="clearLog()">清空日志</span>
+        </div>
+        <div class="log-wrap" id="logWrap">
+          <div class="log-empty">
+            <span class="big">▦</span>
+            等待开始<br>左侧配置好后点「解析并开始检测」，点击操作与审查判断会按时间合并展示在这里
+          </div>
+        </div>
+      </div>
+
+      <!-- 结果汇总 -->
+      <div class="serve-wrap" id="serveWrap"></div>
+      </div>
+      <!-- Tab2 右列：手机画面（实时截图） -->
+      <div id="shotSec" class="w-[310px] shrink-0 overflow-y-auto px-3 py-2 flex flex-col gap-1.5 border-l border-[#e6dfd4] bg-[#fbfaf6]">
+        <div class="flex items-center gap-2">
+          <h3 class="font-bold text-[12px] text-[#1b4332]">手机画面</h3>
+          <span class="text-[10px] text-[#9aa5a0]">实时 · 点图放大</span>
+        </div>
+        <div class="phone-frame">
+          <div class="screenshot-box" id="screenshotArea"><div class="ph">等待巡检截图…</div></div>
+        </div>
+        <div class="shot-hint">手机屏 1080×2400 竖屏 · 实时画面</div>
+      </div>
+    </div>
+
+      <!-- Tab3：审查结果（全宽一屏） -->
+      <div id="revSec" class="flex-1 flex flex-col min-w-0 min-h-0 bg-[#fbfaf6]">
+        <div class="flex items-center gap-2 px-4 pt-2">
+          <h3 class="font-bold text-[13px] text-[#1b4332]">题目审查结果（六维）</h3>
+          <span class="text-[10.5px] text-[#9aa5a0]">AI 判断 + 人工复核</span>
+          <span id="qBadge" class="ml-auto bg-white border border-[#e6dfd4] rounded-full px-2.5 py-0.5 text-[10.5px] text-[#6b7280]">待启动</span>
+        </div>
+        <div id="qStatsBar" class="hidden md:flex gap-4 px-4 py-1.5 text-[12px] text-[#6b7280] flex-wrap">
+          <span>总题数 <b class="text-[15px] text-[#2d6a4f]" id="sTotal">0</b></span>
+          <span>AI通过 <b class="text-[15px] text-[#1d6f3c]" id="sPassed">0</b></span>
+          <span>AI不通过 <b class="text-[15px] text-[#bc4742]" id="sFailed">0</b></span>
+          <span class="ml-auto">已人工标注 <b class="text-[15px] text-[#2d6a4f]" id="sLabeled">0</b></span>
+        </div>
+        <div class="flex-1 flex min-h-0">
+        <!-- 左：六维审查结果 -->
+        <div class="flex-1 flex flex-col min-w-0 min-h-0">
+        <div id="questionList" class="flex-1 overflow-y-auto px-4 py-2">
+          <div class="text-center py-8 text-[#9aa5a0]">
+            <div class="text-[13.5px] font-medium text-[#6b7280] mb-1">尚未开始审查</div>
+            <div class="text-[11px]">点「快速检查」从手机当前页开查，或随自动化检测同步展示</div>
+          </div>
+        </div>
+        </div>
+        <!-- 右：错题日志（位置 / 原因 / 修改建议，AI 检测中实时更新） -->
+        <div class="w-[38%] min-w-[430px] max-w-[560px] shrink-0 flex flex-col min-h-0 border-l border-[#e6dfd4] bg-white">
+          <div class="flex items-center gap-2 px-3 pt-2.5 pb-1">
+            <h3 class="font-bold text-[12.5px] text-[#bc4742]">错题日志</h3>
+            <span id="wrongBadge" class="bg-[#fee2e2] text-[#bc4742] rounded-full px-2 py-0.5 text-[10.5px] font-semibold">0</span>
+            <span class="text-[10px] text-[#9aa5a0]">AI 检测中实时更新</span>
+            <button onclick="openLiveReport()" title="在新弹层中查看实时错题报告"
+              class="ml-auto text-[10.5px] px-2 py-0.5 rounded-md bg-[#bc4742] text-white hover:bg-[#9b2c2c]">📑 查看报告</button>
+          </div>
+          <div id="wrongList" class="flex-1 overflow-y-auto px-3 py-2 space-y-2">
+            <div class="text-center py-6 text-[#9aa5a0] bg-[#faf8f3] rounded-lg text-[11px]">暂无错题</div>
+          </div>
+        </div>
+        </div>
+      </div>
+
+<!-- ===== 实时错题报告弹层（iframe 嵌入独立 .html，借鉴队友） ===== -->
+<div id="liveReportMask" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center" onclick="closeLiveReport()">
+  <div class="bg-white rounded-xl shadow-2xl w-[90vw] max-w-[920px] h-[86vh] flex flex-col overflow-hidden" onclick="event.stopPropagation()">
+    <div class="flex items-center gap-2 px-4 py-2.5 border-b border-[#e6dfd4]">
+      <h2 class="font-bold text-[14px] text-[#bc4742]">实时错题报告</h2>
+      <span id="liveReportMeta" class="text-[11px] text-[#9aa5a0]"></span>
+      <div class="ml-auto flex items-center gap-2">
+        <button onclick="refreshLiveReport()" class="text-[12px] border border-[#d8d0c4] bg-white text-[#666] px-2.5 py-1 rounded-md hover:bg-[#faf8f3]">↻ 刷新</button>
+        <a id="liveReportDownload" href="#" target="_blank" class="text-[12px] bg-[#bc4742] text-white px-2.5 py-1 rounded-md hover:bg-[#9b2c2c]">⬇ 下载</a>
+        <button onclick="closeLiveReport()" class="text-[12px] bg-[#eee] text-[#555] px-2.5 py-1 rounded-md hover:bg-[#e2e2e2]">关闭</button>
+      </div>
+    </div>
+    <iframe id="liveReportFrame" class="flex-1 w-full bg-[#f6f4ef]" src=""></iframe>
+  </div>
+</div>
+  </main>
 </div>
 
-<!-- ===== 三栏主体 ===== -->
-<div class="container">
+<!-- 列3（右侧面板）：脚本上传 / 知识库 / 审查智能体 → 来自 bunana 分支 -->
 
-  <!-- ========== 左栏 ========== -->
-  <div>
-
-    <!-- 📱 设备状态 -->
-    <div class="card">
-      <div class="card-title">📱 设备状态</div>
-      <div class="card-desc">连接的Android测试手机信息，绿色圆点=已连接。</div>
-      <div class="device-grid" id="deviceGrid">
-        <div class="device-item"><div class="label">连接状态</div><div class="value"><span style="width:10px;height:10px;border-radius:50%;display:inline-block" id="statusDot"></span><span id="statusText">检测中</span></div></div>
-        <div class="device-item"><div class="label">序列号</div><div class="value" id="serialText">—</div></div>
-        <div class="device-item"><div class="label">设备型号</div><div class="value" id="modelText">—</div></div>
-        <div class="device-item"><div class="label">APP版本</div><div class="value" id="currentVersionText">—</div></div>
-      </div>
+<!-- ===== 使用指南弹层 ===== -->
+<div class="guide-mask" id="guideMask" onclick="closeGuide()">
+  <div class="guide" onclick="event.stopPropagation()">
+    <div class="flex items-center justify-between px-5 py-3 bg-gradient-to-r from-[#1b4332] to-[#2d6a4f] text-white">
+      <h2 class="font-bold text-[15px]">界面使用指南 · 4 步上手</h2>
+      <button class="bg-white/20 hover:bg-white/35 rounded-lg px-3 py-1 text-[12px] transition" onclick="closeGuide()">关闭</button>
     </div>
+    <div class="guide-body">
+      <div class="g-tip"><b>总览：</b>左边选「测什么」，右边看「过程 + 结果」。自动化点击和逐题审查在右侧<b>同一条日志</b>里按时间排。</div>
 
-    <!-- ⏱ 检查流程 (含实时日志) -->
-    <div class="card">
-      <div class="card-title">
-        <span>⏱ 检查流程</span>
-        <span class="badge" id="flowBadge">等待开始</span>
-      </div>
-      <div class="card-desc">
-        实时显示自动巡检的每一步进度：<strong>灰=等待</strong> · <strong style="color:#f59e0b">橙=运行中</strong> · <strong style="color:#22c55e">绿=完成</strong> · <strong style="color:#ef4444">红=错误</strong>
-      </div>
-      <div id="workflowList" style="margin-bottom:14px"></div>
-
-      <!-- 📋 日志放在流程步骤正下方 -->
-      <div style="border-top:1px solid #f0f2f6;padding-top:12px">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-          <span style="font-size:14px;font-weight:600;color:#1e293b">📋 操作日志</span>
-          <span class="badge" id="logBadge">0</span>
+      <!-- 横向 4 步流程 -->
+      <div class="g-flow">
+        <div class="g-step">
+          <div class="g-sno">1</div>
+          <div class="g-stitle">上传脚本</div>
+          <div class="g-sdesc">公司 DOCX，AI 审查的对照依据</div>
         </div>
-        <div class="log-box" id="logBox">
-          <div class="log-entry"><span class="t">--:--:--</span><span class="lv info">INFO</span><span>等待巡检启动...</span></div>
+        <div class="g-arrow">→</div>
+        <div class="g-step">
+          <div class="g-sno">2</div>
+          <div class="g-stitle">选要测的</div>
+          <div class="g-sdesc">选版本/年级/模块，或一句话描述</div>
         </div>
-      </div>
-    </div>
-
-    <!-- 🎮 运行控制 -->
-    <div class="card">
-      <div class="card-title">🎮 运行控制</div>
-      <div class="card-desc">选择本次巡检的<strong>教材版本、单元编号、题目阶段</strong>，然后点「开始检查」自动跑完全流程。</div>
-
-      <span class="form-label">📖 教材版本</span>
-      <span class="form-hint">选择要检查的册别，如"新湘鲁六上"</span>
-      <div class="input-group">
-        <select id="inspectVersion">
-          <option>新湘鲁五上</option>
-          <option>新湘鲁五下</option>
-          <option selected>新湘鲁六上</option>
-          <option>新湘鲁六下</option>
-        </select>
-      </div>
-
-      <span class="form-label">🔢 单元编号</span>
-      <span class="form-hint">选择要巡检的 Unit (6-9)</span>
-      <div class="input-group">
-        <select id="inspectUnit">
-          <option>6</option><option>7</option><option>8</option><option>9</option>
-        </select>
-      </div>
-
-      <span class="form-label">📌 题目阶段</span>
-      <span class="form-hint">脚本中的题型分类，如"基础巩固"是第一轮听力题</span>
-      <div class="input-group">
-        <select id="inspectStage">
-          <option selected>基础巩固</option>
-          <option>综合进阶</option>
-          <option>难点突破</option>
-        </select>
-      </div>
-
-      <div class="btn-row">
-        <button class="btn btn-primary" id="runBtn" onclick="startInsp()">▶ 开始检查</button>
-        <button class="btn btn-danger" id="stopBtn" onclick="stopInsp()">⏹ 停止</button>
-      </div>
-    </div>
-
-  </div>
-
-  <!-- ========== 中栏 ========== -->
-  <div>
-    <div class="card">
-      <div class="card-title">
-        <span>🔍 题目检查结果</span>
-        <span class="badge" id="qBadge">待启动</span>
-      </div>
-      <div class="card-desc">
-        每道题展示AI的<strong>四维检查结果</strong>（题干 / 内容 / 配图 / 作答）。
-        每个维度有✅通过或❌不通过。底部可<strong>人工标注</strong>（✓通过 / ✗不通过），标注结果会自动存入反馈库供审查智能体学习。
-      </div>
-
-      <!-- 统计栏 -->
-      <div class="q-stats-bar" id="qStatsBar" style="display:none">
-        <div class="stat">总题数: <span class="num blue" id="sTotal">0</span></div>
-        <div class="stat">AI通过: <span class="num green" id="sPassed">0</span></div>
-        <div class="stat">AI不通过: <span class="num red" id="sFailed">0</span></div>
-        <div class="stat" style="margin-left:auto">已人工标注: <span class="num blue" id="sLabeled">0</span></div>
-      </div>
-
-      <!-- 题目列表 -->
-      <div id="questionList" style="max-height:800px;overflow-y:auto">
-        <div style="text-align:center;padding:60px 20px;color:#94a3b8">
-          <div style="font-size:48px;margin-bottom:14px">📋</div>
-          <div style="font-size:17px;font-weight:500;color:#64748b">尚未开始检查</div>
-          <div style="font-size:14px;margin-top:8px">请在左侧面板选择 <strong>版本/Unit/阶段</strong>，然后点击「▶ 开始检查」</div>
+        <div class="g-arrow">→</div>
+        <div class="g-step">
+          <div class="g-sno">3</div>
+          <div class="g-stitle">开始检测</div>
+          <div class="g-sdesc">点「解析并开始检测」自动答题+审查</div>
+        </div>
+        <div class="g-arrow">→</div>
+        <div class="g-step">
+          <div class="g-sno">4</div>
+          <div class="g-stitle">看结果</div>
+          <div class="g-sdesc">右侧日志看过程，六维面板人工复核</div>
         </div>
       </div>
+
+      <!-- 常用按钮速查 -->
+      <div class="g-sec">
+        <div class="g-sec-h"><span class="g-no">★</span>三个审查按钮怎么选<span class="g-pos">按需使用</span></div>
+        <div class="g-sec-b">
+          <p><b>快速检查</b> ＝ 手机切到题目页再点，从当前题逐题截图审查</p>
+          <p><b>开始检查</b> ＝ 自动导航到题目页逐题查（先配好 脚本版本/单元/阶段）</p>
+          <p><b>按脚本一键审查</b> ＝ 不连手机，只对照脚本文字</p>
+          <p><b>停止</b> ＝ 随时中断任务</p>
+        </div>
+      </div>
+
+      <!-- 人工复核提示 -->
+      <div class="g-tip"><b>结果有异议？</b>六维卡片上点「通过 / 不通过」人工标注，会反馈给 AI 学习，越用越准。手机画面 / 最近截图可点开放大核对。</div>
     </div>
   </div>
+</div>
 
-  <!-- ========== 右栏 ========== -->
-  <div>
-
-    <!-- 📤 脚本上传 -->
-    <div class="card">
-      <div class="card-title">📤 脚本上传</div>
-      <div class="card-desc">
-        上传公司提供的<strong>DOCX/DOC脚本文件</strong>（如"260717新湘鲁六上听力专项.docx"），系统自动解析并导入知识库，审查时会用这些内容核验题目是否正确。
-      </div>
-      <div class="upload-area" id="dropZone">
-        <div class="icon">+</div>
-        <div class="txt">拖拽 DOCX 或 DOC 文件到此处，或点下方按钮选择</div>
-        <input type="file" id="fileInput" accept=".docx,.doc" style="display:none">
-        <button class="btn btn-outline" onclick="document.getElementById('fileInput').click()">📂 选择文件 (.docx / .doc)</button>
-      </div>
-      <div id="uploadStatus" style="font-size:14px;color:#64748b;margin-bottom:8px;margin-top:6px"></div>
-      <div class="file-list" id="uploadList"></div>
-    </div>
-
-    <!-- 📚 知识库 -->
-    <div class="card">
-      <div class="card-title">📚 知识库</div>
-      <div class="card-desc">
-        教材知识点仓库，存储所有已上传脚本中的<strong>词汇、句型、语法</strong>。
-        审查时AI自动查证题目内容是否在教材范围内，避免超纲或错位。
-      </div>
-      <div id="kbContent">
-        <div class="info-row"><span class="key">总知识点数</span><span class="val" id="kbTotal">加载中</span></div>
-        <div class="info-row"><span class="key">覆盖年级</span><span class="val" id="kbGrades">—</span></div>
-      </div>
-    </div>
-
-    <!-- 🤖 审查智能体 -->
-    <div class="card">
-      <div class="card-title">🤖 审查智能体</div>
-      <div class="card-desc">
-        选择已上传的脚本文件，指定单元后一键审查。<br>
-        <strong>审查流程</strong>：AI逐题做四维检查 → 结果保存在中栏 → 可人工标注 → 智能体自动学习。
-      </div>
-
-      <span class="form-label">📄 脚本文件</span>
-      <span class="form-hint">选择要对照审查的DOCX</span>
-      <div class="input-group">
-        <select id="reviewDocx" style="width:100%"></select>
-      </div>
-
-      <span class="form-label">🔢 单元编号</span>
-      <span class="form-hint">0=审查整个脚本，6-9=指定Unit</span>
-      <div class="input-group">
-        <input type="number" id="reviewUnit" placeholder="例: 6 (0=全部)">
-        <button class="btn btn-primary" onclick="runReview()">▶ 审查</button>
-      </div>
-      <div id="reviewResult" style="margin-top:10px;font-size:14px;color:#64748b"></div>
-    </div>
-
-    <!-- 📊 智能体学习状态 -->
-    <div class="card">
-      <div class="card-title">📊 智能体学习状态</div>
-      <div class="card-desc">
-        人工标注数据统计：AI判断 vs 人工判定<strong>一致越多</strong> → 智能体越准确。
-        在中栏题目卡片底部点击「✓通过 / ✗不通过」即可标注。
-      </div>
-      <div id="agentStats">
-        <div class="info-row"><span class="key">反馈样本数</span><span class="val" id="fbTotal">0</span></div>
-        <div class="info-row"><span class="key">AI准确率</span><span class="val" id="fbAccuracy">—</span></div>
-        <div class="info-row"><span class="key">已人工标注</span><span class="val" id="fbLabeled">0</span></div>
-      </div>
-    </div>
-
-    <!-- 📸 截图预览 -->
-    <div class="card">
-      <div class="card-title">📸 截图预览</div>
-      <div class="card-desc">最近一题的APP真实截图，供肉眼核验AI判断是否准确。</div>
-      <div class="screenshot-box" id="screenshotArea"><div class="ph">等待巡检截图...</div></div>
-    </div>
-
-  </div>
+<!-- ===== 截图放大弹层 ===== -->
+<div class="shot-lightbox" id="shotLightbox" onclick="closeShotLightbox()">
+  <button class="lb-close" onclick="event.stopPropagation();closeShotLightbox()">关闭</button>
+  <img id="shotLbImg" src="" alt="截图放大">
 </div>
 
 <script>
-// ============================================================
-// GLOBALS
-// ============================================================
-let POLLING = false;
-let LOG_LAST = 0;
-function $(id) { return document.getElementById(id) }
+const $=id=>document.getElementById(id)
+function escHtml(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+let logLast=0,_devListTs=0,_lastLogs=0
 
-// 流程步骤定义
-const STEPS = [
-  {k:'0.回到首页', n:'0. 回到首页'},
-  {k:'1.启动APP',  n:'1. 启动APP'},
-  {k:'1.5关闭教程',n:'1.5 关闭教程'},
-  {k:'2.关闭广告', n:'2. 关闭广告'},
-  {k:'3.英语Tab',  n:'3. 英语Tab'},
-  {k:'3.5版本检查',n:'3.5 版本检查'},
-  {k:'4.专项突破', n:'4. 识别模块'},
-  {k:'5.听力专项', n:'5. 进入模块'},
-  {k:'6.逐题巡检', n:'6. 逐题巡检'},
-  {k:'7.生成报告', n:'7. 生成报告'}
-];
-
-function renderSteps() {
-  $('workflowList').innerHTML = STEPS.map((s,i)=>`
-    <div class="flow-step pending" id="st_${i}">
-      <div class="num">${i+1}</div>
-      <div class="content">
-        <div class="name">${s.n}</div>
-        <div class="detail" id="st_${i}_d">等待</div>
-      </div>
-    </div>`).join('');
+/* ========== 截图放大 ========== */
+function openShotLightbox(src){
+  const img=$('shotLbImg')
+  if(src) img.src=src
+  else{
+    const cur=$('screenshotArea').querySelector('img')
+    if(cur) img.src=cur.src
+  }
+  $('shotLightbox').classList.add('open')
 }
-function updStep(i,st,dt='') {
-  const el=$('st_'+i); if(!el)return;
-  el.className='flow-step '+st;
-  const d=$('st_'+i+'_d');
-  if(d) d.textContent=dt||(st==='running'?'进行中':st==='done'?'完成':st==='error'?'错误':'等待');
+function closeShotLightbox(){$('shotLightbox').classList.remove('open')}
+
+/* ========== 使用指南 ========== */
+function openGuide(){document.getElementById('guideMask').classList.add('open');try{localStorage.setItem('yyb_guide_seen','1')}catch(e){}}
+function closeGuide(){document.getElementById('guideMask').classList.remove('open')}
+
+/* ========== Tab 切换（每个 Tab 一屏，避免页面内嵌滚动条） ========== */
+function switchTab(n){
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('active', parseInt(b.dataset.tab)===n))
+  const aside=$('tabAside'), main=$('tabMain')
+  const on1=(n===1), on2=(n===2), on3=(n===3)
+  // Tab1 任务配置：aside 显示（内部两栏布局由 HTML 定义）；其余隐藏
+  aside.style.display=on1?'':'none'
+  // Tab2/3：main 显示
+  main.style.display=on1?'none':''
+  // Tab2 运行日志·手机画面：状态条/流程条/日志+截图左右分栏显示；审查结果隐藏
+  $('statusSec').style.display=on2?'':'none'
+  $('flowStrip').style.display=on2?'':'none'
+  $('logShotSec').style.display=on2?'':'none'
+  // Tab3 审查结果：全宽显示
+  $('revSec').style.display=on3?'':'none'
 }
 
-// ============================================================
-// POLLING
-// ============================================================
-async function poll() {
-  if(POLLING) return; POLLING=true;
-  while(true) {
-    try {
-      const s=await(await fetch('/api/status')).json();
-      updateDev(s);
-      const isRun=s.task_status.running;
-      $('hTaskTag').textContent=isRun?'运行中':'空闲';
-      $('runBtn').disabled=isRun;
+/* ========== 设备轮询 ========== */
+async function pollStatus(){
+  try{
+    const s=await(await fetch('/api/status')).json()
+    const on=s.device_connected
+    $('devDot').className='w-2.5 h-2.5 rounded-full '+(on?'bg-green-400':'bg-amber-400')
+    $('devStatus').textContent=on?(s.device_serial||'已连接'):'离线'
+    $('devMeta').textContent=(s.model||'')+(s.current_version?' · v'+s.current_version:'')
+    const now=Date.now()
+    if(now-_devListTs>8000){
+      _devListTs=now
+      const dl=await(await fetch('/api/devices')).json()
+      refreshDevSelect(dl.devices||[], s.device_serial||'')
+    }
+    const ts=s.task_status||{}
+    updateStopBtn(ts.running)
+    const busy=!!ts.running
+    $('runBtn').disabled=busy; $('quickBtn').disabled=busy; $('stopBtn2').disabled=!busy
+    if(ts.running){
+      $('kitchenPulse').className='w-2.5 h-2.5 rounded-full bg-red-500'
+      $('kitchenMsg').textContent='检测中… '+(ts.current_task||'')
+    }else if(!ts.current_task){
+      $('kitchenPulse').className='w-2.5 h-2.5 rounded-full bg-[#9aa5a0]'
+      $('kitchenMsg').textContent='就绪，等待开始…'
+      $('kitchenSub').textContent=''
+    }
+    $('taskBadge').textContent=ts.current_task||'空闲'
+  }catch(e){}
+  setTimeout(pollStatus,2000)
+}
+// ====== 文件上传 ======
+async function uploadFile(){
+  const f=$('uploadInput').files[0]; if(!f) return
+  const fd=new FormData(); fd.append('file',f)
+  await fetch('/api/upload',{method:'POST',body:fd})
+  loadUploadList()
+}
 
-      const f=await(await fetch('/api/inspect/state')).json();
-      updFlow(f); updQ(f); updShot(f);
-      await pollLog();
-    } catch(e) { console.warn(e) }
-    await new Promise(r=>setTimeout(r,1500));
+
+async function uploadViaFileInput(){
+  const f=$('fileInput').files[0]; if(!f) return
+  const fd=new FormData(); fd.append('file',f)
+  try{
+    const r=await fetch('/api/upload',{method:'POST',body:fd})
+    const j=await r.json().catch(()=>({}))
+    if(!r.ok){alert(j.error||'上传失败 ('+r.status+')');$('fileInput').value='';return}
+    if(typeof addLog==='function')addLog('success','📤 已上传脚本: '+f.name)
+    alert('✅ 上传成功: '+f.name)
+  }catch(e){alert('上传失败: '+e.message)}
+  $('fileInput').value=''
+  loadUploadList()
+}
+
+async function loadUploadList(){
+  const d=await(await fetch('/api/upload/list')).json()
+  $('planDocx').innerHTML=(d.files||[]).map(f=>`<option>${f.name}</option>`).join('')
+  $('uploadList').innerHTML=(d.files||[]).length
+    ? d.files.map(f=>`<div>${f.name} (${(f.size/1024).toFixed(0)}KB)</div>`).join('')
+    : '<span>暂无上传 — 可跳过，AI将自动生成答案</span>'
+}
+
+function refreshDevSelect(devs,cur){
+  const sel=$('devSelect'),focus=cur||sel.value
+  sel.innerHTML='<option value="">选择设备…</option>'+
+    devs.map(d=>`<option value="${d.serial}" ${d.serial===focus?'selected':''}>${d.serial}</option>`).join('')
+}
+async function selectDevice(serial){
+  try{
+    const r=await fetch('/api/device/select',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({serial})})
+    const j=await r.json()
+    if(j.error){alert('设备选择失败: '+j.error);return}
+    addLog('info',j.serial?'已切换设备: '+j.serial+'':'已恢复默认设备')
+  }catch(e){alert('设备选择失败: '+e.message)}
+}
+
+/* ========== 模块标签 ========== */
+function refreshModuleSel(){
+  const boxes=[...document.querySelectorAll('.mod-sel')]
+  const n=boxes.filter(b=>b.checked).length
+  $('moduleSelCount').textContent=n
+  boxes.forEach(b=>{
+    const lb=b.closest('.mod-tag')
+    if(lb){
+      const on=b.checked
+      lb.classList.toggle('bg-[#e8f5ee]',on);lb.classList.toggle('border-[#2d6a4f]',on);lb.classList.toggle('text-[#1b4332]',on);lb.classList.toggle('font-semibold',on)
+      lb.classList.toggle('bg-white',!on);lb.classList.toggle('border-[#e6dfd4]',!on);lb.classList.toggle('text-[#3d3226]',!on)
+    }
+  })
+}
+
+/* ========== 单元范围输入（空格/横线/逗号分隔 → 规范范围串） ========== */
+/* 输入 "1-5" / "1,3,5" / "1 3 5" / "1-3,5" → "1-5" / "1,3,5" / "1-3,5"；空 → ""（不限） */
+function normalizeUnits(str){
+  const tokens=String(str||'').split(/[\s,，]+/).filter(Boolean)
+  const vals=[]
+  tokens.forEach(t=>{
+    const m=t.trim().match(/^(\d+)(?:-(\d+))?$/)
+    if(!m) return
+    const a=parseInt(m[1]),b=m[2]?parseInt(m[2]):a
+    for(let u=a;u<=b;u++) vals.push(u)
+  })
+  const uniq=[...new Set(vals)].sort((a,b)=>a-b)
+  if(!uniq.length) return ''
+  const parts=[];let s=uniq[0],p=uniq[0]
+  for(let i=1;i<=uniq.length;i++){
+    const v=uniq[i]
+    if(v===p+1){p=v;continue}
+    parts.push(s===p?String(s):`${s}-${p}`)
+    s=p=v
+  }
+  return parts.join(',')
+}
+/* 「清空单元」按钮：清空输入框 */
+function clearUnitPicks(btn){
+  const card=btn.closest('.mod-card')||btn.closest('.mod-tag')
+  if(card) card.querySelectorAll('.unit-val').forEach(i=>i.value='')
+}
+
+/* ========== 日志（点击 + 审查合并流） ========== */
+function addLog(level,msg,evidence){
+  const t=new Date().toLocaleTimeString()
+  const el=$('logWrap')
+  const empty=el.querySelector('.log-empty')
+  if(empty) empty.style.display='none'
+  let html=`<div class="log-item ${level}"><span class="t">${t}</span>${msg}</div>`
+  if(evidence && Array.isArray(evidence) && evidence.length){
+    html=`<div class="log-item ${level} review-log">`
+    html+=`<span class="t">${t}</span>${msg}`
+    html+=`<div class="review-evidence">`
+    evidence.forEach(e=>{
+      const fieldLabel={stem:'题干',content:'内容',answer:'答案',options:'选项',audio:'音频'}[e.field]||e.field
+      html+=`<div class="evidence-row ${e.type}">`
+      html+=`<span class="evidence-field">${fieldLabel}</span>`
+      if(e.diff_html){html+=`<div class="evidence-diff">${e.diff_html}</div>`}
+      else if(e.diff){html+=`<div class="evidence-desc">${e.diff}</div>`}
+      html+=`<div class="evidence-pair"><span class="exp">预期: ${e.expected||'(无)'}</span><span class="act">实际: ${e.actual||'(无)'}</span></div>`
+      html+=`</div>`
+    })
+    html+=`</div></div>`
+  }
+  el.innerHTML+=html
+  el.scrollTop=el.scrollHeight
+}
+function clearLog(){
+  $('logWrap').innerHTML='<div class="log-empty"><span class="big">▦</span>日志已清空</div>'
+  $('serveWrap').innerHTML='';$('serveWrap').style.display='none'
+}
+async function pollLog(){
+  try{
+    const d=await(await fetch('/api/log')).json()
+    const arr = Array.isArray(d) ? d : (d.logs||[])
+    const logs=arr.slice(logLast)
+    if(logs.length) logLast+=logs.length
+    logs.forEach(l=>addLog(l.level,l.msg,l.evidence))
+  }catch(e){}
+  setTimeout(pollLog,1500)
+}
+
+/* ========== 文件上传 ========== */
+function uploadOrder(e){
+  const f=e.target.files[0]
+  if(!f) return
+  addLog('info','已选择任务清单: '+f.name+' ('+(f.size/1024).toFixed(1)+'KB)')
+  addLog('step','注：清单文件解析功能即将上线，当前请使用文字描述')
+}
+
+/* ========== 开始检测（多模块执行） ========== */
+async function startCooking(){
+  const orderText=($('orderInput').value||'').trim()
+  if(orderText && /(年级[上下]册|U\d+|单元|听力专项|口语训练|单元自检|知识过关|巧记单词|语音评测)/.test(orderText)){
+    applyOrder(orderText)
+    addLog('info','已按描述自动配置，可直接开始')
+  }
+  const version=$('setupVersion').value
+  const grade=$('setupGrade').value
+  const moduleConfigs=[]
+  document.querySelectorAll('.mod-sel:checked').forEach(cb=>{
+    const name=cb.value
+    const tag=cb.closest('.mod-tag')
+    if(!tag) return
+    if(name==='听力专项'){
+      const pWrap=tag.querySelector('.unit-val-p')
+      const tWrap=tag.querySelector('.unit-val-t')
+      moduleConfigs.push({name,units:pWrap?normalizeUnits(pWrap.value):'',testUnits:tWrap?normalizeUnits(tWrap.value):''})
+    }else{
+      const v=tag.querySelector('.unit-val')
+      moduleConfigs.push({name,units:v?normalizeUnits(v.value):''})
+    }
+  })
+  if(!moduleConfigs.length){alert('请至少选择一个模块（或在清单中说明）');return}
+  const modules=moduleConfigs.map(m=>m.name)
+  const unitsMap={}
+  moduleConfigs.forEach(m=>{
+    if(m.units) unitsMap[m.name]=m.units
+    if(m.testUnits) unitsMap['听力专项_测试']=m.testUnits
+  })
+  const hasUnits=Object.keys(unitsMap).length>0
+  // ★ 模块 → 上传脚本 自动匹配：有脚本的模块走 LLM 知识性审查，无脚本仅基础完整性
+  const docxs=getUploadedDocxs()
+  const {v:matchV,g:matchG}=curVersionGrade()
+  const docxMap={}
+  moduleConfigs.forEach(m=>{
+    const _d=matchDocxForModule(m.name,docxs,matchV,matchG)
+    if(_d) docxMap[m.name]=_d
+  })
+  let confirmMsg = '确认启动多模块检测？\n'
+  confirmMsg += `版本: ${version} | 年级: ${grade}\n`
+  confirmMsg += `模块: ${modules.join('、')} (共${modules.length}个)`
+  confirmMsg += '\n审查方式: '
+  confirmMsg += moduleConfigs.map(m=>docxMap[m.name]
+    ? `${m.name}=LLM知识性审查(脚本 ${docxMap[m.name]})`
+    : `${m.name}=基础完整性`).join('；')
+  if(hasUnits){
+    confirmMsg += '\n单元范围: '
+    confirmMsg += moduleConfigs.filter(m=>m.units).map(m=>`${m.name}=${m.units}`).join(', ')
+  }
+  if(orderText) confirmMsg += `\n清单描述: "${orderText.substring(0,80)}${orderText.length>80?'…':''}"`
+  if(!confirm(confirmMsg)) return
+  const btn=$('btnCook')
+  btn.disabled=true; btn.innerHTML='检测中…'
+  if(orderText){addLog('step','收到清单: '+orderText.substring(0,200)+(orderText.length>200?'…':''))}
+  addLog('step','开始分析清单 → 准备调用模块: '+modules.join('、'))
+  addLog('info','版本/年级: '+version+' '+grade)
+  if(hasUnits) addLog('info','单元范围: '+JSON.stringify(unitsMap))
+  try{
+    const body=hasUnits
+      ? {version,grade,modules,units:unitsMap,docxMap}
+      : {version,grade,modules,docxMap}
+    const r=await fetch('/api/modules/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+    const j=await r.json()
+    if(j.error){alert(j.error);btn.disabled=false;btn.innerHTML='解析并开始检测';return}
+    addLog('success','任务已启动，共 '+j.modules.length+' 个模块')
+    $('serveWrap').innerHTML='';$('serveWrap').style.display='none'
+    pollCookResult(modules)
+  }catch(e){alert('启动失败: '+e.message);btn.disabled=false;btn.innerHTML='解析并开始检测'}
+  finally{setTimeout(()=>{btn.disabled=false;btn.innerHTML='解析并开始检测'},4000)}
+}
+
+/* ========== 停止 ========== */
+async function stopCooking(){
+  const btn=$('btnStop')
+  if(btn) btn.disabled=true
+  try{
+    const r=await(await fetch('/api/modules/stop',{method:'POST'})).json()
+    if(r.message) addLog('warning','停止: '+r.message)
+  }catch(e){
+    addLog('error','停止请求发送失败: '+e.message)
+    if(btn) btn.disabled=false
+  }
+}
+function updateStopBtn(running){
+  const btn=$('btnStop')
+  if(!btn) return
+  btn.style.display = running ? 'inline-block' : 'none'
+  if(!running) btn.disabled = false
+}
+
+function pollCookResult(modules){
+  pollModulesResult(modules)
+}
+
+// ====== 多模块检测：结果轮询与汇总展示 ======
+async function pollModulesResult(modules){
+  let tried=0
+  const timer=setInterval(async()=>{
+    tried++
+    try{
+      const r=await(await fetch('/api/modules/result')).json()
+      if(r.done&&r.results){
+        clearInterval(timer)
+        renderServe(r)
+      }else if(tried>600){
+        clearInterval(timer)
+        addLog('warning','任务超时（10分钟），请手动查看设备状态')
+      }
+    }catch(e){}
+  },2000)
+}
+
+/* ========== 结果展示 ========== */
+async function renderServe(data){
+  const rs=data.results||{}
+  const names=Object.keys(rs)
+  const totalQ=names.reduce((s,n)=>s+(rs[n].q||0),0)
+  const okN=names.filter(n=>rs[n].ok).length
+  let html='<div class="serve-hdr">检测完成</div><div class="serve-cards">'
+  names.forEach(n=>{
+    const r=rs[n]; const ok=r.ok
+    html+=`<div class="serve-card ${ok?'ok':'fail'}">
+      <div class="sc-name">${n}</div>
+      <div class="sc-stat"><span class="sc-q">${r.q||0}<small> 题</small></span></div>
+      <div class="sc-detail">${ok?'完成':'失败'} · ${r.t||0}s${r.error?' · '+r.error:''}</div>
+    </div>`
+  })
+  html+=`</div><div class="serve-summary" id="serveSummary">
+    ${names.length} 个模块 · 成功 <b style="color:var(--ok-ink)">${okN}</b> 个 ·
+    累计答题 <b style="color:var(--ok-ink)">${totalQ}</b> 题 · ${data.version||''} ${data.grade||''}
+    <span id="errSummary"><span class="animate-pulse inline-block ml-2" style="color:var(--gray)">加载错题…</span></span>
+  </div>`
+  const el=$('serveWrap')
+  el.innerHTML=html
+  el.style.display='block'
+  el.scrollIntoView({behavior:'smooth'})
+  addLog('success','全部完成！'+names.length+'个模块，'+okN+'个成功，累计'+totalQ+'题')
+
+  // 异步加载错题汇总
+  try{
+    const er=await(await fetch('/api/errors/summary')).json()
+    const es=document.getElementById('errSummary')
+    if(!es) return
+    if(er.error){
+      es.innerHTML='<span class="ml-2" style="color:var(--gray);font-size:11px">错题数据不可用</span>'
+    }else if(er.has_errors){
+      es.innerHTML=`<span class="ml-2" style="color:var(--red);font-weight:600;font-size:12px">
+        不通过 <b>${er.failed_count}/${er.total_questions}</b> 题</span>
+        <a href="/trace" target="_blank" class="ml-2 text-[11px] px-2 py-0.5 rounded-lg border border-[#bc4742] text-[#bc4742] hover:bg-[#fce4e4] no-underline" style="font-weight:500">查看错题详情 →</a>`
+    }else{
+      es.innerHTML=`<span class="ml-2" style="color:var(--ok-ink);font-weight:600;font-size:12px">全部通过 ✓</span>`
+    }
+  }catch(e){ /* 静默处理 */ }
+}
+
+/* ========== 版本×年级配置表 ========== */
+let GRADE_TABLE=null, gradesLoaded=false
+async function loadGradeTable(){
+  try{
+    const r=await fetch('/api/version-grades')
+    const d=await r.json()
+    if(r.ok && d.table){
+      GRADE_TABLE=d.table
+      const gl=document.getElementById('gradeLoading')
+      if(gl) gl.textContent='配置表就绪'
+      renderGrades($('setupVersion').value, true)
+      return
+    }
+    throw new Error(d.error||'无配置表')
+  }catch(e){
+    addLog('warning','配置表未加载，改用动态读取: '+e.message)
+    loadGrades('', true)
+  }
+}
+function renderGrades(version, silent){
+  const sel=document.getElementById('setupGrade')
+  const gl=document.getElementById('gradeLoading')
+  if(GRADE_TABLE && GRADE_TABLE[version]){
+    const info=GRADE_TABLE[version]||{}
+    const grades=info.grades||[]
+    if(grades.length){
+      sel.innerHTML=grades.map(g=>`<option${g===info.current?' selected':''}>${g}</option>`).join('')
+      if(gl) gl.textContent=` 已同步${grades.length}个`
+      gradesLoaded=true
+      return true
+    }
+  }
+  loadGrades(version, silent)
+  return false
+}
+async function loadGrades(version, silent){
+  const gl=document.getElementById('gradeLoading')
+  const sel=document.getElementById('setupGrade')
+  if(!silent && gl) gl.textContent='读取中…'
+  sel.disabled=true
+  try{
+    const r=await fetch('/api/version-grades/current',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version:version||''})})
+    const d=await r.json()
+    if(!r.ok) throw new Error(d.error||'读取失败')
+    const grades=d.grades||[]
+    if(!grades.length) throw new Error('App 返回空年级列表')
+    sel.innerHTML=grades.map(g=>`<option${g===d.current_grade?' selected':''}>${g}</option>`).join('')
+    if(gl) gl.textContent=` 已同步App（${grades.length}个）`
+    gradesLoaded=true
+  }catch(e){
+    sel.innerHTML='<option selected>五年级上册</option><option>五年级下册</option><option>六年级上册</option><option>六年级下册</option><option>四年级下册</option><option>三年级下册</option>'
+    if(gl) gl.textContent=' !读取失败，用默认'
+    addLog('warning','动态年级读取失败: '+e.message)
+  }finally{
+    sel.disabled=false
   }
 }
 
-function updateDev(d) {
-  const on=d.device_connected;
-  $('hDeviceText').textContent=on?'已连接':'离线';
-  $('hDot').style.background=on?'#22c55e':'#ef4444';
-  const dt=$('statusDot'); dt.style.background=on?'#22c55e':'#ef4444';
-  $('statusText').textContent=on?'在线':'离线';
-  $('serialText').textContent=d.device_serial||'—';
-  $('modelText').textContent=d.model||'—';
-  if(d.current_version) $('currentVersionText').textContent=d.current_version;
+/* ========== 自然语言解析 ========== */
+const MODULE_NAMES=['听力专项','口语训练','单元自检','知识过关','巧记单词','语音评测']
+const VERSION_ALIAS={
+  '湘少版(2024审定)':'湘少版(2024审定)','湘少（2024审定）':'湘少版(2024审定)','湘少(2024审定)':'湘少版(2024审定)','湘少2024审定':'湘少版(2024审定)',
+  '湘少版':'湘少版','湘教':'湘少版','湘少':'湘少版',
+  '人教PEP':'人教版(PEP)','人教版(PEP)':'人教版(PEP)','人教PEP版':'人教版(PEP)',
+  '外研版(三起)':'外研版(三起)','外研三起':'外研版(三起)','外研版':'外研版(三起)',
+  '外研版(一起)':'外研版(一起)','外研一起':'外研版(一起)',
+  '人教版':'人教版','人教':'人教版',
+  '湘鲁':'湘鲁版','冀教':'冀教版','教科':'教科版','陕旅':'陕旅版','新概念':'新概念青少版','通用':'通用'
+}
+function parseOrder(text){
+  const res={version:'',grade:'',modules:[]}
+  if(!text) return res
+  let bestV='',bestLen=0
+  for(const k in VERSION_ALIAS){
+    if(text.includes(k) && k.length>bestLen){bestLen=k.length;bestV=VERSION_ALIAS[k]}
+  }
+  res.version=bestV
+  const gm=text.match(/([一二三四五六]年级[上下]册)/)
+  if(gm) res.grade=gm[1]
+  const pos=[]
+  for(const name of MODULE_NAMES){
+    let p=text.indexOf(name)
+    while(p!==-1){pos.push({idx:p,name});p=text.indexOf(name,p+name.length)}
+  }
+  pos.sort((a,b)=>a.idx-b.idx)
+  const units=[]
+  const ure=/U(\d+)(?:\s*[-到至]\s*(?:U)?(\d+))?|第\s*(\d+)\s*单元(?:\s*[-到至]\s*(?:第)?\s*(\d+))?/gi
+  let um
+  while((um=ure.exec(text))!==null){units.push({idx:um.index,from:um[1]||um[3],to:um[2]||um[4]})}
+  for(const p of pos){
+    const m={name:p.name,units:'',testUnits:'',sub:''}
+    let nearest=null
+    for(const u of units){
+      if(u.idx>p.idx && (!nearest||u.idx<nearest.idx)) nearest=u
+    }
+    if(nearest){m.units=nearest.to?`${nearest.from}-${nearest.to}`:`${nearest.from}`}
+    const nextPos=pos.find(q=>q.idx>p.idx)
+    const seg=text.slice(p.idx, nextPos?nextPos.idx:text.length)
+    if(!m.units){
+      for(const kw of ['期中评价','期末评价','期中','期末','AI检测']){
+        if(seg.includes(kw)){m.units=kw;break}
+      }
+    }
+    if(p.name==='听力专项'){
+      const after=text.slice(p.idx)
+      if(/测试|测验/.test(after) && !/练习/.test(after)) {m.testUnits=m.units;m.units=''}
+      for(const s of ['基础巩固','综合进阶','难点突破']){
+        if(after.includes(s)){m.sub=s;break}
+      }
+    }
+    res.modules.push(m)
+  }
+  return res
+}
+function applyOrder(text){
+  const r=parseOrder(text)
+  if(!r.version && !r.grade && !r.modules.length){
+    addLog('warning','未从描述中识别出版本/年级/模块，请检查表述')
+    return false
+  }
+  if(r.version){
+    const sv=$('setupVersion')
+    if([...sv.options].some(o=>o.value===r.version)){
+      sv.value=r.version
+      renderGrades(r.version,true)
+      addLog('info','识别版本: '+r.version)
+    }else{
+      addLog('warning','识别到版本但不在列表: '+r.version)
+    }
+  }
+  if(r.grade){
+    const sg=$('setupGrade')
+    if([...sg.options].some(o=>o.value===r.grade)){
+      sg.value=r.grade
+      addLog('info','识别年级: '+r.grade)
+    }else{
+      addLog('warning','识别到年级但不在该版本列表: '+r.grade)
+    }
+  }
+  if(r.modules.length){
+    document.querySelectorAll('.mod-sel').forEach(cb=>{cb.checked=false;cb.closest('.mod-tag').classList.remove('on')})
+    r.modules.forEach(m=>{
+      const cb=document.querySelector(`.mod-sel[value="${m.name}"]`)
+      if(!cb) return
+      cb.checked=true
+      cb.closest('.mod-tag').classList.add('on')
+      const tag=cb.closest('.mod-tag')
+      if(m.name==='听力专项' && tag){
+        const pWrap=tag.querySelector('.unit-val-p')
+        const tWrap=tag.querySelector('.unit-val-t')
+        if(pWrap && m.units) pWrap.value=m.units
+        if(tWrap && m.testUnits) tWrap.value=m.testUnits
+      }else{
+        const v=tag?tag.querySelector('.unit-val'):null
+        if(v && m.units) v.value=m.units
+      }
+      addLog('info','识别模块: '+m.name+(m.units?' U'+m.units:'')+(m.testUnits?' 测试U'+m.testUnits:'')+(m.sub?'（'+m.sub+'）':''))
+    })
+    refreshModuleSel()
+  }
+  return true
+}
+function tryParseOrder(){
+  const text=($('orderInput').value||'').trim()
+  if(!text){alert('请输入检测需求');return}
+  const ok=applyOrder(text)
+  addLog(ok?'success':'warning', ok?'已自动识别描述并配置好（版本/年级/模块/单元），确认后点「开始检测」':'未能从描述中识别出有效内容')
 }
 
-function updFlow(f) {
-  const steps=f.workflow_steps||[];
-  let done=0;
-  steps.forEach(s=>{
-    const i=STEPS.findIndex(w=>w.k===s.step);
-    if(i>=0){updStep(i,s.status,s.detail||'');if(s.status==='done')done++;}
-  });
-  $('flowBadge').textContent=done+'/'+STEPS.length;
+/* ========== 齿轮事件 ========== */
+document.addEventListener('click', function(ev){
+  const gear = ev.target.closest ? ev.target.closest('.unit-gear') : null
+  if(!gear) return
+  ev.preventDefault()
+  ev.stopPropagation()
+  const tag = gear.closest('.mod-tag')
+  if(!tag) return
+  const wrap = tag.querySelector('.unit-input-wrap')
+  if(!wrap) return
+  const show = wrap.style.display !== 'flex'
+  wrap.style.display = show ? 'flex' : 'none'
+  if(show) wrap.querySelector('input').focus()
+}, true)
+
+/* ============================================================
+   题目审查面板
+   ============================================================ */
+async function pollInspect(){
+  try{
+    const f=await(await fetch('/api/inspect/state')).json()
+    updFlowStrip(f)
+    updQ(f)
+    updWrong(f)
+    updShot(f)
+    const qs=f.questions||{}
+    const ids=Object.keys(qs)
+    const lb=ids.filter(id=>qs[id].human_label).length
+    if(lb>0){
+      const corr=ids.filter(id=>qs[id].human_label==='通过'&&qs[id].overall_passed).length
+              +ids.filter(id=>qs[id].human_label==='不通过'&&!qs[id].overall_passed).length
+      $('fbAccuracy').textContent=(corr/lb*100).toFixed(0)+'%'
+    }else{
+      $('fbAccuracy').textContent='—'
+    }
+  }catch(e){}
+  setTimeout(pollInspect,2000)
 }
 
-function updQ(f) {
-  const qs=f.questions||{},ids=Object.keys(qs).sort(),t=ids.length;
-  const lb=Object.values(qs).filter(q=>q.human_label).length;
-  const aipa=Object.values(qs).filter(q=>q.overall_passed).length;
-  const aifa=t-aipa;
+function updFlowStrip(f){
+  const steps=f.workflow_steps||[]
+  const el=$('flowStrip')
+  if(!steps.length){el.innerHTML='';return}
+  el.innerHTML=steps.map(s=>{
+    const st=s.status||'pending'
+    return `<div class="flow-item ${st}"><span class="fd"></span>${s.step||''}${s.detail?' · '+s.detail:''}</div>`
+  }).join('')
+}
 
-  $('qBadge').textContent=t?t+'题':'待启动';
-  const sb=$('qStatsBar');
-  if(t){sb.style.display='flex';$('sTotal').textContent=t;$('sPassed').textContent=aipa;$('sFailed').textContent=aifa;$('sLabeled').textContent=lb;}
-  else sb.style.display='none';
-
-  // 智能体学习状态
-  $('fbTotal').textContent=t;
-  $('fbLabeled').textContent=lb;
-  const corr=Object.values(qs).filter(q=>q.human_label==='通过'&&q.overall_passed).length
-            +Object.values(qs).filter(q=>q.human_label==='不通过'&&!q.overall_passed).length;
-  $('fbAccuracy').textContent=lb>0?(corr/lb*100).toFixed(0)+'%':'-';
-
-  if(!t) return;
-
+function updQ(f){
+  const qs=f.questions||{},ids=Object.keys(qs).sort(),t=ids.length
+  const lb=ids.filter(id=>qs[id].human_label).length
+  const aipa=ids.filter(id=>qs[id].overall_passed).length
+  const aifa=t-aipa
+  $('qBadge').textContent=t?t+'题':'待启动'
+  const sb=$('qStatsBar')
+  if(t){sb.classList.remove('hidden');$('sTotal').textContent=t;$('sPassed').textContent=aipa;$('sFailed').textContent=aifa;$('sLabeled').textContent=lb}
+  else sb.classList.add('hidden')
+  if(!t){
+    $('questionList').innerHTML=`<div class="text-center py-8 text-[#9aa5a0]">
+      <div class="text-[13.5px] font-medium text-[#6b7280] mb-1">尚未开始审查</div>
+      <div class="text-[11px]">点「快速检查」从手机当前页开查，或随自动化检测同步展示</div></div>`
+    return
+  }
   $('questionList').innerHTML=ids.map(qid=>{
-    const q=qs[qid],pa=q.overall_passed;
+    const q=qs[qid],pa=q.overall_passed,unrev=(pa===null||pa===undefined)
+    const dims=[
+      ['题干',q.ai_stem, q.stem_reason||''],
+      ['内容',q.ai_content, q.content_reason||''],
+      ['配图',q.ai_image, q.image_reason||''],
+      ['作答',q.ai_answer, q.answer_reason||''],
+      ['音频',q.ai_audio, q.audio_reason||''],
+      ['答错后',q.ai_post_error, q.post_error_reason||'']
+    ]
+    const dimHtml=dims.map(d=>{
+      const v=d[1], stCls=(v===true)?'pass':(v===false?'fail':'skip')
+      const stTxt=(v===true)?'通过':(v===false?'不通过':'未检')
+      return `<div class="q-dim ${stCls}"><div class="label">${d[0]}</div><div class="st">${stTxt}</div></div>`
+    }).join('')
+    // ★ 生成题目内容展示区域：显示题干文字 + 选项（让检查人员知道这题是什么）
+    const stemTxt=(q.stem||'').trim()
+    const optTxt=(q.options||'').trim()
+    let contentHtml=''
+    if(stemTxt&&stemTxt!==`第${q.idx}题（${q.question_type||''}）`){
+      contentHtml+=`<div class="q-stem">${escHtml(stemTxt)}</div>`
+    }
+    if(optTxt){
+      contentHtml+=`<div class="q-opts">选项: ${escHtml(optTxt)}</div>`
+    }
+    // 简化的原因展示：只显示不通过/异常的维度原因（一屏看清）
+    const failReasons=dims.filter(d=>d[1]===false||(d[1]===null&&d[2]&&!d[2].includes('无需检查')))
+    const reasonHtml=failReasons.length
+      ? `<div class="q-reasons">${failReasons.map(d=>`<div class="q-reason-line"><b>${d[0]}:</b> ${escHtml(d[2]||'?')}</div>`).join('')}</div>`
+      : `<div class="q-reasons ok">全部通过</div>`
+    const actHtml = q.human_label
+      ? `<span class="done-tag">已标注: ${q.human_label}${q.human_note?' · '+q.human_note:''}</span>`
+      : `<span class="action-label">人工判断</span>
+         <input class="note" id="nt_${qid}" placeholder="备注(选填)" onkeydown="if(event.key==='Enter')humanLabel('${qid}','通过')">
+         <button class="bg-[#2d6a4f] text-white rounded-lg px-3 py-1.5 text-[11.5px] font-semibold hover:bg-[#1b4332] transition" onclick="humanLabel('${qid}','通过')">通过</button>
+         <button class="bg-[#bc4742] text-white rounded-lg px-3 py-1.5 text-[11.5px] font-semibold hover:bg-[#a33b36] transition" onclick="humanLabel('${qid}','不通过')">不通过</button>`
     return `<div class="q-card">
       <div class="q-head">
-        <div class="qnum">Q${String(q.idx).padStart(2,'0')}</div>
+        <div class="qnum">Q${String(q.idx??qid).padStart(2,'0')}</div>
         <span class="qtype">${q.question_type||'?'}</span>
+        ${q.note?`<span class="ml-auto text-[9px] px-1.5 py-px rounded bg-[#e0f2fe] text-[#0369a1] truncate max-w-[130px]" title="${escHtml(q.note)}">📖 脚本审查</span>`:''}
         <div class="qstatus">
-          <span class="tag ${pa?'pass':'fail'}">AI:${pa?'通过':'不通过'}</span>
-          ${q.human_label
-            ?`<span class="tag ${q.human_label==='通过'?'human-pass':'human-fail'}">人:${q.human_label}</span>`
-            :`<span class="tag pending-label">待标注</span>`}
+          <span class="tag ${unrev?'pending-label':(pa?'pass':'fail')}">AI:${unrev?'未审查':(pa?'通过':'不通过')}</span>
+          ${q.human_label?`<span class="tag ${q.human_label==='通过'?'human-pass':'human-fail'}">人:${q.human_label}</span>`:''}
         </div>
       </div>
       <div class="q-body">
-        <div class="q-dims">
-          <div class="q-dim ${q.ai_stem?'pass':'fail'}"><div class="icon">${q.ai_stem?'✅':'❌'}</div><div class="label">题干</div></div>
-          <div class="q-dim ${q.ai_content?'pass':'fail'}"><div class="icon">${q.ai_content?'✅':'❌'}</div><div class="label">内容</div></div>
-          <div class="q-dim ${q.ai_image?'pass':(q.question_type&&q.question_type.includes('图片')?'fail':'skip')}">
-            <div class="icon">${q.ai_image?'✅':(q.question_type&&q.question_type.includes('图片')?'❌':'⏭')}</div>
-            <div class="label">配图</div></div>
-          <div class="q-dim ${q.ai_answer?'pass':'fail'}"><div class="icon">${q.ai_answer?'✅':'❌'}</div><div class="label">作答</div></div>
-        </div>
-        <div class="q-reasons">
-          <b>(1)题干:</b> ${q.stem_reason||'-'}<br>
-          <b>(2)内容:</b> ${q.content_reason||'-'}<br>
-          <b>(3)配图:</b> ${q.image_reason||'-'}<br>
-          <b>(4)作答:</b> ${q.answer_reason||'-'}
-        </div>
-        <div class="q-actions">
-          ${q.human_label
-            ? `<span class="done-tag">✅ 已标注: ${q.human_label}${q.human_note?' · '+q.human_note:''}</span>`
-            : `<span class="action-label">👤 人工判断</span>
-               <input class="note" id="nt_${qid}" placeholder="备注(选填)" onkeydown="if(event.key==='Enter')humanLabel('${qid}','通过')">
-               <button class="btn btn-success btn-sm" onclick="humanLabel('${qid}','通过')">✓ 通过</button>
-               <button class="btn btn-danger btn-sm" onclick="humanLabel('${qid}','不通过')">✗ 不通过</button>`
-          }
-        </div>
+        ${contentHtml?`<div class="q-content">${contentHtml}</div>`:''}
+        <div class="q-dims">${dimHtml}</div>
+        <div class="q-reasons">${reasonHtml}</div>
+        <div class="q-actions">${actHtml}</div>
       </div>
-    </div>`;
-  }).join('');
+    </div>`
+  }).join('')
 }
 
-function updShot(f) {
-  const qs=f.questions||{},ids=Object.keys(qs).sort();
-  if(!ids.length) return;
-  const q=qs[ids[ids.length-1]];
-  if(q.screenshot) $('screenshotArea').innerHTML=`<img src="/api/screenshot/${q.screenshot}" onerror="this.parentElement.innerHTML='<div class=ph>${q.screenshot}</div>'">`;
-}
-
-// ============================================================
-// LOG POLLING
-// ============================================================
-async function pollLog() {
-  try {
-    const l=await(await fetch('/api/log')).json();
-    $('logBadge').textContent=l.length;
-    if(l.length>LOG_LAST){
-      const b=$('logBox');
-      for(let i=LOG_LAST;i<l.length;i++){
-        const e=l[i],d=document.createElement('div');
-        d.className='log-entry';
-        d.innerHTML=`<span class="t">${e.time}</span><span class="lv ${e.level}">${e.level.toUpperCase()}</span><span>${e.msg}</span>`;
-        b.appendChild(d);
-      }
-      b.scrollTop=b.scrollHeight;LOG_LAST=l.length;
-    }
-  }catch(e){}
-}
-
-function addLog(level,msg){
-  const b=$('logBox'),d=document.createElement('div');
-  d.className='log-entry';
-  d.innerHTML=`<span class="t">${new Date().toTimeString().slice(0,8)}</span><span class="lv ${level}">${level.toUpperCase()}</span><span>${msg}</span>`;
-  b.appendChild(d);b.scrollTop=b.scrollHeight;
-}
-
-// ============================================================
-// ACTIONS
-// ============================================================
-async function startInsp() {
-  const v=$('inspectVersion').value,u=$('inspectUnit').value,s=$('inspectStage').value;
-  $('runBtn').disabled=true;
-  // 清空旧日志和题目结果
-  $('logBox').innerHTML=''; LOG_LAST=0;
-  $('questionList').innerHTML='<div style="text-align:center;padding:60px 20px;color:#94a3b8"><div style="font-size:48px;margin-bottom:14px">📋</div><div style="font-size:17px;font-weight:500;color:#64748b">正在启动检查...</div></div>';
-  addLog('info',`启动: ${v} U${u} ${s}`);
-  try{
-    const r=await(await fetch('/api/inspect/listening-run',{method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({version:v,unit:parseInt(u),stage:s})})).json();
-    if(r.error){alert(r.error);$('runBtn').disabled=false;return;}
-    addLog('success','✅ 任务已启动');STEPS.forEach((_,i)=>updStep(i,'pending',''));
-  }catch(e){alert('失败:'+e);$('runBtn').disabled=false;}
-}
-
-async function stopInsp() {
-  try{await fetch('/api/inspect/stop',{method:'POST'});addLog('warning','⏹ 停止信号已发送');}catch(e){}
-}
-
-async function humanLabel(qid,label) {
-  const n=$('nt_'+qid);const note=n?n.value:'';
-  try{
-    const r=await(await fetch('/api/inspect/human-label',{method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({qid,label,note})})).json();
-    if(r.success){addLog(label==='通过'?'success':'warning',`${qid}标注:${label}`);
-      const f=await(await fetch('/api/inspect/state')).json();updQ(f);}
-  }catch(e){addLog('error','标注失败:'+e);}
-}
-
-async function runReview() {
-  const d=$('reviewDocx').value,u=parseInt($('reviewUnit')?.value||'0');
-  $('reviewResult').innerHTML='⏳ 审查中...';
-  try{
-    const r=await(await fetch('/api/review/run',{method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({docx:d,unit:u,stage:'基础巩固'})})).json();
-    if(r.error){$('reviewResult').innerHTML=`<span style="color:red">❌ ${r.error}</span>`;return;}
-    $('reviewResult').innerHTML=`✅ ${r.total}题,通过${r.passed}(${r.avg_score})`;
-  }catch(e){$('reviewResult').innerHTML=`<span style="color:red">❌ ${e}</span>`;}
-}
-
-// ============================================================
-// UPLOAD
-// ============================================================
-$('fileInput').addEventListener('change',e=>up(e.target.files[0]));
-const dz=$('dropZone');
-dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('dragover')});
-dz.addEventListener('dragleave',e=>dz.classList.remove('dragover'));
-dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('dragover');if(e.dataTransfer.files.length)up(e.dataTransfer.files[0])});
-
-async function up(f) {
-  if(!f) return;
-  const fd=new FormData();fd.append('file',f);
-  $('uploadStatus').textContent=`⏳ 上传 ${f.name} ...`;
-  try{
-    const r=await(await fetch('/api/upload-docx',{method:'POST',body:fd})).json();
-    if(r.error){$('uploadStatus').innerHTML=`<span style="color:red">❌ ${r.error}</span>`;return;}
-    $('uploadStatus').innerHTML=`<span style="color:green">✅ ${r.message}（${r.entries_added||0}条知识点）</span>`;
-    loadUL();loadKB();
-  }catch(e){$('uploadStatus').innerHTML=`<span style="color:red">❌ ${e}</span>`;}
-}
-
-async function loadUL() {
-  const d=await(await fetch('/api/upload/list')).json(),sel=$('reviewDocx');
-  if(d.files&&d.files.length){
-    $('uploadList').innerHTML=d.files.map(f=>`<div class="item">${f.name} (${(f.size/1024).toFixed(0)}KB)</div>`).join('');
-    sel.innerHTML=d.files.map(f=>`<option>${f.name}</option>`).join('');
-  } else {
-    $('uploadList').innerHTML='<div style="color:#94a3b8;font-size:14px">暂无已上传的脚本文件</div>';
-    sel.innerHTML='<option>— 尚未上传 —</option>';
+function updShot(f){
+  const qs=f.questions||{},ids=Object.keys(qs).sort()
+  if(!ids.length) return
+  const q=qs[ids[ids.length-1]]
+  if(q.screenshot){
+    $('screenshotArea').innerHTML=`<img src="/api/screenshot/${q.screenshot}" onclick="openShotLightbox('/api/screenshot/${q.screenshot}')" onerror="this.parentElement.innerHTML='<div class=ph>截图加载失败: ${q.screenshot}</div>'">`
   }
 }
 
-async function loadKB() {
+/* ========== 错题日志（位置 / 原因 / 修改建议，AI 检测中实时更新） ========== */
+const WRONG_SUGGEST={
+  题干:'按脚本核对并修正题干文字',
+  内容:'核对选项内容/数量是否与脚本一致',
+  配图:'核对配图与脚本是否一致',
+  作答:'核对答案与脚本是否一致',
+  音频:'检查听力音频控件与内容',
+  答错后:'验证答错后的反馈流程'
+}
+
+/* ========== 实时错题报告弹层（借鉴队友：错题日志「📑 查看报告」） ========== */
+function openLiveReport(){
+  const mask=$('liveReportMask');
+  mask.classList.remove('hidden'); mask.classList.add('flex');
+  refreshLiveReport();
+}
+function closeLiveReport(){
+  const mask=$('liveReportMask');
+  mask.classList.add('hidden'); mask.classList.remove('flex');
+}
+function refreshLiveReport(){
+  fetch('/api/errors/live-status').then(r=>r.json()).then(st=>{
+    const frame=$('liveReportFrame');
+    if(st.ready){
+      $('liveReportMeta').textContent=`已审查 ${st.total} 题 · 不通过 ${st.failed} 题 · 实时更新`;
+      $('liveReportDownload').href='/api/errors/live';
+      frame.src='/api/errors/live?t='+Date.now();
+    }else{
+      $('liveReportMeta').textContent='尚无报告，请先运行一次审查';
+      $('liveReportDownload').removeAttribute('href');
+      frame.srcdoc='<div style="font-family:sans-serif;color:#9aa5a0;padding:40px;text-align:center;">暂无错题报告<br>运行一次审查后，这里会实时出现可折叠的错题卡片</div>';
+    }
+  }).catch(()=>{
+    const frame=$('liveReportFrame');
+    frame.srcdoc='<div style="font-family:sans-serif;color:#9aa5a0;padding:40px;text-align:center;">加载失败</div>';
+  });
+}
+function fmtLoc(id,q){
+  // 期望格式：模块 + 单元 +（子模块）+ 题号，如「听力专项 · U6 · 基础巩固 · 第3题」
+  const s=String(id||'')
+  const parts=[]
+  // 模块名：auto- 前缀（来自答题循环）→ 用 question_type；否则取 qid 第一段
+  if(s.startsWith('auto-')){
+    parts.push(String(q.question_type||'题目').replace(/[（(].*?[）)]/g,'').replace(/测试$/,''))
+  }else{
+    const first=s.split('-')[0]
+    parts.push(first||'题目')
+  }
+  // 单元 U\d+
+  const um=s.match(/U(\d+)/)
+  if(um) parts.push('U'+um[1])
+  // 子模块（阶段）
+  const sm=(s.match(/(基础巩固|综合进阶|难点突破)/)||[])[1]
+  if(sm) parts.push(sm)
+  // 题号
+  const qm=s.match(/[Qq]0*(\d+)/)
+  parts.push('第'+(qm?qm[1]:(q.idx||'?'))+'题')
+  return parts.join(' · ')
+}
+let _wrongSig=''  // 错题列表内容签名（防每2秒重绘导致滚动抖动）
+function updWrong(f){
+  const el=$('wrongList'); if(!el) return
+  const qs=f.questions||{}
+  const wrong=Object.keys(qs).filter(id=>{
+    const q=qs[id]
+    return q.overall_passed===false || q.question_type==='错题截图'
+  }).sort().map(id=>({id,q:qs[id]}))
+  $('wrongBadge').textContent=wrong.length
+  // ★ 内容签名无变化 → 不重绘（保住滚动位置，用户能翻到底部看最后一题）
+  const sig=wrong.length+':'+wrong.map(({id,q})=>
+    id+'|'+q.overall_passed+'|'+(q.human_label||'')+'|'+
+    (q._score?(q._score.score+'_'+q._score.checked_count):'')+'|'+(q.screenshot||q._marked||'')
+  ).join(',')
+  if(sig===_wrongSig) return
+  _wrongSig=sig
+  if(!wrong.length){
+    el.innerHTML='<div class="text-center py-6 text-[#9aa5a0] bg-[#faf8f3] rounded-lg text-[11px]">暂无错题<br>（检测通过或尚未开始）</div>'
+    return
+  }
+  const scTop=el.scrollTop  // 记录滚动位置，重绘后恢复
+  const cleanR=s=>String(s||'').replace(/^\[不通过\]\s*\|\s*/,'')
+  const sevLbl={high:'高',medium:'中',low:'低'}
+  const sevCls={high:'bg-[#fee2e2] text-[#bc4742]',medium:'bg-[#fef3c7] text-[#92400e]',low:'bg-[#e0e7ff] text-[#3730a3]'}
+  el.innerHTML=wrong.map(({id,q})=>{
+    // 1) 位置
+    const locHtml=`<div class="flex items-center gap-2 px-2.5 py-1.5 bg-[#fef2f2]">
+      <span class="w-1.5 h-1.5 rounded-full bg-[#bc4742] shrink-0"></span>
+      <span class="text-[11px] font-semibold text-[#7f1d1d] truncate" title="${escHtml(id)}">${escHtml(fmtLoc(id,q))}</span>
+    </div>`
+
+    // 来自答题流程真实答错的题（已截图，无六维判定）→ 简版卡片
+    if(q.question_type==='错题截图'){
+      const shot=q.screenshot
+      return `<div class="border border-[#fecaca] rounded-lg overflow-hidden bg-white">
+        ${locHtml}
+        <div class="px-2.5 py-2 text-[11px] text-[#475569] space-y-1">
+          <div><span class="font-semibold text-[#bc4742]">原因：</span>答题答错（已截图）</div>
+          <div><span class="font-semibold text-[#2d6a4f]">建议：</span>人工核对错题画面，针对薄弱点重点巩固</div>
+          ${shot?`<img src="/api/screenshot/${shot}" class="w-full max-h-[150px] object-contain bg-[#faf8f3] rounded-md border border-[#e6dfd4] cursor-pointer" onclick="openShotLightbox('/api/screenshot/${shot}')" onerror="this.style.display='none'">`:''}
+        </div>
+      </div>`
+    }
+
+    // 2) 评分 + 评分依据（透明：已检查N维·通过M维 → M/N×100）
+    const sc=q._score
+    let scoreHtml=''
+    if(sc&&sc.checked_count>0){
+      const pct=sc.score
+      const barCls=pct>=80?'bg-[#2d6a4f]':(pct>=60?'bg-[#e9c46a]':'bg-[#bc4742]')
+      const txtCls=pct>=60?'text-[#2d6a4f]':'text-[#bc4742]'
+      scoreHtml=`<div class="bg-[#faf8f3] rounded-md px-2.5 py-2">
+        <div class="flex items-center gap-2">
+          <span class="text-[21px] font-bold leading-none ${txtCls}">${pct}</span>
+          <span class="text-[10px] text-[#9aa5a0]">/100</span>
+          <div class="flex-1 h-1.5 bg-[#e8e4da] rounded-full overflow-hidden"><div class="h-full ${barCls} rounded-full" style="width:${pct}%"></div></div>
+        </div>
+        <div class="text-[10px] text-[#6b7280] mt-1">评分依据：已检查 <b>${sc.checked_count}</b> 维 · 通过 <b>${sc.passed_count}</b> 维 → ${sc.formula}</div>
+      </div>`
+    }else if(sc){
+      scoreHtml=`<div class="bg-[#faf8f3] rounded-md px-2.5 py-2 text-[10.5px] text-[#6b7280]">${sc.formula}</div>`
+    }
+
+    // 3) 错误维度溯源清单（同学C的 checks：维度/严重度/原因/建议）
+    const tr=q._trace
+    let dimsHtml=''
+    if(tr&&tr.checks&&tr.checks.length){
+      dimsHtml=`<div class="space-y-1.5">${tr.checks.map(c=>{
+        const reason=cleanR(c.reason)||'未提供具体原因'
+        return `<div class="border border-[#fecaca] rounded-md px-2 py-1.5 bg-[#fffbfb]">
+          <div class="flex items-center gap-1.5">
+            <span class="text-[11px] font-semibold text-[#7f1d1d]">${escHtml(c.dimension)}</span>
+            <span class="text-[9px] px-1.5 py-px rounded ${sevCls[c.severity]||sevCls.low}">${sevLbl[c.severity]||c.severity}</span>
+            <span class="ml-auto text-[9.5px] text-[#bc4742]">未通过</span>
+          </div>
+          <div class="text-[10.5px] text-[#475569] mt-1">原因：${escHtml(reason)}</div>
+          <div class="text-[10.5px] text-[#2d6a4f] mt-0.5">建议：${escHtml(cleanR(c.suggestion)||'核对脚本修正')}</div>
+        </div>`
+      }).join('')}</div>`
+    }else{
+      // 兼容旧数据（无 trace 字段）→ 从维度 reason 提取
+      const dims=[['题干',q.ai_stem,q.stem_reason],['内容',q.ai_content,q.content_reason],
+        ['图片',q.ai_image,q.image_reason],['答案',q.ai_answer,q.answer_reason],
+        ['音频',q.ai_audio,q.audio_reason],['答错检查',q.ai_post_error,q.post_error_reason]]
+      const fails=dims.filter(d=>d[1]===false)
+      dimsHtml=fails.length
+        ? `<div class="space-y-1.5">${fails.map(d=>`<div class="border border-[#fecaca] rounded-md px-2 py-1.5 bg-[#fffbfb]">
+            <div class="flex items-center gap-1.5"><span class="text-[11px] font-semibold text-[#7f1d1d]">${escHtml(d[0])}</span><span class="ml-auto text-[9.5px] text-[#bc4742]">未通过</span></div>
+            <div class="text-[10.5px] text-[#475569] mt-1">原因：${escHtml(cleanR(d[2])||'未提供')}</div>
+            <div class="text-[10.5px] text-[#2d6a4f] mt-0.5">建议：${escHtml(WRONG_SUGGEST[d[0]]||'核对脚本修正')}</div>
+          </div>`).join('')}</div>`
+        : '<div class="text-[10.5px] text-[#6b7280]">综合判定不通过</div>'
+    }
+
+    // 4) 题目溯源截图（红框标注图优先，其次原图）
+    const shot=q._marked||q.screenshot
+    const shotHtml=shot?`<img src="/api/screenshot/${shot}" class="w-full max-h-[150px] object-contain bg-[#faf8f3] rounded-md border border-[#e6dfd4] cursor-pointer" onclick="openShotLightbox('/api/screenshot/${shot}')" onerror="this.style.display='none'">`:''
+
+    // 5) 题干 / 标准答案（script_context）
+    const ctx=tr&&tr.script_context
+    const ctxHtml=(ctx&&(ctx.stem||ctx.answer))
+      ? `<div class="text-[10.5px] text-[#6b7280] border-t border-dashed border-[#e6dfd4] pt-1.5 space-y-0.5">
+          ${ctx.stem?`<div><b>题干：</b>${escHtml(String(ctx.stem).slice(0,80))}</div>`:''}
+          ${ctx.answer?`<div><b>标准答案：</b>${escHtml(ctx.answer)}</div>`:''}
+        </div>`:''
+
+    return `<div class="border border-[#fecaca] rounded-lg overflow-hidden bg-white">
+      ${locHtml}
+      <div class="px-2.5 py-2 space-y-2">
+        ${scoreHtml}
+        ${dimsHtml}
+        ${shotHtml}
+        ${ctxHtml}
+      </div>
+    </div>`
+  }).join('')
+  el.scrollTop=scTop  // 恢复滚动位置（防重绘抖动）
+}
+
+/* ========== 模块 → 上传脚本 自动匹配 ========== */
+// 模块名 → 脚本文件名关键词（顺序匹配，第一个命中即选）
+const MOD_KEYWORDS={
+  '听力专项':['听力专项','听力'],
+  '口语训练':['口语','朗读'],
+  '单元自检':['单元自检','单元检测'],
+  '知识过关':['知识过关','知识','重点词汇','重点句型'],
+  '巧记单词':['巧记','单词'],
+  '语音评测':['语音评测','语音']
+}
+function getSelectedModules(){
+  return [...document.querySelectorAll('.mod-sel')].filter(c=>c.checked).map(c=>c.value)
+}
+function getUploadedDocxs(){
+  // 从 reviewDocx select 的 options 取当前上传脚本名（由 loadUploadList / 上传回调填充）
+  const sel=$('reviewDocx'); if(!sel) return []
+  return [...sel.options].map(o=>o.text||'').filter(Boolean)
+}
+// 版本/年级 select 值 → 脚本文件名关键词（数组：简称+全称；表外值用 _Aliases 自动推导，绝不放空）
+const VER_KEYWORDS={
+  '湘少版':['湘少','湘少版'],'湘少版(2024审定)':['湘少','湘少版'],'湘鲁版':['湘鲁','湘鲁版'],'新湘鲁版':['湘鲁','湘鲁版'],
+  '人教版':['人教','人教版'],'人教版(PEP)':['人教','人教版'],'外研版(三起)':['外研','外研版'],'外研版(一起)':['外研','外研版'],
+  '冀教版':['冀教','冀教版'],'教科版':['教科','教科版'],'陕旅版':['陕旅','陕旅版'],'新概念青少版':['新概念']
+}
+const GRADE_KEYWORDS={
+  '一年级上册':['一上','一年级上册'],'一年级下册':['一下','一年级下册'],
+  '二年级上册':['二上','二年级上册'],'二年级下册':['二下','二年级下册'],
+  '三年级上册':['三上','三年级上册'],'三年级下册':['三下','三年级下册'],
+  '四年级上册':['四上','四年级上册'],'四年级下册':['四下','四年级下册'],
+  '五年级上册':['五上','五年级上册'],'五年级下册':['五下','五年级下册'],
+  '六年级上册':['六上','六年级上册'],'六年级下册':['六下','六年级下册']
+}
+/* 表外版本兜底：去括号、去“版”尾 → 如 湘鲁版(2024) → 湘鲁版/湘鲁；表外值仍用选项值本身匹配 */
+function _verAliases(v){
+  const base=String(v||'').replace(/（.*）|\(.*\)/g,'').replace(/版$/,'').trim()
+  return [...new Set([String(v),base])].filter(Boolean)
+}
+/* 表外年级兜底：一年级上册 → 一上（简称推导） */
+function _gradeAliases(g){
+  const m=String(g||'').match(/^([一二三四五六])年级([上下])册$/)
+  return m?[String(g),m[1]+m[2]]:[String(g)]
+}
+function matchDocxForModule(mod,docxs,version,grade){
+  const kws=MOD_KEYWORDS[mod]||[mod]
+  // ★ 关键：未知版本/年级绝不允许“不限制”——表里有就用表，表外就用选项值本身推导匹配
+  const verKws=(version&&version!=='通用')?(VER_KEYWORDS[version]||_verAliases(version)):[]
+  const gKws=grade?(GRADE_KEYWORDS[grade]||_gradeAliases(grade)):[]
+  const hasK=d=>kws.some(k=>d.includes(k))
+  const verOk=d=>!verKws.length||verKws.some(k=>d.includes(k))
+  const gOk=d=>!gKws.length||gKws.some(k=>d.includes(k))
+  // ★ 严格匹配：模块 + 版本 + 年级 三者全部命中才算「有脚本」
+  //   （不做降级兜底，避免版本/年级不对的脚本被误用，导致 LLM 对照错误）
+  return docxs.find(d=>hasK(d)&&verOk(d)&&gOk(d))||''
+}
+function curVersionGrade(){
+  return {v:$('setupVersion')?$('setupVersion').value:'',g:$('setupGrade')?$('setupGrade').value:''}
+}
+function updateModuleMatch(){
+  const list=$('moduleMatchList'); if(!list) return
+  const mods=getSelectedModules()
+  const docxs=getUploadedDocxs()
+  const {v,g}=curVersionGrade()
+  if(!mods.length){
+    list.innerHTML='<div class="text-[#9aa5a0] text-center py-2 bg-[#faf8f3] rounded-lg">尚未选模块</div>'
+    $('matchSummary').textContent=''
+    return
+  }
+  list.innerHTML=mods.map(m=>{
+    const d=matchDocxForModule(m,docxs,v,g)
+    if(d){
+      return `<div class="flex items-center gap-1.5 px-2 py-1 bg-[#f0f7f4] border border-[#bbf7d0] rounded">
+        <span class="text-[#2d6a4f]">✓</span>
+        <span class="text-[#2d6a4f] font-semibold">${escHtml(m)}</span>
+        <span class="text-[#9aa5a0]">→</span>
+        <span class="text-[#475569] truncate" title="${escHtml(d)}">${escHtml(d)}</span>
+        <span class="ml-auto text-[10px] text-[#2d6a4f]">LLM</span>
+      </div>`
+    }
+    return `<div class="flex items-center gap-1.5 px-2 py-1 bg-[#fef3c7] border border-[#fde68a] rounded">
+      <span class="text-[#92400e]">—</span>
+      <span class="text-[#92400e] font-semibold">${escHtml(m)}</span>
+      <span class="text-[#9aa5a0]">→</span>
+      <span class="text-[#92400e]">无匹配脚本</span>
+      <span class="ml-auto text-[10px] text-[#92400e]">仅基础</span>
+    </div>`
+  }).join('')
+  const hit=mods.filter(m=>matchDocxForModule(m,docxs,v,g)).length
+  $('matchSummary').textContent=`已匹配 ${hit}/${mods.length} 模块`
+}
+// 监听模块勾选变化 → 重新计算匹配
+document.querySelectorAll && setTimeout(()=>{
+  document.querySelectorAll('.mod-sel').forEach(c=>c.addEventListener('change',updateModuleMatch))
+},0)
+
+/* ========== 审查动作 ========== */
+function inspStageAllChange(){
+  const all=$('inspStageAll')
+  document.querySelectorAll('.inspStageCb').forEach(c=>c.checked=!!(all&&all.checked))
+}
+function getInspStages(){
+  const sel=[...document.querySelectorAll('.inspStageCb')].filter(c=>c.checked).map(c=>c.value)
+  // 一个都没勾 = 全部
+  return sel.length?sel:['基础巩固','综合进阶','难点突破']
+}
+async function startInsp(){
+  const v=$('inspectVersion').value,u=$('inspectUnit').value
+  const stages=getInspStages()
+  // ★ 按当前选中模块自动匹配上传的脚本：选中模块的第一个匹配 docx → 后端 LLM 审查
+  const mods=getSelectedModules()
+  const docxs=getUploadedDocxs()
+  const {v:cv,g:cg}=curVersionGrade()
+  const matchedMod=mods.length?mods[0]:''
+  const docx=matchedMod?matchDocxForModule(matchedMod,docxs,cv,cg):''
+  $('runBtn').disabled=true
+  addLog('info',`开始检查: ${v} U${u} ${stages.join('、')} · ${matchedMod||'未选模块'} ${docx?'(脚本 '+docx+' 启用 LLM)':'(无脚本，仅基础完整性)'}`)
   try{
-    const d=await(await fetch('/api/knowledge/status')).json();
+    const r=await(await fetch('/api/inspect/listening-run',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({version:v,unit:parseInt(u),stages,docx})})).json()
+    if(r.error){alert(r.error);$('runBtn').disabled=false;return}
+    addLog('success','审查任务已启动')
+  }catch(e){alert('失败:'+e);$('runBtn').disabled=false}
+}
+async function stopInsp(){
+  try{
+    const r=await(await fetch('/api/inspect/stop',{method:'POST'})).json()
+    addLog('warning','停止审查: '+(r.message||'信号已发送'))
+  }catch(e){addLog('error','停止失败:'+e)}
+}
+async function quickInsp(){
+  $('quickBtn').disabled=true
+  // ★ 按当前选中模块自动匹配上传的脚本（核心：模块→脚本→LLM 审查）
+  const mods=getSelectedModules()
+  const docxs=getUploadedDocxs()
+  const {v,g}=curVersionGrade()
+  const matchedMod=mods.length?mods[0]:''
+  const docx=matchedMod?matchDocxForModule(matchedMod,docxs,v,g):($('reviewDocx')?$('reviewDocx').value:'')
+  const unit=$('reviewUnit')?$('reviewUnit').value:''
+  const withAI=docx&&docx!=='— 尚未上传 —'&&docx!==''
+  addLog('info',`快速检查: ${matchedMod||'未选模块'} · ${withAI?'有脚本，启用 LLM 六维审查':'无脚本，仅做基础完整性'}`)
+  try{
+    const r=await(await fetch('/api/inspect/quick-run',{method:'POST',
+      headers:{'Content-Type': 'application/json'},
+      body:JSON.stringify({docx:withAI?docx:'',unit:unit?parseInt(unit):0})})).json()
+    if(r.error){alert(r.error);$('quickBtn').disabled=false;return}
+    addLog('success','快速检查任务已启动')
+  }catch(e){alert('失败:'+e);$('quickBtn').disabled=false}
+}
+async function humanLabel(qid,label){
+  const n=$('nt_'+qid);const note=n?n.value:''
+  try{
+    const r=await(await fetch('/api/inspect/human-label',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({qid,label,note})})).json()
+    if(r.success){
+      addLog(label==='通过'?'success':'warning',qid+' 标注: '+label)
+      const f=await(await fetch('/api/inspect/state')).json();updQ(f)
+    }
+  }catch(e){addLog('error','标注失败:'+e)}
+}
+async function runReview(){
+  // ★ 优先用选中模块自动匹配的脚本，否则用 reviewDocx 手动选中的脚本
+  const mods=getSelectedModules()
+  const docxs=getUploadedDocxs()
+  const {v,g}=curVersionGrade()
+  let d=''
+  if(mods.length){d=matchDocxForModule(mods[0],docxs,v,g)}
+  if(!d)d=$('reviewDocx').value
+  const u=parseInt($('reviewUnit')?.value||'0')
+  if(!d||d==='— 尚未上传 —'){
+    $('reviewResult').innerHTML='<span style="color:var(--red)">请先选中模块并上传匹配脚本，或在下方下拉手动选脚本</span>'
+    return
+  }
+  $('reviewResult').innerHTML='审查中…'
+  try{
+    const r=await(await fetch('/api/review/run',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({docx:d,unit:u,stage:'基础巩固'})})).json()
+    if(r.error){$('reviewResult').innerHTML=`<span style="color:var(--red)">失败: ${r.error}</span>`;return}
+    $('reviewResult').innerHTML=`完成: ${r.total}题, 通过${r.passed}（${r.avg_score}）`
+  }catch(e){$('reviewResult').innerHTML=`<span style="color:var(--red)">失败: ${e}</span>`}
+}
+
+/* ========== 上传 / 知识库 ========== */
+$('fileInput').addEventListener('change',e=>up(e.target.files[0]))
+const dz=$('dropZone')
+dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('dragover')})
+dz.addEventListener('dragleave',e=>dz.classList.remove('dragover'))
+dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('dragover');if(e.dataTransfer.files.length)up(e.dataTransfer.files[0])})
+
+async function up(f){
+  if(!f) return
+  const fd=new FormData();fd.append('file',f)
+  $('uploadStatus').textContent='上传 '+f.name+' …'
+  try{
+    const r=await(await fetch('/api/upload-docx',{method:'POST',body:fd})).json()
+    if(r.error){$('uploadStatus').innerHTML=`<span style="color:var(--red)">失败: ${r.error}</span>`;return}
+    $('uploadStatus').innerHTML=`<span style="color:var(--ok-ink)">${r.message}（${r.entries_added||0}条知识点）</span>`
+    loadUL();loadKB()
+  }catch(e){$('uploadStatus').innerHTML=`<span style="color:var(--red)">失败: ${e}</span>`}
+}
+async function loadUL(){
+  try{
+    const d=await(await fetch('/api/upload/list')).json(),sel=$('reviewDocx')
+    if(d.files&&d.files.length){
+      $('uploadList').innerHTML=d.files.map(f=>`<div class="item">${f.name} (${(f.size/1024).toFixed(0)}KB)</div>`).join('')
+      sel.innerHTML=d.files.map(f=>`<option>${f.name}</option>`).join('')
+    }else{
+      $('uploadList').innerHTML='<div style="color:var(--gray-2);font-size:11px">暂无已上传的脚本文件</div>'
+      sel.innerHTML='<option>— 尚未上传 —</option>'
+    }
+    updateModuleMatch()  // 脚本列表更新后刷新模块→脚本自动匹配
+  }catch(e){}
+}
+async function loadVersions(){
+  try{
+    const d=await(await fetch('/api/versions/available')).json()
+    const sel=$('inspectVersion')
+    const cur=sel.value
+    const vs=d.versions||[]
+    if(vs.length){
+      sel.innerHTML=vs.map(v=>`<option${v===cur?' selected':''}>${v}</option>`).join('')
+      if(cur&&vs.includes(cur)) sel.value=cur
+    }
+  }catch(e){}
+}
+async function loadKB(){
+  try{
+    const d=await(await fetch('/api/knowledge/status')).json()
     if(d.total_entries>0){
-      $('kbTotal').textContent=d.total_entries+'条';
-      $('kbGrades').textContent=d.grades.join(', ');
-    } else {
-      $('kbTotal').textContent='空';
+      $('kbTotal').textContent=d.total_entries+'条'
+      $('kbGrades').textContent=d.grades.join(', ')
+    }else{
+      $('kbTotal').textContent='空'
     }
   }catch(e){}
 }
 
-// ============================================================
-// INIT
-// ============================================================
-renderSteps();loadUL();loadKB();poll();
+/* ========== 启动 ========== */
+document.querySelectorAll('.mod-sel').forEach(b=>b.addEventListener('change',refreshModuleSel))
+pollStatus()
+pollLog()
+pollInspect()
+refreshModuleSel()
+loadGradeTable()
+loadUL()
+loadKB()
+loadVersions()
+
+// ====== 首次访问自动弹出使用指南（看过之后不再自动弹） ======
+try{
+  if(!localStorage.getItem('yyb_guide_seen')){ setTimeout(()=>openGuide(),600) }
+}catch(e){}
+
+// ====== 默认切到 Tab1 任务配置 ======
+switchTab(1)
+
+// ====== 截图实时预览轮询 (每2秒) ======
+let _shotTimer=null
+async function pollShot(){
+  try{
+    const t=Date.now()
+    const r=await fetch('/api/screenshot/latest?t='+t)
+    if(r.ok){
+      const blob=await r.blob()
+      const url=URL.createObjectURL(blob)
+      const cur=$('screenshotArea').querySelector('img')
+      if(cur&&cur.src===url) return
+      $('screenshotArea').innerHTML=`<img src="${url}" alt="实时截图" onclick="openShotLightbox()">`
+    }
+  }catch(e){}
+}
+function startShotPolling(){
+  if(_shotTimer) clearInterval(_shotTimer)
+  _shotTimer=setInterval(pollShot,2000)
+  pollShot()
+}
+startShotPolling()
 </script>
 </body>
 </html>
