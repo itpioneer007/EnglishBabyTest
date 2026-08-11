@@ -242,11 +242,11 @@ def _enter_unit(d, unit_num):
                 break
         if row:
             row_y = row.bounds[1]
-            # 在该行附近找"去答题"按钮
+            # 在该行附近找"去答题"按钮（★ 避开顶部遮挡区 y<350：版本条覆盖会导致点击无效）
             for e in elements:
                 if (e.text or "").strip() == "去答题":
                     dy = abs(e.bounds[1] - row_y)
-                    if dy < 300:  # 同行
+                    if dy < 300 and e.bounds[1] >= 350:  # 同行 + 不在遮挡区
                         try:
                             e.click()
                         except Exception:
@@ -259,8 +259,9 @@ def _enter_unit(d, unit_num):
         S_swipe(d, 540, 1800, 540, 600, 0.3); time.sleep(0.4)
 
     # 方式2（兜底）：按第 unit_num 个"去答题"按钮（原逻辑）
+    # ★ 过滤顶部遮挡区（y<350，版本条覆盖点击无效）
     btns = [e for e in (d.xpath('//*[@text!=""]').all() or [])
-            if (e.text or "").strip() == "去答题"]
+            if (e.text or "").strip() == "去答题" and e.bounds[1] >= 350]
     btns.sort(key=lambda e: e.bounds[1])
     idx = unit_num - 1
     for _ in range(5):
@@ -268,7 +269,7 @@ def _enter_unit(d, unit_num):
             break
         S_swipe(d, 540, 1800, 540, 600, 0.3); time.sleep(0.4)
         btns = [e for e in (d.xpath('//*[@text!=""]').all() or [])
-                if (e.text or "").strip() == "去答题"]
+                if (e.text or "").strip() == "去答题" and e.bounds[1] >= 350]
         btns.sort(key=lambda e: e.bounds[1])
     if idx >= len(btns):
         print(f"    ❌ 找不到 U{unit_num} 的去答题")
@@ -312,23 +313,40 @@ def run_module(d, units=None):
     _desc = "、".join(str(x) for x in _units)
     print(f"\n📋 单元自检 · 目标: {_desc} · {len(_units)}项")
 
-    # 进入单元自检：主页直接有入口（新版主页改版后"单元自检"入口直接可见）
-    # 先确保在 App 主页（防止退过头到桌面）
-    for _ in range(4):
+    # 进入单元自检：主页直接有入口（新版主页"单元自检"入口第一屏可见）
+    # 先确保回到 App 主页（★ 修复：不能用 switch_textbook_tv/教材精学/专项突破 判定主页，
+    #   这些 id 在多个中间页面都存在 → 误判"已在主页"→ 找不到入口。
+    #   直接以「单元自检」入口文本为准，back 循环到出现为止；退过头到桌面则冷启动）
+    _home_ok = False
+    for _ in range(8):
         try:
             xml = d.dump_hierarchy()
         except Exception:
             xml = ""
-        if "switch_textbook_tv" in xml or "教材精学" in xml or "专项突破" in xml:
+        # ★ 中途退出确认弹窗（答题中途退出会弹）→ 先点「确定退出」再继续 back
+        if '确定退出' in xml:
+            try:
+                d(text='确定退出').click()
+                print("    ⏏ 退出中途答题弹窗")
+                time.sleep(1.2)
+            except Exception:
+                pass
+            continue
+        if "单元自检" in xml and ("听力专项" in xml or "口语训练" in xml):
+            _home_ok = True
             break
         if "游戏助手" in xml and "英语学习" in xml:
-            d.app_start(APP_PACKAGE)
-            time.sleep(4)
+            d.app_start(APP_PACKAGE); time.sleep(4)
+            _home_ok = True
             break
         d.press("back"); time.sleep(0.6)
+    if not _home_ok:
+        # back 8 次仍未到主页 → 冷启动兜底
+        d.app_start(APP_PACKAGE); time.sleep(4)
+        _home_ok = True
 
     if not d(text="单元自检").exists(timeout=2):
-        # 主页下滑找专项突破下的单元自检
+        # 主页下滑找（新版主页单元自检一般在第一屏，兜底下滑一次）
         found = False
         for _ in range(6):
             if d(text="单元自检").exists(timeout=1):

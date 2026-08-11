@@ -42,10 +42,11 @@ class YingYuBaoQuestion:
 
 
 def _split_opts(t: str) -> list:
-    """拆分选项行：'A. farm B. food C. fish' / 'A. little\t\tB. letter\t\tC. light' → ['A. farm','B. food','C. fish']"""
+    """拆分选项行：'A. farm B. food C. fish' / 'A. little\t\tB. letter\t\tC. light'
+    / 'A.  B.  C.  D.  E.'（匹配题图片占位） → ['A. farm','B. food',...]"""
     if not t:
         return []
-    parts = re.split(r'\s+(?=[A-C]\.)', t.strip())
+    parts = re.split(r'\s+(?=[A-F]\.)', t.strip())   # ★ 支持 A-E（匹配题 5 图占位），最多 A-F
     return [p.strip() for p in parts if p.strip()]
 
 
@@ -66,13 +67,19 @@ def parse(filepath: str) -> list[YingYuBaoQuestion]:
     pending = None          # 当前正在累积的题
     current_unit = 0
     current_stage = ""
+    global_counter = 0      # ★ 全局题号：跨阶段连续递增（脚本每个阶段内部题号从1重数，不能直接用）
     # 大题标题（一、二、...）用正则跳过；题号是全局连续数字
 
     def _finalize(q):
+        nonlocal global_counter
         if q is None:
             return
         q.unit = current_unit
         q.stage = current_stage
+        # ★ 修复：global_idx 必须全局唯一（qid 用它，重复会导致不同阶段的同号题互相覆盖，
+        #   面板只显示最先写入的十几题）；stage_idx 保留脚本原文的阶段内序号
+        global_counter += 1
+        q.global_idx = global_counter
         questions.append(q)
 
     for p in doc.paragraphs:
@@ -108,7 +115,7 @@ def parse(filepath: str) -> list[YingYuBaoQuestion]:
             num = int(m.group(1))
             pending = YingYuBaoQuestion(
                 unit=current_unit, stage=current_stage,
-                stage_idx=num, global_idx=num,
+                stage_idx=num,   # ★ global_idx 由 _finalize 统一分配（全局唯一）
             )
             if re.match(r'^[A-C]\.', content):
                 # 题干缺失：数字后直接是选项

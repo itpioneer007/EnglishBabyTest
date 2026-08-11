@@ -494,9 +494,12 @@ class ReportExporter:
         html_doc = self._render_live_html(qs, meta)
 
         version = meta.get("version", "未知版本")
-        unit = meta.get("unit", "?")
-        stage = meta.get("stage", "?")
+        unit = str(meta.get("unit", "全部"))
+        stage = str(meta.get("stage", "全部"))
         date_str = datetime.now().strftime("%Y%m%d")
+        # ★ 防御：清洗 Windows 非法字符（<>:"/\|?* 等），避免 WinError 123
+        _clean = lambda s: re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", s).strip() or "全部"
+        version, unit, stage = _clean(version), _clean(unit), _clean(stage)
         out_dir = self.save_dir / version / f"U{unit}_{stage}_{date_str}"
         out_dir.mkdir(parents=True, exist_ok=True)
 

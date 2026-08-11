@@ -22,7 +22,7 @@ review_agent.py — 英语宝审查智能体 (v3: 6维检查)
     agent.trainer.export_report()
 """
 
-import sys, json, time
+import sys, json, time, re
 from pathlib import Path
 from datetime import datetime
 from dataclasses import dataclass, field, asdict
@@ -284,9 +284,9 @@ class ReviewAgent:
         )
 
         if not screenshot or not Path(screenshot).exists():
-            # ★ 纯文字审查模式（不连手机 / 无截图）：只检查文字可查的维度，
-            #   依赖截图的维度（配图/音频/答错后）标记 skip，而不是全判 0 分
-            rr = self._review_text_only(r, q)
+            # ★ LLM 脚本审查：无截图时也用大模型基于脚本信息逐维判定，
+            #   理由具体有说服力；配图/音频/答错后标 skip（需截图）
+            rr = self._review_script_llm(r, q)
             q.type_2 = _orig_type2
             return rr
 
@@ -453,6 +453,166 @@ class ReviewAgent:
                 and r.overall_score >= 0.7
             )
 
+        return r
+
+    # ============================================================
+    # ★ LLM 脚本审查（无截图时也调用大模型，理由有说服力）
+    # ============================================================
+    def _review_script_llm(self, r: QuestionReview, q) -> QuestionReview:
+        """
+        把脚本完整信息（题型/题干/选项/答案/录音/知识点）交给 LLM 逐维判断，
+        理由由 LLM 给出（具体、说明依据）；不通过时 LLM 附带「建议修改：」。
+        依赖截图的维度（配图/音频/答错后）标记 skip（未检，不计入不通过）。
+        """
+        def _llm_dim(task, payload, dim_filter):
+            chk = CheckResult()
+            try:
+                role = self._build_role_prompt(q)
+                kb = self._build_knowledge_context(q)
+                prompt = self.trainer.build_enhanced_prompt(
+                    role + "\n\n---\n\n"
+                    f"【任务: {task}】\n题型: {q.type_2 or '未知'}\n{payload}\n{kb}\n"
+                    f"请依据以上脚本信息判断（无需截图），理由要具体说明判断依据：\n"
+                    f"回答格式: [通过/不通过 | 置信度:0-100] | 理由" + REVIEW_SUGGEST_SUFFIX,
+                    dim_filter=dim_filter
+                )
+                answer = self.llm.ask(prompt)
+                # ★ LLM 调用失败（key 无效/401/欠费等）→ 标未检，不误判不通过
+                if ('LLM 调用失败' in answer or '401' in str(answer)[:80]
+                        or 'Unauthorized' in str(answer)):
+                    chk.method = "skip"
+                    chk.details.append(f"LLM 调用失败（请检查 .env 的 LLM_API_KEY/VISION_API_KEY）：{str(answer)[:90]}")
+                    return chk
+                self._apply_verdict(chk, answer)
+            except Exception as e:
+                chk.error = str(e)
+                chk.method = "skip"   # LLM 调用失败 → 未检，不误判不通过
+                chk.details.append(f"LLM 调用失败: {e}")
+            return chk
+
+        qtype = q.type_2 or ""
+        is_audio_q = ("听音" in qtype or "听力" in qtype or "音频" in qtype)
+        is_image_q = ("图片" in qtype or "看图" in qtype)
+        is_judge_q = ("判断" in qtype)            # ★ 听音判断图片/信息/正误：T/F 判断题
+        is_match_q = ("匹配" in qtype)            # ★ 听音匹配图片：答案映射格式 1-5 C E D A B
+        stem_txt = (q.stem or "").strip()
+        opt_str = ", ".join(q.options) if q.options else "(脚本未列出选项/图片选项)"
+
+        # (1) 题干：脚本有题干 → LLM 审文字质量；脚本无题干 → 听音/图片题标 skip（题干在音频/图中）
+        if stem_txt:
+            if is_judge_q:
+                # ★ 判断题机制：题干是「待判断的陈述句」，与录音不一致是正常出题（学生听录音判断对错）
+                r.stem_check = _llm_dim(
+                    "检查判断题题干是否完整可读、有无明显错别字。注意：判断题题干是待判断的陈述句，"
+                    "与录音原文不一致属于正常出题机制（学生需听录音判断该陈述对错），"
+                    "绝不能因『题干与录音不一致/相矛盾』判不通过；题干存在且可读即判通过。",
+                    f"题干: {stem_txt}\n题型: {qtype}（判断题，答案格式为 T/F）", "stem")
+            else:
+                r.stem_check = _llm_dim(
+                    "检查题干数据是否完整：是否缺失、是否短到无法理解、是否有明显错别字。"
+                    "不要对题干措辞风格/出题设计作价值判断（如'与题型不匹配'这类主观批评不算问题）；"
+                    "题干存在且可读即判通过。",
+                    f"题干: {stem_txt}", "stem")
+        elif is_audio_q or is_image_q:
+            r.stem_check = CheckResult(passed=False, score=0.0, method="skip",
+                                       error="脚本未提供题干文字（听音/图片题题干在音频或图中）",
+                                       details=["脚本未提供题干：听音/图片题题干在音频/图中，需连手机核对"])
+        else:
+            r.stem_check = _llm_dim("检查题干是否缺失或过短（脚本题干为空）",
+                                    "题干: (空) 请判断脚本题干是否异常缺失", "stem")
+
+        # (2) 内容/选项
+        # ★ 判断题：无 A/B/C 文字选项（T/F 作答）是正常格式 → skip 无法文字核对
+        if is_judge_q:
+            r.content_check = CheckResult(passed=False, score=0.0, method="skip",
+                                          error="判断题以 T/F 作答、无文字选项，跳过内容核对",
+                                          details=["判断题无 A/B/C 文字选项（T/F 作答），内容维度无需文字核对"])
+        else:
+            # ★ 图片题：脚本里图片选项只有占位（"A."/"B." 无文字或空），图片在 App 中，
+            #   无法文字核对 → 标 skip（未检）而非不通过
+            _opt_clean = [str(o).strip().rstrip('.') for o in (q.options or [])]
+            _is_placeholder = (not _opt_clean) or all(
+                o in ("A", "B", "C", "D", "E", "F") for o in _opt_clean)
+            if is_image_q and _is_placeholder:
+                r.content_check = CheckResult(passed=False, score=0.0, method="skip",
+                                              error="图片题选项为占位（A./B. 无文字），需连手机截图核对",
+                                              details=["图片题选项是图片占位（A./B.），脚本无法提供图片描述，需连手机截图核对"])
+            else:
+                r.content_check = _llm_dim(
+                    "检查选项数据是否完整自洽（只做数据层面检查）：选项是否缺失/为空、数量是否明显异常"
+                    "（选择题应有2-4个选项）、答案是否在选项范围内。"
+                    "★ 不要判断『选项内容与录音/题干是否语义匹配』——听音题录音在音频中，纯文字无法核对语义，"
+                    "且答语题选项为完整句子、判断题无选项等都是正常格式；"
+                    "不要对超纲词汇、出题难度、题干措辞作价值判断（那是教研职责）。"
+                    "选项齐全且答案在范围内即判通过。",
+                    f"题型: {qtype or '未知'}\n选项: {opt_str}\n答案: {q.answer or '(未给出)'}", "content")
+
+        # (3) 作答
+        if q.answer:
+            if is_judge_q:
+                # ★ 判断题答案固定 T/F，用规则判定（更快更准，不依赖 LLM）
+                _ans = str(q.answer).strip().upper()
+                if _ans in ("T", "F", "TRUE", "FALSE", "对", "错", "√", "×"):
+                    r.answer_check = CheckResult(passed=True, score=1.0, method="text",
+                                                 details=[f"判断题答案 {_ans} 有效（T/F 格式）"])
+                else:
+                    r.answer_check = CheckResult(passed=False, score=0.0, method="text",
+                                                 error="判断题答案应为 T/F",
+                                                 details=[f"判断题答案异常: {q.answer}（应为 T/F）"])
+            elif is_match_q:
+                # ★ 匹配题答案映射格式（如 1-5 C E D A B）：规则判定（更快更准，不依赖 LLM）
+                _am = re.match(r'^(\d+)-(\d+)\s+([A-Za-z][\sA-Za-z]*)$', str(q.answer).strip())
+                if _am:
+                    _letters = [x for x in _am.group(3).split() if x]
+                    _n_q = int(_am.group(2))
+                    _ok = len(_letters) == _n_q and all(len(x) == 1 and x.isalpha() for x in _letters)
+                    if _ok:
+                        r.answer_check = CheckResult(passed=True, score=1.0, method="text",
+                                                     details=[f"匹配题答案映射 {q.answer} 有效（{_n_q}小题 ↔ {_n_q}字母）"])
+                    else:
+                        r.answer_check = CheckResult(passed=False, score=0.0, method="text",
+                                                     error="匹配题答案映射异常",
+                                                     details=[f"匹配题答案 {q.answer}：映射字母数与小题数不一致或格式异常"])
+                else:
+                    r.answer_check = _llm_dim(
+                        "检查匹配题答案映射是否有效：答案格式如『1-5 C E D A B』（小题号-字母序列），"
+                        "匹配题无 A/B/C 常规文字选项属于正常格式（选项是图片）；"
+                        "只需检查映射字母数是否与小题数一致、字母是否在合理范围内（A-D等），格式规范即判通过；"
+                        "不要因『无文字选项』判不通过。",
+                        f"题型: {qtype}\n答案: {q.answer}\n录音: {q.recording or '(未提供)'}", "answer")
+            else:
+                r.answer_check = _llm_dim(
+                    "检查答案数据是否有效：答案是否为空、是否在选项范围内、格式是否与题型匹配"
+                    "（选择题应在A-D内）。仅做数据层面检查，不做超纲/难度等价值判断；"
+                    "答案存在且格式合理即判通过。",
+                    f"题型: {qtype or '未知'}\n选项: {opt_str}\n答案: {q.answer}\n录音: {q.recording or '(未提供)'}", "answer")
+        else:
+            r.answer_check = CheckResult(passed=False, score=0.0, method="text",
+                                         error="脚本未给出答案", details=["脚本未提供答案"])
+
+        # (4)(5)(6) 配图/音频/答错后：无截图 → skip（未检）
+        for cr, name in ((r.image_check, "配图"), (r.audio_check, "音频"),
+                         (r.post_error_check, "答错后")):
+            cr.passed = False
+            cr.score = 0.0
+            cr.method = "skip"
+            cr.error = f"{name}检查需手机截图（脚本审查跳过）"
+            cr.details.append(f"脚本审查: {name}未检测（需连手机截图）")
+
+        # 知识库检查
+        r.knowledge_check = self._verify_knowledge(q)
+
+        # overall：与 _qreview_to_state 判定一致（有 False → 不通过；checked 全 True → 通过；否则 None）
+        checked = [c for c in (r.stem_check, r.content_check, r.answer_check) if c.method != "skip"]
+        if checked:
+            if any(c.passed is False for c in checked):
+                r.overall_passed = False
+            elif all(c.passed for c in checked):
+                r.overall_passed = True
+            else:
+                r.overall_passed = None
+        else:
+            r.overall_passed = None   # 全未检（如 LLM 不可用）→ 未审，不误判不通过
         return r
 
     # ============================================================
@@ -641,14 +801,29 @@ class ReviewAgent:
             False  — 明确判定为不通过
             None   — AI返回无法解析的判定（需人工复核）
         """
-        a = a.strip()
+        a = (a or "").strip()
         if not a:
             return None  # ★ 空白返回 → 不确定
-        if '不通过' in a:
-            return False
-        if '通过' in a or '匹配' in a or '一致' in a or '正确' in a:
+        # ★ 修复：LLM 解释里可能引用"不通过"（如"无需因…判不通过"），不能全文包含判断。
+        #   ① 优先解析格式标记 [通过 | 置信度:96] / [不通过 | 置信度:xx]
+        _m = re.search(r'\[(通过|不通过)\s*[|｜，,、\]]', a)
+        if _m:
+            return _m.group(1) == '通过'
+        # ② 找"不通过"与"独立通过"（(?<!不) 排除"不通过"里的"通过"子串）的位置
+        _ff = a.find('不通过')
+        _fp_m = re.search(r'(?<!不)通过', a)
+        _fp = _fp_m.start() if _fp_m else -1
+        if _fp >= 0 and _ff >= 0:
+            return _fp < _ff          # 独立"通过"在前 → True
+        if _fp >= 0:
             return True
-        if '无' in a and ('错误' in a or '问题' in a or '异常' in a):
+        if _ff >= 0:
+            # "不通过"前有"无需/不应/不要"等否定 → 实际含义是"通过"
+            if re.search(r'(?:无需|不应|不要|不会|不能|不是|不必)[^，。；、]{0,12}不通过', a):
+                return True
+            return False
+        # ③ 其他积极词兜底
+        if '匹配' in a or '一致' in a or '正确' in a:
             return True
         # ★ 无法解析 → 返回 None（不默认为通过！）
         return None
@@ -840,7 +1015,7 @@ class ReviewAgent:
                 f"1. 题目文字是否完整、无截断、无模糊?\n"
                 f"2. 是否有错别字或拼写错误?\n"
                 f"3. 文字内容是否与脚本一致?\n\n"
-                f"回答格式: [通过/不通过 | 置信度:0-100] | 理由" + REVIEW_SUGGEST_SUFFIX + REVIEW_SUGGEST_SUFFIX,
+                f"回答格式: [通过/不通过 | 置信度:0-100] | 理由" + REVIEW_SUGGEST_SUFFIX,
                 dim_filter="stem"
             )
             answer = self.llm.ask(prompt, image_path=shot)
@@ -868,7 +1043,7 @@ class ReviewAgent:
                 f"2. 正确答案是否合理? (录音内容是否确实对应正确答案)\n"
                 f"3. 涉及的词汇/句型是否在该年级教材范围内?\n"
                 f"4. 如果有超出教材范围的词汇, 是否合理?(合理扩展可接受)\n\n"
-                f"回答格式: [通过/不通过 | 置信度:0-100] | 理由" + REVIEW_SUGGEST_SUFFIX + REVIEW_SUGGEST_SUFFIX,
+                f"回答格式: [通过/不通过 | 置信度:0-100] | 理由" + REVIEW_SUGGEST_SUFFIX,
                 dim_filter="content"
             )
             answer = self.llm.ask(prompt, image_path=shot)
@@ -962,7 +1137,7 @@ class ReviewAgent:
                 f"   - 拖拽/连线类题型: 检查可拖拽元素是否存在\n"
                 f"3. 交互方式是否符合该题型的预期?(如听音选图应有图片可点, 听音选词应有文字选项)\n"
                 f"4. 对于听音题型, 录音播放按钮是否可见?\n\n"
-                f"回答格式: [通过/不通过 | 置信度:0-100] | 理由" + REVIEW_SUGGEST_SUFFIX + REVIEW_SUGGEST_SUFFIX,
+                f"回答格式: [通过/不通过 | 置信度:0-100] | 理由" + REVIEW_SUGGEST_SUFFIX,
                 dim_filter="answer"
             )
             answer = self.llm.ask(prompt, image_path=shot)
@@ -1008,7 +1183,7 @@ class ReviewAgent:
                 f"2. 音频控件是否被遮挡或截断？\n"
                 f"3. 播放按钮位置是否合理（通常靠近题目顶部）？\n"
                 f"4. 是否有任何异常（如灰色不可点击状态）？\n\n"
-                f"回答格式: [通过/不通过 | 置信度:0-100] | 理由" + REVIEW_SUGGEST_SUFFIX + REVIEW_SUGGEST_SUFFIX,
+                f"回答格式: [通过/不通过 | 置信度:0-100] | 理由" + REVIEW_SUGGEST_SUFFIX,
                 dim_filter="audio"
             )
             answer = self.llm.ask(prompt, image_path=shot)

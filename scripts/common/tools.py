@@ -442,12 +442,18 @@ def smart_find_unit_row(d, target, click_text="去答题", max_pages=8):
             row_y = row.bounds[1]
             for e in elements:
                 if (e.text or "").strip() == click_text:
-                    if abs(e.bounds[1] - row_y) < 300:   # 同行
+                    # ★ 同行判断（行距放宽）+ 避开顶部遮挡区（y<350 是页面顶部版本条/工具条覆盖区，
+                    #   点击会被拦截无效，如单元自检列表 Unit1 被"当前版本"条挡住）
+                    if abs(e.bounds[1] - row_y) < 300 and e.bounds[1] >= 350:
                         try:
                             e.click()
                         except Exception:
                             d.click((e.bounds[0]+e.bounds[2])//2, (e.bounds[1]+e.bounds[3])//2)
                         return True
+                    elif abs(e.bounds[1] - row_y) < 300:
+                        # 同行但被遮挡（y<350）→ 记下，下滑后重试（可能滚出遮挡区）
+                        print(f"    ⚠ {click_text} 在遮挡区(y={e.bounds[1]})，下滑重试…")
+                        break
         # 未找到 → 下滑翻页
         try:
             S_swipe(d, 540, 1800, 540, 600, 0.3)

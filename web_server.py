@@ -2539,8 +2539,8 @@ _inspection_state = {
     "workflow_steps": [],     # 当前运行的步骤
     "docx": "",
     "version": "未知版本",
-    "unit": "?",
-    "stage": "?",
+    "unit": "全部",
+    "stage": "全部",   # ★ 不能用 "?"（Windows 文件名非法字符）
     "live_report_path": "",    # ★ 实时错题报告(report_live.html)路径（借鉴队友）
 }
 
@@ -2571,8 +2571,8 @@ def _live_regen_error_report():
         qs_all = list(state.get("questions", {}).values())
         meta = {
             "version": state.get("version", "未知版本"),
-            "unit": state.get("unit", "?"),
-            "stage": state.get("stage", "?"),
+            "unit": state.get("unit", "全部"),
+            "stage": state.get("stage", "全部"),   # ★ "?" 是 Windows 非法字符，会 WinError 123
             "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
             "total": len(qs_all),
         }
@@ -2717,6 +2717,12 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list):
     if total % 10 == 0:
         try:
             _save_inspection_state()
+        except Exception:
+            pass
+    # ★ 检测过程中出现错题 → 触发实时错题报告（前端「📑 查看报告」实时更新）
+    if overall is False:
+        try:
+            _live_regen_error_report()
         except Exception:
             pass
 
@@ -3051,10 +3057,16 @@ def api_inspect_state():
     _score（透明评分明细，说明评分怎么来的）、_marked（红框标注图URL）。
     """
     # 浅拷贝一层，避免污染 _inspection_state（_score/_trace/_marked 只进响应）
+    # ★ 必须带全 version/unit/stage/docx/live_report_path（前端"查看报告"/分组展示依赖）
     state = {
         "questions": {k: dict(v) for k, v in (_inspection_state.get("questions") or {}).items()},
         "workflow_steps": _inspection_state.get("workflow_steps", []),
         "current_question_idx": _inspection_state.get("current_question_idx", 0),
+        "version": _inspection_state.get("version", ""),
+        "unit": _inspection_state.get("unit", ""),
+        "stage": _inspection_state.get("stage", ""),
+        "docx": _inspection_state.get("docx", ""),
+        "live_report_path": _inspection_state.get("live_report_path", ""),
     }
     try:
         _enrich_inspect_state(state)
@@ -4064,7 +4076,7 @@ def api_modules_stop():
 # 脚本对照 LLM 知识性审查（有脚本的模块：基础自动化后追加）
 # ============================================================
 
-def _qreview_to_state(module: str, docx: str, unit, r) -> dict:
+def _qreview_to_state(module: str, docx: str, unit, r, stage: str = "") -> dict:
     """把 ReviewAgent 的 QuestionReview 转成六维面板 questions 记录。"""
     def _cr(chk):
         if chk is None:
@@ -4083,14 +4095,19 @@ def _qreview_to_state(module: str, docx: str, unit, r) -> dict:
     passed = [v for v, _, _ in dims.values() if v is True]
     overall = None
     if checked:
-        if any(v is False for v, _, _ in dims.values()):
+        # ★ 修复：用 checked（非 None 的实际判定维度）判断，None=未检维度不计入
+        #   （原写法遍历全部 dims 含 None，`None is True` 恒 False → 有任一未检维度时
+        #    整体永远判 None，维度全通过也显示不出来）
+        if any(v is False for v in checked):
             overall = False
-        elif all(v is True for v, _, _ in dims.values()):
+        elif all(v is True for v in checked):
             overall = True
         # 部分检查（无 False 但未全过，如仅 1 维）→ 保持 None（未定），不误报不通过
     return {
         "idx": r.idx, "total": 0,
         "question_type": r.question_type or "脚本题",
+        "module": module,            # ★ 模块（分组展示用）
+        "stage": stage or "",        # ★ 子模块阶段（基础巩固/综合进阶/难点突破）
         "screenshot": "",
         "progress": f"Q{r.idx:02d}",
         "ai_stem": dims["stem"][0], "ai_content": dims["content"][0],
@@ -4130,13 +4147,19 @@ def _run_llm_script_review(module: str, docx: str, version: str, unit):
             unit=_u, verbose=False,
         ))
         # ★ 不传 screenshots：自动化过程只有答错截图，旧截图与本次题目对不上会误导 LLM 判定
-        #   → 统一按脚本纯文字对照审查（题干/选项/答案），图片/音频维度标「需截图核对」= 未检
+        #   → 统一走 LLM 脚本审查（_review_script_llm：脚本信息 → LLM 六维判定，理由具体有说服力）
         results = agent.review(screenshots={})
         n_pass = sum(1 for rr in results if rr.overall_passed)
-        for rr in results:
+        for q, rr in zip(agent.script_questions, results):
             qid = f"{module}-脚本-Q{rr.idx:02d}"
-            _inspection_state["questions"][qid] = _qreview_to_state(module, docx, unit, rr)
+            _inspection_state["questions"][qid] = _qreview_to_state(
+                module, docx, unit, rr, stage=getattr(q, "stage", "") or "")
         _save_inspection_state()
+        # ★ 触发实时错题报告（前端「📑 查看报告」）
+        try:
+            _live_regen_error_report()
+        except Exception:
+            pass
         log_msg(f"✅ {module} LLM 知识性审查完成: {len(results)}题（通过{n_pass}，未检维度不计入不通过）", "success")
     except Exception as e:
         log_msg(f"❌ {module} LLM 知识性审查失败: {e}", "error")
@@ -4211,6 +4234,12 @@ def api_modules_run():
         _register_task_thread()  # 记录线程 id，供"立即停止"注入异常
         try:
             set_running("多模块检测")
+            # ★ 记录版本/单元到巡检状态（实时错题报告标题/路径需要）
+            _inspection_state["version"] = version
+            _inspection_state["grade"] = grade
+            if units:
+                _first_unit = str(next(iter(units.values()), "?"))
+                _inspection_state["unit"] = _first_unit
             units_desc = f"（单元: {units}）" if units else ""
             log_msg(f"多模块检测启动: {version} {grade} → {'、'.join(module_names)}{units_desc}")
             import importlib
