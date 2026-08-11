@@ -485,6 +485,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
             <h3 class="font-bold text-[12.5px] text-[#bc4742]">错题日志</h3>
             <span id="wrongBadge" class="bg-[#fee2e2] text-[#bc4742] rounded-full px-2 py-0.5 text-[10.5px] font-semibold">0</span>
             <span class="text-[10px] text-[#9aa5a0]">AI 检测中实时更新</span>
+            <button onclick="openLiveReport()" title="在新弹层中查看实时错题报告"
+              class="ml-auto text-[10.5px] px-2 py-0.5 rounded-md bg-[#bc4742] text-white hover:bg-[#9b2c2c]">📑 查看报告</button>
           </div>
           <div id="wrongList" class="flex-1 overflow-y-auto px-3 py-2 space-y-2">
             <div class="text-center py-6 text-[#9aa5a0] bg-[#faf8f3] rounded-lg text-[11px]">暂无错题</div>
@@ -492,6 +494,22 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
         </div>
         </div>
       </div>
+
+<!-- ===== 实时错题报告弹层（iframe 嵌入独立 .html，借鉴队友） ===== -->
+<div id="liveReportMask" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center" onclick="closeLiveReport()">
+  <div class="bg-white rounded-xl shadow-2xl w-[90vw] max-w-[920px] h-[86vh] flex flex-col overflow-hidden" onclick="event.stopPropagation()">
+    <div class="flex items-center gap-2 px-4 py-2.5 border-b border-[#e6dfd4]">
+      <h2 class="font-bold text-[14px] text-[#bc4742]">实时错题报告</h2>
+      <span id="liveReportMeta" class="text-[11px] text-[#9aa5a0]"></span>
+      <div class="ml-auto flex items-center gap-2">
+        <button onclick="refreshLiveReport()" class="text-[12px] border border-[#d8d0c4] bg-white text-[#666] px-2.5 py-1 rounded-md hover:bg-[#faf8f3]">↻ 刷新</button>
+        <a id="liveReportDownload" href="#" target="_blank" class="text-[12px] bg-[#bc4742] text-white px-2.5 py-1 rounded-md hover:bg-[#9b2c2c]">⬇ 下载</a>
+        <button onclick="closeLiveReport()" class="text-[12px] bg-[#eee] text-[#555] px-2.5 py-1 rounded-md hover:bg-[#e2e2e2]">关闭</button>
+      </div>
+    </div>
+    <iframe id="liveReportFrame" class="flex-1 w-full bg-[#f6f4ef]" src=""></iframe>
+  </div>
+</div>
   </main>
 </div>
 
@@ -1223,6 +1241,34 @@ const WRONG_SUGGEST={
   作答:'核对答案与脚本是否一致',
   音频:'检查听力音频控件与内容',
   答错后:'验证答错后的反馈流程'
+}
+
+/* ========== 实时错题报告弹层（借鉴队友：错题日志「📑 查看报告」） ========== */
+function openLiveReport(){
+  const mask=$('liveReportMask');
+  mask.classList.remove('hidden'); mask.classList.add('flex');
+  refreshLiveReport();
+}
+function closeLiveReport(){
+  const mask=$('liveReportMask');
+  mask.classList.add('hidden'); mask.classList.remove('flex');
+}
+function refreshLiveReport(){
+  fetch('/api/errors/live-status').then(r=>r.json()).then(st=>{
+    const frame=$('liveReportFrame');
+    if(st.ready){
+      $('liveReportMeta').textContent=`已审查 ${st.total} 题 · 不通过 ${st.failed} 题 · 实时更新`;
+      $('liveReportDownload').href='/api/errors/live';
+      frame.src='/api/errors/live?t='+Date.now();
+    }else{
+      $('liveReportMeta').textContent='尚无报告，请先运行一次审查';
+      $('liveReportDownload').removeAttribute('href');
+      frame.srcdoc='<div style="font-family:sans-serif;color:#9aa5a0;padding:40px;text-align:center;">暂无错题报告<br>运行一次审查后，这里会实时出现可折叠的错题卡片</div>';
+    }
+  }).catch(()=>{
+    const frame=$('liveReportFrame');
+    frame.srcdoc='<div style="font-family:sans-serif;color:#9aa5a0;padding:40px;text-align:center;">加载失败</div>';
+  });
 }
 function fmtLoc(id,q){
   // 期望格式：模块 + 单元 +（子模块）+ 题号，如「听力专项 · U6 · 基础巩固 · 第3题」

@@ -52,6 +52,9 @@ from routes import register_trace, register_batch, register_export
 register_trace(app)
 register_batch(app)
 register_export(app)
+# ★ 借鉴队友：实时错题报告路由（/api/errors/live、/api/errors/live-status）
+import routes.error_log_routes as _error_log_routes
+_error_log_routes.register(app)
 
 # ============================================================
 # 全局状态
@@ -2530,7 +2533,14 @@ _inspection_state = {
     "questions": {},           # {qid: {ai_result, human_label, timestamp, ...}}
     "workflow_steps": [],     # 当前运行的步骤
     "docx": "",
+    "version": "未知版本",
+    "unit": "?",
+    "stage": "?",
+    "live_report_path": "",    # ★ 实时错题报告(report_live.html)路径（借鉴队友）
 }
+
+# ★ 实时报告重生成锁（避免多线程下并发写同一文件）
+_live_report_lock = threading.Lock()
 
 def _save_inspection_state():
     """保存巡检状态到文件, 审查智能体下次学习"""
@@ -2541,6 +2551,35 @@ def _save_inspection_state():
         json.dumps(_inspection_state, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+
+def _live_regen_error_report():
+    """
+    ★ 实时重新生成"仅错误"的可折叠卡片 HTML 报告（审查中每出一道错题即调用）。
+    报告写入 outputs/reports/<版本>/U<单元>_<阶段>_<日期>/report_live.html，
+    并刷新 latest 入口。路径记录在 _inspection_state["live_report_path"]。
+    """
+    _live_report_lock.acquire()
+    try:
+        from src.report_exporter import ReportExporter
+        state = _inspection_state
+        qs_all = list(state.get("questions", {}).values())
+        meta = {
+            "version": state.get("version", "未知版本"),
+            "unit": state.get("unit", "?"),
+            "stage": state.get("stage", "?"),
+            "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "total": len(qs_all),
+        }
+        exp = ReportExporter()
+        path = exp.export_html_live(qs_all, meta)
+        state["live_report_path"] = path
+        return path
+    except Exception as e:
+        log_msg(f"⚠ 实时错题报告生成失败: {e}", "warning")
+        return ""
+    finally:
+        _live_report_lock.release()
 
 
 # ★ 多模块检测每题界面级证据 → 审查结果区（无脚本也能展示 AI 通过/不通过）
@@ -3036,6 +3075,10 @@ def api_inspect_question_result():
     _inspection_state["current_question_idx"] = data.get("idx", 0)
     _save_inspection_state()
 
+    # ★ 借鉴队友：该题不通过 → 实时重生成错题报告（前端「📑 查看报告」弹窗即时更新）
+    if not data.get("overall_passed"):
+        _live_regen_error_report()
+
     # ★ 推送审查证据到前端日志(收集各维度的 evidence)
     idx = data.get("idx", "?")
     overall = "通过" if data.get("overall_passed") else "不通过"
@@ -3129,6 +3172,7 @@ def api_inspect_reset():
     _inspection_state["questions"] = {}
     _inspection_state["workflow_steps"] = []
     _inspection_state["current_question_idx"] = 0
+    _inspection_state["live_report_path"] = ""   # ★ 清空实时报告路径
     _save_inspection_state()
     return jsonify({"success": True})
 

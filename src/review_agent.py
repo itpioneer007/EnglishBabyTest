@@ -73,12 +73,14 @@ class CheckResult:
     evidence: list = field(default_factory=list)  # ★ 结构化证据链(Evidence dict)
     error: str = ""
     method: str = ""                   # "diff"(精确比对) / "llm"(AI判断) / "skip" / "uncertain"
+    suggestion: str = ""               # ★ 针对该维度生成的"建议修改"文本（由 LLM 输出，供实时错题报告展示）
 
     def to_dict(self):
         return {"passed": self.passed, "score": self.score,
                 "confidence": self.confidence,
                 "details": self.details[:5], "error": self.error[:80],
-                "evidence": self.evidence[:5], "method": self.method}
+                "evidence": self.evidence[:5], "method": self.method,
+                "suggestion": self.suggestion}
 
 @dataclass
 class QuestionReview:
@@ -126,6 +128,13 @@ class QuestionReview:
 # ============================================================
 # 审查智能体 (核心)
 # ============================================================
+
+# ★ 让 LLM 在判定"不通过"时顺带给出一句具体修改建议(供实时错题报告展示)
+REVIEW_SUGGEST_SUFFIX = (
+    "\n\n【修改建议要求】若某维度判定为“不通过”，请在该维度“理由”的同一行末尾，"
+    "用「建议修改：」接一句具体的修改方法（例如：图片与脚本不符。建议修改：将配图替换为 cat 的正确图片）。"
+    "通过的维度无需写建议修改。"
+)
 
 class ReviewAgent:
     """
@@ -680,6 +689,14 @@ class ReviewAgent:
             detail = f"{ai_response} | {reason}" if reason else ai_response[:150]
             check.details.append(detail)
 
+        # ★ 抽出"建议修改"并嵌入 detail（供实时错题报告展示绿色"修改建议"框）
+        _combined = f"{ai_response}\n{reason}"
+        _m = _re.search(r'建议修改[:：]\s*([^\n]{4,200})', _combined)
+        if _m and not check.passed:
+            check.suggestion = _m.group(1).strip().rstrip('。.').strip()
+            if not any('建议修改' in d for d in check.details):
+                check.details[-1] = f"{check.details[-1]} 建议修改：{check.suggestion}"
+
     def _create_empty_review(self) -> QuestionReview:
         """创建一个空的审查结果对象"""
         return QuestionReview()
@@ -786,6 +803,7 @@ class ReviewAgent:
                 + (f'【配图】通过 | 置信度:85 | 理由\n' if is_img else '【配图】⏭ 非配图题\n') +
                 f'【作答】通过 | 置信度:80 | 理由'
             )
+            prompt_text += REVIEW_SUGGEST_SUFFIX
             prompt = self.trainer.build_enhanced_prompt(prompt_text, dim_filter='all')
             answer = self.llm.ask(prompt, image_path=shot if use_vision else None)
 
@@ -822,7 +840,7 @@ class ReviewAgent:
                 f"1. 题目文字是否完整、无截断、无模糊?\n"
                 f"2. 是否有错别字或拼写错误?\n"
                 f"3. 文字内容是否与脚本一致?\n\n"
-                f"回答格式: [通过/不通过 | 置信度:0-100] | 理由",
+                f"回答格式: [通过/不通过 | 置信度:0-100] | 理由" + REVIEW_SUGGEST_SUFFIX + REVIEW_SUGGEST_SUFFIX,
                 dim_filter="stem"
             )
             answer = self.llm.ask(prompt, image_path=shot)
@@ -850,7 +868,7 @@ class ReviewAgent:
                 f"2. 正确答案是否合理? (录音内容是否确实对应正确答案)\n"
                 f"3. 涉及的词汇/句型是否在该年级教材范围内?\n"
                 f"4. 如果有超出教材范围的词汇, 是否合理?(合理扩展可接受)\n\n"
-                f"回答格式: [通过/不通过 | 置信度:0-100] | 理由",
+                f"回答格式: [通过/不通过 | 置信度:0-100] | 理由" + REVIEW_SUGGEST_SUFFIX + REVIEW_SUGGEST_SUFFIX,
                 dim_filter="content"
             )
             answer = self.llm.ask(prompt, image_path=shot)
@@ -902,7 +920,7 @@ class ReviewAgent:
                     f"2. 实际截图是否清晰完整?(无截断/模糊/变形)\n"
                     f"3. 实际截图是否有逻辑问题?(如参考图是勺子, 但APP显示叉子)\n"
                     f"4. 图片内容是否与录音 '{q.recording}' 匹配?\n\n"
-                    f"回答格式: [通过/不通过 | 置信度:0-100] | 理由"
+                    f"回答格式: [通过/不通过 | 置信度:0-100] | 理由" + REVIEW_SUGGEST_SUFFIX
                 )
                 all_images = ref_images + [shot]
             else:
@@ -913,7 +931,7 @@ class ReviewAgent:
                     f"3. 图片中的物品/场景是否适合该年级学生的认知水平?\n"
                     f"4. 图片有无逻辑问题?(如: 录音说'spoon'但图片是叉子)\n"
                     f"5. 如果是干扰项图片, 是否合理?(不会让学生混淆)\n\n"
-                    f"回答格式: [通过/不通过 | 置信度:0-100] | 理由"
+                    f"回答格式: [通过/不通过 | 置信度:0-100] | 理由" + REVIEW_SUGGEST_SUFFIX
                 )
                 all_images = [shot]
 
@@ -944,7 +962,7 @@ class ReviewAgent:
                 f"   - 拖拽/连线类题型: 检查可拖拽元素是否存在\n"
                 f"3. 交互方式是否符合该题型的预期?(如听音选图应有图片可点, 听音选词应有文字选项)\n"
                 f"4. 对于听音题型, 录音播放按钮是否可见?\n\n"
-                f"回答格式: [通过/不通过 | 置信度:0-100] | 理由",
+                f"回答格式: [通过/不通过 | 置信度:0-100] | 理由" + REVIEW_SUGGEST_SUFFIX + REVIEW_SUGGEST_SUFFIX,
                 dim_filter="answer"
             )
             answer = self.llm.ask(prompt, image_path=shot)
@@ -990,7 +1008,7 @@ class ReviewAgent:
                 f"2. 音频控件是否被遮挡或截断？\n"
                 f"3. 播放按钮位置是否合理（通常靠近题目顶部）？\n"
                 f"4. 是否有任何异常（如灰色不可点击状态）？\n\n"
-                f"回答格式: [通过/不通过 | 置信度:0-100] | 理由",
+                f"回答格式: [通过/不通过 | 置信度:0-100] | 理由" + REVIEW_SUGGEST_SUFFIX + REVIEW_SUGGEST_SUFFIX,
                 dim_filter="audio"
             )
             answer = self.llm.ask(prompt, image_path=shot)
