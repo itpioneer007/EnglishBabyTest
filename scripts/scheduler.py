@@ -138,17 +138,31 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
             mod = importlib.import_module(MODULE_MAP[name])
             # ★ 听力专项特殊：练习+测试两部分
             #   units["听力专项"] = 练习单元，units["听力专项_测试"] = 测试单元（可分开）
+            #   ★ 前端"练/测"勾选：未勾选的部分传 'NONE' 哨兵 → 跳过
             if name == "听力专项" and hasattr(mod, "run_test_module"):
                 practice_units = units.get("听力专项")
                 test_units = units.get("听力专项_测试")
-                if practice_units and test_units:
+                _p_on = practice_units is not None and practice_units != "NONE"
+                _t_on = test_units is not None and test_units != "NONE"
+                if _p_on and _t_on:
                     step_log(f"📌 听力专项: 练习单元{practice_units} + 测试单元{test_units} 分开检测", "step")
-                    q1 = mod.run_module(d, units=practice_units)
+                    q1 = mod.run_module(d, units=practice_units) if _p_on else 0
                     step_log(f"✅ 听力专项·练习 完成: {q1} 题", "success")
-                    q2 = mod.run_test_module(d, test_units=test_units)
+                    q2 = mod.run_test_module(d, test_units=test_units) if _t_on else 0
                     step_log(f"✅ 听力专项·测试 完成: {q2} 题", "success")
                     q = q1 + q2
+                elif _p_on:
+                    q = mod.run_module(d, units=practice_units)
+                    step_log(f"📌 听力专项: 仅练习（测试未勾选）完成 {q} 题", "info")
+                elif _t_on:
+                    q = mod.run_test_module(d, test_units=test_units)
+                    step_log(f"📌 听力专项: 仅测试（练习未勾选）完成 {q} 题", "info")
+                elif practice_units == "NONE" and test_units == "NONE":
+                    # 前端明确"练/测 都不勾选" → 跳过听力专项（不跑）
+                    step_log(f"📌 听力专项: 练/测均未勾选，跳过", "warning")
+                    q = 0
                 else:
+                    # 都未指定（旧调用，无 units 传参）→ 都跑，兼容
                     q = mod.run_module(d, units=module_units) if module_units else mod.run_module(d)
                     q2 = mod.run_test_module(d, test_units=module_units) if module_units else mod.run_test_module(d)
                     q = q + q2
@@ -164,7 +178,10 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
         except Exception as e:
             elapsed = round(time.time() - t0)
             results[name] = {"q": 0, "t": elapsed, "ok": False, "error": str(e)}
-            step_log(f"❌ {name} 检测失败: {e}", "error")
+            # ★ 附带完整 traceback 便于定位（Errno 22 等偶发错误需要调用栈）
+            import traceback as _tb
+            _tb_str = _tb.format_exc()
+            step_log(f"❌ {name} 检测失败: {e} | {_tb_str.splitlines()[-3:] if _tb_str else ''}", "error")
 
         # 模块间回到主页（保证下一模块干净起点；★ 不再切换年级，调度器只在开头切一次）
         step_log(f"↩ {name} 完成，返回主页准备下一个模块…", "info")

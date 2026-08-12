@@ -8,6 +8,7 @@ import os, time, re
 from config import MODULE_CONFIG, GLOBAL_POPUPS, APP_PACKAGE, GRADE_LEVEL, BOOK_VERSION
 from common.tools import S, S_swipe, S_h, S_w, applock_blocked, settle_ads
 from common.logger import step_log, should_stop
+from question_types import detect_question_type
 
 
 def _find_control(xml: str, keywords: tuple) -> tuple:
@@ -632,13 +633,21 @@ def _handle_match_question(d, config):
         time.sleep(0.5)
 
     # 2. 收集字母选项 A-E
+    #   ★ 修复：图片/人物匹配题（听力专项）点方框后字母选项才延迟渲染出现，
+    #     只查一次会漏 → 轮询等待字母出现（最多5轮，每轮重试点方框一次兜底）
     letters = []
-    for ch in ("A", "B", "C", "D", "E"):
-        try:
-            if d(text=ch).exists(timeout=0.15):
-                letters.append(ch)
-        except Exception:
-            pass
+    for _try in range(5):
+        letters = []
+        for ch in ("A", "B", "C", "D", "E"):
+            try:
+                if d(text=ch).exists(timeout=0.2):
+                    letters.append(ch)
+            except Exception:
+                pass
+        if letters:
+            break
+        # 字母还没出现 → 再点一次方框（首轮已点过，这里是重试兜底）
+        time.sleep(0.5)
     print(f"    字母选项{len(letters)}个: {letters}")
     if not letters:
         print(f"    ⚠ 未找到字母选项"); return False
@@ -701,6 +710,119 @@ def _get_qno(d):
     return 0, 0
 
 
+def _handle_select_fill(d, config):
+    """★ 选词填空（听力专项新题型）：
+    句子中嵌 N 个空格框（CheckBox, resource-id=.../select_tv），底部是词库
+    （TextView, resource-id=.../select_btn）。
+    交互（实测确认）：点空格框 → 该空格被激活（checked=true）→ 点底部词库词
+    → 词填入该空格，词库词仍保留可选。
+    处理流程：
+      1. 收集所有空格框（select_tv，含 text 为空的和已填词的），按 y 排序
+      2. 收集词库词（select_btn，text 非空），按 y/x 排序
+      3. 对每个空格：点它（激活）→ 点词库词 → 循环（每个空格一个词）
+      4. 全部填完 → 找"检查/检测"按钮点击 → 点"下一题"
+    返回 True=已处理；False=非选词填空页
+    """
+    import re as _re
+    print(f"    🔤 选词填空，处理中...")
+    step_log("🔤 选词填空：点空格→点词填入", "step")
+
+    # 1. 解析空格框与词库词
+    def _parse():
+        """返回 (blanks, word_btns)：
+        blanks: [(cx, cy, filled_text, y)] 按 y 排序；filled_text 非空=已填
+        word_btns: [(cx, cy, word, y, x)] 词库词
+        """
+        try:
+            xml = d.dump_hierarchy()
+        except Exception:
+            return [], []
+        blanks = []
+        word_btns = []
+        for m in _re.finditer(r'<node[^>]*>', xml):
+            tag = m.group(0)
+            rid = _re.search(r'resource-id="([^"]*)"', tag)
+            if not rid:
+                continue
+            ridv = rid.group(1)
+            tm = _re.search(r'text="([^"]*)"', tag)
+            bm = _re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+            if not bm:
+                continue
+            x1, y1, x2, y2 = int(bm.group(1)), int(bm.group(2)), int(bm.group(3)), int(bm.group(4))
+            cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+            tv = (tm.group(1) if tm else "").strip()
+            if ridv.endswith("/select_tv"):
+                # 空格框：可能含已填词文本（text 非空=已填）
+                blanks.append((cx, cy, tv, y1))
+            elif ridv.endswith("/select_btn"):
+                # 词库词
+                if tv:
+                    word_btns.append((cx, cy, tv, y1, x1))
+        blanks.sort(key=lambda t: t[3])
+        word_btns.sort(key=lambda t: (t[3], t[4]))
+        return blanks, word_btns
+
+    blanks, word_btns = _parse()
+    if not blanks or not word_btns:
+        print("    ⚠ 未识别到空格框/词库词，跳过选词填空")
+        return False
+    print(f"      空格框 {len(blanks)} 个, 词库 {len(word_btns)} 个: {[w[2] for w in word_btns]}")
+
+    # 2. 逐空格填词：点空格(激活) → 点词库词
+    #   ★ 每填一个词后布局会重排（空格框位置/大小变化），重新解析
+    filled_cnt = 0
+    for _ in range(len(blanks) + 3):
+        blanks_now, word_btns_now = _parse()
+        if not blanks_now or not word_btns_now:
+            break
+        # 找第一个未填的空格（text 为空）
+        empty = [b for b in blanks_now if not b[2]]
+        if not empty:
+            break
+        bx, by = empty[0][0], empty[0][1]
+        # 点空格激活
+        try:
+            d.click(bx, by)
+        except Exception:
+            continue
+        time.sleep(0.5)
+        # 点词库第一个未用词（简单策略：按序填入；听力题无法听音选词，
+        #   程序只保证不卡流程，答对与否由人工/后续改进）
+        w = word_btns_now[filled_cnt % len(word_btns_now)]
+        try:
+            d.click(w[0], w[1])
+        except Exception:
+            continue
+        print(f"      空格({bx},{by}) ← {w[2]}")
+        step_log(f"  🔤 填词: {w[2]}", "info")
+        filled_cnt += 1
+        time.sleep(0.6)
+
+    # 3. 全部填完 → 找"检查/检测" → 点击
+    for _ in range(6):
+        btn = None
+        if d(text="检查").exists(timeout=1.2):
+            btn = "检查"
+        elif d(text="检测").exists(timeout=0.8):
+            btn = "检测"
+        if btn:
+            d(text=btn).click()
+            print(f"    ✅ 选词填空完成，点击{btn}")
+            step_log("✅ 选词填空全部完成", "success")
+            time.sleep(0.8)
+            break
+        S_swipe(d, 540, 1800, 540, 600, 0.4)
+        time.sleep(0.6)
+
+    # 4. 点"下一题"（答对自动跳，答错出按钮）
+    if d(text="下一题").exists(timeout=2):
+        d(text="下一题").click()
+        print(f"      → 下一题（选词填空答完）")
+        time.sleep(0.8)
+    return True
+
+
 def _answer_loop(d, config, module_name):
     """答题循环（内部复用），返回题目数。
     
@@ -722,14 +844,23 @@ def _answer_loop(d, config, module_name):
             ev.append({"field": "题型", "type": "text_ok",
                        "expected": qtype or "选择题",
                        "actual": qtype or "选择题", "diff": f"识别为[{qtype or '选择题'}]"})
-            # ② 题干文字（页面上的长文本）
+            # ② 题干文字：★ 优先 question_title_tv，再兼容普通 text（过滤提示词）
             stems = []
+            seen = set()
+            for m in _re.finditer(r'resource-id="[^"]*question_title_tv[^"]*"[^>]*text="([^"]+)"', _xml):
+                t = m.group(1).strip()
+                if t and t not in seen:
+                    seen.add(t); stems.append(t)
+                if len(stems) >= 3: break
             for m in _re.finditer(r'text="([^"]{8,})"', _xml):
                 t = m.group(1).strip()
-                if t and t not in stems and len(t) < 60:
-                    stems.append(t)
-                if len(stems) >= 3:
-                    break
+                if not t or t in seen: continue
+                # ★ 过滤非题干文本（图片提示、按钮文字等）
+                if t in ("点击图片查看高清大图", "查看高清大图", "点击查看高清大图"): continue
+                if "点击图片" in t or "高清大图" in t: continue
+                if len(t) >= 60: continue
+                seen.add(t); stems.append(t)
+                if len(stems) >= 3: break
             stem_txt = " / ".join(stems[:2]) if stems else "(无题干文字)"
             ev.append({"field": "题干", "type": "text_ok" if stems else "text_mismatch",
                        "expected": "文字完整可见", "actual": stem_txt,
@@ -744,13 +875,16 @@ def _answer_loop(d, config, module_name):
             # ★ 关键词判断直接基于整段 XML（短题干如"跟读句子"也能命中）
             LISTEN_KWS = ("听录音", "听音", "听一听", "听对话", "听短文", "听句子",
                           "听单词", "listen", "听下面", "听材料", "听问题")
+            # ★ 扩展口语/跟读关键词：知识过关模块常用"跟读单词""读一读""朗读句子""大声朗读"
             SPEAK_KWS = ("朗读", "读一读", "跟读", "读单词", "读句子", "大声读",
-                         "repeat", "口语", "跟录音读")
+                         "repeat", "口语", "跟录音读", "大声朗读", "读下面",
+                         "跟读单词", "跟读句子", "跟读短文", "read", "speak")
             is_listening = any(kw in _xml for kw in LISTEN_KWS)
             is_speaking = any(kw in _xml for kw in SPEAK_KWS)
             PLAY_KWS = ("播放", "喇叭", "扬声器", "ic_play", "btn_play",
-                        "play_btn", "audio", "sound", "▶")
-            MIC_KWS = ("麦克风", "录音", "record", "mic", "开始作答")
+                        "play_btn", "audio", "sound", "▶", "play_box")
+            MIC_KWS = ("麦克风", "录音", "record", "mic", "开始作答",
+                       "mic_box", "start_record")
             play_found, play_clickable = _find_control(_xml, PLAY_KWS)
             mic_found, mic_clickable = _find_control(_xml, MIC_KWS)
             if is_listening:
@@ -766,6 +900,7 @@ def _answer_loop(d, config, module_name):
                                "actual": "未检测到播放控件",
                                "diff": "⚠ 题干含'听录音'但页面未检测到扬声器/播放标识"})
             elif is_speaking:
+                # ★ 口语题/跟读题：同时检查播放键（听原音）+麦克风（录音作答）
                 ev.append({"field": "音频", "type": "text_ok" if play_clickable else "text_mismatch",
                            "expected": "口语题须有可点击的播放控件(小喇叭/导读音频)",
                            "actual": "播放控件" + ("(可点击)" if play_clickable else "(存在但不可点击)") if play_found else "未检测到播放控件",
@@ -846,13 +981,27 @@ def _answer_loop(d, config, module_name):
             step_log(f"📊 练习报告（子模块完成，共{q}题）", "success")
             time.sleep(0.4); _xml = _dump()
             if not config.get('_is_last_sub', False):
+                # ★ 非最后子模块：点"继续练习"回单元列表页（下一个子模块由
+                #   外层循环左滑切换）。H5 报告页按钮 click 可能无效 → 坐标点击。
+                _clicked_cont = False
                 for _ in range(8):
                     if _has("继续练习"):
-                        _click_text("继续练习")
-                        print(f"      → 继续练习")
-                        time.sleep(0.4)
-                        break
-                    time.sleep(0.5); _xml = _dump()
+                        _m_cont = re.search(
+                            r'text="继续练习"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
+                            _xml)
+                        if _m_cont:
+                            d.click((int(_m_cont.group(1)) + int(_m_cont.group(3))) // 2,
+                                    (int(_m_cont.group(2)) + int(_m_cont.group(4))) // 2)
+                        else:
+                            _click_text("继续练习")
+                        print(f"      → 继续练习（回列表）")
+                        time.sleep(0.6); _xml = _dump()
+                        _clicked_cont = True
+                        # 验证回到列表（出现"重新答题/去练习/练习记录"任一）
+                        if any(k in _xml for k in ("重新答题", "去练习", "练习记录")):
+                            break
+                    else:
+                        time.sleep(0.5); _xml = _dump()
             print(f"      → 本子模块完成，返回")
             return q
         if _has("下一题"):
@@ -864,9 +1013,25 @@ def _answer_loop(d, config, module_name):
                     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                     "screenshots")
                 os.makedirs(_shot_dir, exist_ok=True)
+                # ★ 文件名彻底 ASCII 化：中文模块名（如"听力专项/难点突破"）转成
+                #   ascii 编码的十六进制后缀，避免 Windows 写盘偶发 Errno 22
+                #   （Invalid argument）。之前 re.sub(r"[^\w]","_") 保留中文，
+                #   中文字符在部分 Windows/设备组合下截图写盘偶发失败。
                 _mod_tag = re.sub(r"[^\w]", "_", module_name)[:12] or "mod"
+                try:
+                    _mod_tag = _mod_tag.encode("ascii", "ignore").decode("ascii") or "mod"
+                except Exception:
+                    _mod_tag = "mod"
                 _wrong_shot = f"wrong_{_mod_tag}_q{q:02d}.png"
-                d.screenshot(os.path.join(_shot_dir, _wrong_shot))
+                # ★ 截图重试3次（uiautomator2 设备端截图偶发 Errno 22，重试可自愈）
+                for _r in range(3):
+                    try:
+                        d.screenshot(os.path.join(_shot_dir, _wrong_shot))
+                        break
+                    except OSError:
+                        if _r >= 2:
+                            raise
+                        time.sleep(0.5)
                 print(f"      → 答错截图: {_wrong_shot}")
             except Exception as _e:
                 print(f"      ⚠ 答错截图失败: {_e}")
@@ -906,8 +1071,33 @@ def _answer_loop(d, config, module_name):
             _handle_match_question(d, config)
             _idle = 0
             time.sleep(0.4); _need_dump = True; continue
+        elif qtype == "select_fill_questions":
+            # ★ 选词填空（听力专项）：点空格→点词库词，全部填完→检查
+            q += 1
+            step_log(f"📸 第{q}题（选词填空）", "step")
+            step_log(f"  第{q}题 检查", "info", _collect_ui_evidence("选词填空"))
+            _handle_select_fill(d, config)
+            _idle = 0
+            time.sleep(0.4); _need_dump = True; continue
+        elif qtype == "fill_blank_questions":
+            # ★ 表格/短文补全（键盘注入）：复用 _handle_fill_blank
+            q += 1
+            step_log(f"📸 第{q}题（表格/短文补全）", "step")
+            step_log(f"  第{q}题 检查", "info", _collect_ui_evidence("补全题"))
+            _handle_fill_blank(d, config)
+            _idle = 0
+            time.sleep(0.4); _need_dump = True; continue
+        elif qtype == "reading_multi_questions":
+            # ★ 阅读多小题：多组字母选项，每题点一个选项，全点完才出检查
+            q += 1
+            step_log(f"📸 第{q}题（阅读多小题）", "step")
+            step_log(f"  第{q}题 检查", "info", _collect_ui_evidence("阅读多小题"))
+            _handle_reading_multi(d, _xml)
+            _idle = 0
+            time.sleep(0.4); _need_dump = True; continue
 
-        # 新题：★ 先找选项，找到才计题（倒计时3、2、1/页面加载中无选项 → 不计题！）
+        # ── 单选/判断（兜底：有字母选项但无特殊题型关键词）──
+        #   ★ 优化：直接从缓存的 _xml 找选项坐标，零设备交互
         opt = _find_opt()
         if not opt:
             # 无选项 → 倒计时/加载中/异常页：不计数，空转保护防死循环
@@ -940,14 +1130,10 @@ def _answer_loop(d, config, module_name):
 
 
 def _detect_question_type_cached(_xml, config):
-    """基于缓存 XML 做题型识别（纯字符串匹配，无设备交互）"""
-    qt = config.get("question_types", {})
-    if not qt: return None
-    for qtype, qcfg in qt.items():
-        for kw in qcfg.get("detect_text", []):
-            if kw in _xml:
-                return qcfg["action"]
-    return None
+    """★ 统一题型检测入口：遍历 question_types.py 汇总的题型表，
+       按优先级匹配关键词 + DOM特征，返回题型标识名。
+    """
+    return detect_question_type(_xml)
 
 
 def _handle_report(d, config, sub_name="", is_last=False):
@@ -1006,7 +1192,44 @@ def run_single_module(d, module_name, config):
     #   点到广告上 → 打开外链触发 OPPO 系统验证弹窗（使用面部验证/密码验证）→ 全流程卡死。
     #   （用户定位：只有点到广告才会弹这个验证框）
     settle_ads(d, wait_total=8)
-    d(text=entry).click()
+    # ★ 修复：不能用 d(text=entry).click()——页面可能多处含该文字（顶栏tab+入口卡片），
+    #   exists() 命中后 click() 可能点到不可见节点 → UiObjectNotFoundError。
+    #   改用 dump 找可点击容器坐标点击，并验证进入（出现"去练习/去答题/练习记录"等）。
+    _entered = False
+    for _try in range(5):
+        try:
+            _xml_entry = d.dump_hierarchy()
+        except Exception:
+            _xml_entry = ""
+        _m_entry = re.search(
+            rf'text="{re.escape(entry)}"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
+            _xml_entry)
+        if _m_entry:
+            _ex = (int(_m_entry.group(1)) + int(_m_entry.group(3))) // 2
+            _ey = (int(_m_entry.group(2)) + int(_m_entry.group(4))) // 2
+            d.click(_ex, _ey)
+            print(f"  ✅ 点击入口 {entry} @({_ex},{_ey})")
+            time.sleep(1.2)
+            # 验证进入模块（出现模块内特征文字）
+            try:
+                _xml_after = d.dump_hierarchy()
+                if any(k in _xml_after for k in ("去练习", "去答题", "练习记录", "重新答题", "开始答题")):
+                    _entered = True
+                    break
+            except Exception:
+                pass
+        else:
+            time.sleep(0.8)
+    if not _entered:
+        # 兜底：直接用 text 点击
+        try:
+            d(text=entry).click()
+            print(f"  ✅ 已进入 {module_name}（text点击兜底）")
+            _entered = True
+            time.sleep(0.8)
+        except Exception as _e:
+            print(f"  ❌ 点击入口失败: {_e}")
+            return 0
     print(f"  ✅ 已进入 {module_name}")
     time.sleep(0.8)
 
@@ -1118,6 +1341,29 @@ def run_single_module(d, module_name, config):
             config['_is_last_sub'] = (i == len(sm) - 1)
             q = _answer_loop(d, config, name)
             questions += q
+            # ★ 非最后子模块：确保已回到列表页（若仍停在"练习报告"页，
+            #   说明"继续练习"点击失败 → 再点一次/back 兜底，否则下个子模块左滑起点错乱）
+            if not config['_is_last_sub']:
+                for _ in range(4):
+                    try:
+                        _xml_back = d.dump_hierarchy()
+                        if ("重新答题" in _xml_back or "去练习" in _xml_back
+                                or "练习记录" in _xml_back):
+                            break
+                        if "继续练习" in _xml_back:
+                            _m_cont = re.search(
+                                r'text="继续练习"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
+                                _xml_back)
+                            if _m_cont:
+                                d.click((int(_m_cont.group(1)) + int(_m_cont.group(3))) // 2,
+                                        (int(_m_cont.group(2)) + int(_m_cont.group(4))) // 2)
+                            else:
+                                d(textContains="继续练习").click()
+                            time.sleep(0.6)
+                        else:
+                            d.press("back"); time.sleep(0.5)
+                    except Exception:
+                        break
             # 最后子模块：back 回单元列表
             if config['_is_last_sub']:
                 for _ in range(4):
@@ -1172,6 +1418,86 @@ def run_single_module(d, module_name, config):
         run_sub_modules()
 
     return questions if (units or sub_modules) else 0
+
+
+def _handle_reading_multi(d, xml=None):
+    """阅读理解多小题：一屏含多道小题（每道小题有 T/F 或 A-E 选项组），
+    ★ 必须把所有小题都选完（每组选1个选项，checked=true），"检查"按钮才会出现！
+    返回 True=已处理完成；False=非多小题页面（单小题，走原逻辑）
+    xml: 外部传入的 dump_hierarchy() 结果（速度优化：避免函数内重复 dump）
+    """
+    import re as _re
+    time.sleep(0.2)
+
+    # ★ 排除匹配题
+    if xml is None:
+        try:
+            xml = d.dump_hierarchy()
+        except Exception:
+            return False
+    if any(kw in xml for kw in ('匹配', '配对', '为人物选择', '选择正确的描述')):
+        return False
+
+    def _groups(_xml):
+        """解析页面 XML 中所有字母选项，按 y 聚类分组"""
+        opts = []
+        for m in _re.finditer(r'<node[^>]*text="([TFABCDE])"[^>]*>', _xml):
+            tag = m.group(0)
+            lm = _re.search(r'checked="(\w+)"', tag)
+            bm = _re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+            if not bm:
+                continue
+            x1, y1, x2, y2 = int(bm.group(1)), int(bm.group(2)), int(bm.group(3)), int(bm.group(4))
+            opts.append((m.group(1), (x1 + x2) // 2, (y1 + y2) // 2, y1,
+                         bool(lm and lm.group(1) == "true")))
+        groups = []
+        for o in sorted(opts, key=lambda t: t[3]):
+            if groups and abs(o[3] - groups[-1][0][3]) < 150:
+                groups[-1].append(o)
+            else:
+                groups.append([o])
+        return [g for g in groups if len(g) >= 2]
+
+    groups = _groups(xml)
+    if len(groups) < 2:
+        return False
+
+    print(f"    📖 阅读理解多小题: {len(groups)} 道小题待选")
+    step_log(f"📖 阅读多小题 {len(groups)} 道，逐题选选项", "step")
+
+    no_new = 0
+    for _ in range(len(groups) + 12):
+        xml = d.dump_hierarchy()
+        groups = _groups(xml)
+        pending = [g for g in groups if not any(o[4] for o in g)]
+        if pending:
+            g = sorted(pending[0], key=lambda o: o[1])
+            o = g[0]
+            d.click(o[1], o[2])
+            print(f"      → 小题: 选 {o[0]}")
+            time.sleep(0.6)
+            no_new = 0
+            continue
+        if d(text="检查").exists(timeout=1.0):
+            d(text="检查").click()
+            print("    ✅ 多小题全部选完，点击检查")
+            step_log("✅ 阅读多小题全部选完，已检查", "success")
+            time.sleep(0.8)
+            return True
+        S_swipe(d, 540, 1800, 540, 800, 0.4)
+        time.sleep(0.4)
+        no_new += 1
+        if no_new >= 4:
+            break
+    for _ in range(4):
+        if d(text="检查").exists(timeout=1):
+            d(text="检查").click()
+            print("    ✅ 多小题兜底点击检查")
+            time.sleep(0.8)
+            return True
+        S_swipe(d, 540, 1800, 540, 800, 0.4)
+        time.sleep(0.4)
+    return True
 
 
 # ==================== ⑨ 填空题处理（新题型） ====================

@@ -27,7 +27,7 @@ from common.screenshot import shot_to_file
 from engine import _handle_match_question, _handle_sort_question
 
 APP_PACKAGE = "com.dinoenglish.yyb"
-GRADE_LEVEL = "五年级上册"
+GRADE_LEVEL = "六年级上册"
 BOOK_VERSION = "湘少版"
 
 

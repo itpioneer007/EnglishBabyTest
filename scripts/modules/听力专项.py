@@ -109,6 +109,20 @@ CONFIG = {
             "detect_text": ["匹配", "配对", "为人物选择", "选择正确的描述"],
             "action": "match_questions",
         },
+        "select_fill": {
+            # ★ 选词填空（听力专项新题型）：句子中嵌空格框(CheckBox select_tv)，
+            #   底部词库(select_btn)。交互：点空格激活 → 点词库词填入该空格。
+            #   页面特征：含"选词填空/选词"关键词 + select_btn 词库词。
+            "detect_text": ["选词填空", "选词", "听音选词", "从方框中选择", "选择正确的单词填空"],
+            "action": "select_fill_questions",
+        },
+        "fill_blank": {
+            # ★ 表格/短文补全（键盘注入）：页面有 EditText，复用 _handle_fill_blank
+            #   （FastInputIME 注入）。页面特征：含"补全/填空/完成"关键词。
+            "detect_text": ["补全表格", "选择正确的选项", "补全", "填空", "完成小短文", "填写",
+                            "按要求完成句子", "完成句子", "句型转换", "改为", "将句子"],
+            "action": "fill_blank_questions",
+        },
     },
 }
 
@@ -145,7 +159,21 @@ def _test_answer_loop(d, max_q=45):
     for i in range(max_q):
         # ★ 提速：整轮只 dump 一次（原来证据卡再 dump 一次 + 4 个 exists 各查一次，
         #   无弹窗时每题白等 ~3.2s）。弹窗/结束/选项判断全部用字符串匹配同一份 xml_now。
-        xml_now = d.dump_hierarchy() if d else ""
+        # ★ 加保护：设备端 uiautomator 偶发异常（如 Errno 22）时重试 dump，不冒泡崩溃
+        try:
+            xml_now = d.dump_hierarchy() if d else ""
+        except Exception:
+            time.sleep(0.5)
+            try:
+                xml_now = d.dump_hierarchy() if d else ""
+            except Exception:
+                xml_now = ""
+        if not xml_now:
+            _blank += 1
+            if _blank >= 5:
+                step_log(f"⚠ dump 连续失败 {_blank} 次，退出", "error")
+                return q
+            continue
 
         # ★ 每题界面级完整性检查证据（题型/题干/选项/音频/作答）→ 前端证据卡
         if q != _ev_q:
@@ -192,7 +220,15 @@ def _test_answer_loop(d, max_q=45):
                     "screenshots")
                 os.makedirs(_shot_dir, exist_ok=True)
                 _wrong_shot = f"wrong_q{q+1:02d}.png"
-                d.screenshot(os.path.join(_shot_dir, _wrong_shot))
+                # ★ 截图重试3次（uiautomator2 设备端截图偶发 Errno 22，重试可自愈）
+                for _r in range(3):
+                    try:
+                        d.screenshot(os.path.join(_shot_dir, _wrong_shot))
+                        break
+                    except OSError:
+                        if _r >= 2:
+                            raise
+                        time.sleep(0.5)
                 print(f"      → 答错截图: {_wrong_shot}")
             except Exception as _e:
                 print(f"      ⚠ 答错截图失败: {_e}")
@@ -465,6 +501,8 @@ def run_test_module(d, test_units=None):
     for ui, unit_num in enumerate(_tunits):
         print(f"\n  🎯 测试目标 [{unit_num}] [{ui+1}/{len(_tunits)}]")
         # ★ 智能定位：数字/区间/关键词（期中/期末/AI检测…）随机应变找"去答题"
+        #   ★ 注：App 开发方目前已下线"测试"模块（页面只有"练习"tab），
+        #     此循环实际不会命中；保留原逻辑不动，等 App 恢复测试后再用。
         found = smart_find_unit_row(d, unit_num, click_text="去答题")
         if not found:
             print(f"  ❌ 找不到目标 [{unit_num}] 的去答题"); continue
