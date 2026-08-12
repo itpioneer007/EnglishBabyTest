@@ -287,6 +287,7 @@ class ReviewAgent:
             # ★ LLM 脚本审查：无截图时也用大模型基于脚本信息逐维判定，
             #   理由具体有说服力；配图/音频/答错后标 skip（需截图）
             rr = self._review_script_llm(r, q)
+            rr.content_check = self._check_content(q, "")
             q.type_2 = _orig_type2
             return rr
 
@@ -294,6 +295,9 @@ class ReviewAgent:
         self._review_batch(q, screenshot, r, ui_texts)
 
         r.knowledge_check = self._verify_knowledge(q)
+
+        # ★ 内容维度: 联合检查覆盖(知识性+脚本语言质量)
+        r.content_check = self._check_content(q, screenshot)
 
         # ---- (3) 配图检查 ----
         r.image_check = self._check_image(q, screenshot)
@@ -1024,33 +1028,63 @@ class ReviewAgent:
             result.error = str(e)
         return result
 
-    def _check_content(self, q: YingYuBaoQuestion, shot: str) -> CheckResult:
-        """(2) 内容检查: 选项 vs 脚本 + 知识库双重验证"""
+    def _check_content(self, q, shot: str) -> CheckResult:
+        """(2) 内容检查: 有脚本→知识性+语言联合检查; 无脚本→跳过"""
         result = CheckResult()
+        has_script = bool((getattr(q, "stem", "") or "").strip()) or bool(q.options) or bool((getattr(q, "answer", "") or "").strip())
+        if not has_script:
+            result.passed = True
+            result.score = 1.0
+            result.details = ["无脚本, 跳过知识性检查"]
+            return result
         try:
-            kb_ctx = self._build_knowledge_context(q)
             role = self._build_role_prompt(q)
-
-            prompt = self.trainer.build_enhanced_prompt(
-                role + "\n\n---\n\n"
-                f"【任务: 检查题目内容】\n"
-                f"题型: {q.type_2}\n"
-                f"脚本答案: {q.answer}\n"
-                f"脚本选项: {', '.join(q.options) if q.options else '(图片选项)'}\n\n"
-                f"{kb_ctx}\n"
-                f"请看截图, 判断:\n"
-                f"1. 选项内容是否与脚本一致?\n"
-                f"2. 正确答案是否合理? (录音内容是否确实对应正确答案)\n"
-                f"3. 涉及的词汇/句型是否在该年级教材范围内?\n"
-                f"4. 如果有超出教材范围的词汇, 是否合理?(合理扩展可接受)\n\n"
-                f"回答格式: [通过/不通过 | 置信度:0-100] | 理由" + REVIEW_SUGGEST_SUFFIX,
-                dim_filter="content"
-            )
-            answer = self.llm.ask(prompt, image_path=shot)
-            self._apply_verdict(result, answer)
+            stem = (getattr(q, "stem", "") or "").strip()
+            options = "; ".join([o for o in (q.options or []) if o]) or "(无)"
+            answer = (getattr(q, "answer", "") or "").strip() or "(无)"
+            qtype = (getattr(q, "type_2", "") or "").strip() or "未知"
+            rec = (getattr(q, "recording", "") or "").strip()
+            payload = f"【题型】{qtype}\n【脚本材料】{stem or '(无)'}\n【选项】{options}\n【答案】{answer}"
+            if rec:
+                payload += f"\n【录音稿】{rec[:400]}"
+            rules = ("【审查规则】有脚本时联合检查(不连手机):\n"
+                     "一、知识性(PASS/REVIEW/REJECT): 有明确依据才判错, 三问(错误在哪/为什么/正确是什么)齐全才REJECT, 证据不足→REVIEW。\n"
+                     "二、脚本语言质量:\n"
+                     "1.拼写: 逐词检查, 结合教材年级词汇\n2.语法: 主谓一致/be动词/单复数/冠词/代词/时态/词性\n"
+                     "3.选项: 拼写/同一维度/重复/答案越界/数量不匹配\n"
+                     "4.搭配: 固定短语/动词介词搭配\n5.语义: 合理性, 上下文一致性\n\n"
+                     '输出JSON: {"verdict":"PASS/REVIEW/REJECT","issue_type":"","location":"","quote":"",'
+                     '"basis":"","correct":"","severity":"","confidence":0,'
+                     '"lang_issues":[{"type":"拼写/语法/选项/搭配/语义","severity":"高/中/低",'
+                     '"location":"","quote":"","detail":"","suggestion":""}]}')
+            prompt_text = (role + "\n\n---\n\n"
+                           f"【任务: 内容审查】\n{payload}\n\n{rules}\n"
+                           "按规则联合检查(有脚本:知识+语言, 无脚本只知识判定)，只输出JSON。")
+            prompt = self.trainer.build_enhanced_prompt(prompt_text, dim_filter="content")
+            raw = self.llm.ask(prompt)
+            data = json.loads(raw[raw.find("{"):raw.rfind("}")+1])
+            verdict = str(data.get("verdict", "REVIEW")).upper()
+            if verdict not in ("PASS", "REVIEW", "REJECT"):
+                verdict = "REVIEW"
+            parts = []
+            if verdict == "REJECT":
+                parts.append(f"\u274c REJECT[{data.get('issue_type','')}@{data.get('location','')}] {data.get('basis','')[:120]}")
+            elif verdict == "REVIEW":
+                parts.append(f"\u26a0 REVIEW: {data.get('basis','')[:120]}")
+            else:
+                parts.append(f"\u2705 PASS: {data.get('basis','')[:120]}")
+            lang = data.get("lang_issues") or []
+            for li in (lang or [])[:6]:
+                parts.append(f"[{li.get('type','')}] {li.get('detail','')[:100]}")
+            result.details = parts[:10]
+            result.passed = (verdict == "PASS" and len(lang) == 0)
+            result.score = 0.3 if (verdict == "REJECT" or len(lang) > 3) else (0.7 if (verdict == "REVIEW" or len(lang) > 0) else 1.0)
         except Exception as e:
-            result.error = str(e)
+            result.passed = True
+            result.score = 0.7
+            result.details = [f"内容检查异常: {str(e)[:80]}"]
         return result
+
 
     def _check_image(self, q: YingYuBaoQuestion, shot: str) -> CheckResult:
         """(3) 配图检查: 图片匹配录音/答案 + 教材适合性 + 参考图对照"""

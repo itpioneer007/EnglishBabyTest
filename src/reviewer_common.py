@@ -466,6 +466,39 @@ class LLMClient:
                         "image_url": {"url": f"data:image/png;base64,{img_b64}"}
                     })
 
+        # ★ Anthropic (Claude) 原生 API 分支
+        if "anthropic" in use_url.lower():
+            anth_content = []
+            if image_paths:
+                for img_path in image_paths:
+                    if img_path and Path(img_path).exists():
+                        with open(img_path, "rb") as f:
+                            img_b64 = base64.b64encode(f.read()).decode("utf-8")
+                        anth_content.append({
+                            "type": "image",
+                            "source": {"type": "base64", "media_type": "image/png", "data": img_b64},
+                        })
+            anth_content.append({"type": "text", "text": prompt})
+            body = json.dumps({
+                "model": use_model,
+                "max_tokens": 2000,
+                "messages": [{"role": "user", "content": anth_content}],
+            }).encode("utf-8")
+            req = Request(
+                f"{use_url}/messages",
+                data=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "x-api-key": use_key,
+                    "anthropic-version": "2023-06-01",
+                },
+            )
+            resp = urlopen(req, timeout=120)
+            result = json.loads(resp.read())
+            texts = [b.get("text", "") for b in result.get("content", []) if b.get("type") == "text"]
+            return "".join(texts)
+
+        # OpenAI 兼容格式
         body = json.dumps({
             "model": use_model,
             "messages": messages,

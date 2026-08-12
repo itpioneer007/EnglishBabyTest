@@ -284,6 +284,67 @@ def get_adb():
     return ADBController(serial=config.device.serial, screenshot_dir="screenshots")
 
 
+
+
+def _detect_content_dimension():
+    try:
+        docxs = sorted([f for f in UPLOAD_DIR.glob("*") if f.suffix.lower() in (".docx", ".doc")],
+                       key=os.path.getmtime, reverse=True)
+        if not docxs: return
+        docx_path = str(docxs[0])
+        from src.review_agent import ReviewAgent, ReviewConfig
+        cfg = ReviewConfig(docx_path=docx_path, unit=0, screenshot_dir="", verbose=False)
+        agent = ReviewAgent(cfg)
+        if not agent.script_questions: return
+        log_msg(f"📄 自动补充内容检查 (批量, {docxs[0].name}, {len(agent.script_questions)}题)", "info")
+        batch = []; qid_map = {}
+        for qid, q in list(_inspection_state.get("questions", {}).items()):
+            idx = (q or {}).get("idx", 0)
+            if not idx: continue
+            sqs = [s for s in agent.script_questions if s.global_idx == idx]
+            if not sqs: continue
+            sq = sqs[0]
+            stem = (getattr(sq, "stem", "") or "").strip()
+            opts = "; ".join([o for o in (sq.options or []) if o]) or "(无)"
+            ans = (getattr(sq, "answer", "") or "").strip() or "(无)"
+            typ = (getattr(sq, "type_2", "") or "").strip() or "未知"
+            batch.append(f"Q{idx}: 题型={typ}, 脚本={stem or '(无)'}, 选项={opts}, 答案={ans}")
+            qid_map[idx] = qid
+        if not batch: return
+        rules = ("规则:对每题做内容检查-1.知识性(PASS/REVIEW/REJECT)必须有依据才判错;"
+                 "2.语言质量(拼写/语法/选项/搭配/语义)。"
+                 '输出JSON数组:[{"idx":1,"verdict":"PASS/REVIEW/REJECT","basis":"判断依据","lang":["问题描述"]},...]')
+        prompt_text = f"批量内容审查:共{len(batch)}题\n" + "\n".join(batch) + "\n\n" + rules + "\n只输出JSON数组。"
+        try:
+            raw = agent.llm.ask(prompt_text)
+            data = json.loads(raw[raw.find("["):raw.rfind("]")+1])
+            count = 0
+            for item in data:
+                qi = item.get("idx", 0)
+                qid = qid_map.get(qi)
+                if not qid or not _inspection_state["questions"].get(qid): continue
+                q_obj = _inspection_state["questions"][qid]
+                v = str(item.get("verdict","REVIEW")).upper()
+                if v == "PASS": vv = "通过"
+                elif v == "REJECT": vv = "不通过"
+                else: vv = "待审"
+                b = (item.get("basis") or "")[:200]
+                ls = item.get("lang") or []
+                d = f"{vv}: {b}"
+                for li in (ls or [])[:3]:
+                    d += f"; [{li}]"
+                q_obj["ai_content"] = (v == "PASS" and len(ls) == 0)
+                q_obj["content_reason"] = d[:300]
+                count += 1
+            log_msg(f"🧪 内容检查已补充: {count}题 ({'通过' if count > 0 else ''})", "success")
+        except Exception as e:
+            log_msg(f"⚠ 批量内容检查失败: {str(e)[:80]}", "warning")
+    except Exception as e:
+        log_msg(f"⚠ 内容补充异常: {e}", "warning")
+
+
+
+
 def log_msg(msg: str, level: str = "info", evidence: list = None):
     """添加日志, 可选附带结构化证据(审查差异高亮展示)"""
     entry = {
@@ -294,6 +355,9 @@ def log_msg(msg: str, level: str = "info", evidence: list = None):
     if evidence:
         entry["evidence"] = evidence
     task_status["log"].append(entry)
+
+    if any(k in msg for k in ("完成",)):
+        threading.Thread(target=_detect_content_dimension, daemon=True).start()
     try:
         print(f"[{entry['time']}] [{level}] {msg}")
     except UnicodeEncodeError:
