@@ -531,43 +531,53 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
       <button class="bg-white/20 hover:bg-white/35 rounded-lg px-3 py-1 text-[12px] transition" onclick="closeGuide()">关闭</button>
     </div>
     <div class="guide-body">
-      <div class="g-tip"><b>总览：</b>左边选「测什么」，右边看「过程 + 结果」。自动化点击和逐题审查在右侧<b>同一条日志</b>里按时间排。</div>
+      <div class="g-tip"><b>总览：</b>左边选「测什么」，右边三个 Tab：①任务配置 ②运行日志+手机画面 ③审查结果+错题日志。自动化点击和逐题审查在同一条日志里按时间排。</div>
 
       <!-- 横向 4 步流程 -->
       <div class="g-flow">
         <div class="g-step">
           <div class="g-sno">1</div>
-          <div class="g-stitle">上传脚本</div>
-          <div class="g-sdesc">公司 DOCX，AI 审查的对照依据</div>
+          <div class="g-stitle">选模块</div>
+          <div class="g-sdesc">选版本/年级/模块（听力专项/单元自检等）</div>
         </div>
         <div class="g-arrow">→</div>
         <div class="g-step">
           <div class="g-sno">2</div>
-          <div class="g-stitle">选要测的</div>
-          <div class="g-sdesc">选版本/年级/模块，或一句话描述</div>
+          <div class="g-stitle">配单元</div>
+          <div class="g-sdesc">勾选要测的单元范围，留空=全部</div>
         </div>
         <div class="g-arrow">→</div>
         <div class="g-step">
           <div class="g-sno">3</div>
           <div class="g-stitle">开始检测</div>
-          <div class="g-sdesc">点「解析并开始检测」自动答题+审查</div>
+          <div class="g-sdesc">点「解析并开始检测」自动答题+逐题审查</div>
         </div>
         <div class="g-arrow">→</div>
         <div class="g-step">
           <div class="g-sno">4</div>
           <div class="g-stitle">看结果</div>
-          <div class="g-sdesc">右侧日志看过程，六维面板人工复核</div>
+          <div class="g-sdesc">日志看过程，错题日志看问题，可导出DOCX</div>
         </div>
       </div>
 
       <!-- 常用按钮速查 -->
       <div class="g-sec">
-        <div class="g-sec-h"><span class="g-no">★</span>三个审查按钮怎么选<span class="g-pos">按需使用</span></div>
+        <div class="g-sec-h"><span class="g-no">★</span>四个入口怎么用<span class="g-pos">按需使用</span></div>
         <div class="g-sec-b">
+          <p><b>解析并开始检测</b> ＝ 选模块/版本/年级后一键跑（自动答题 + 逐题审查）</p>
           <p><b>快速检查</b> ＝ 手机切到题目页再点，从当前题逐题截图审查</p>
-          <p><b>开始检查</b> ＝ 自动导航到题目页逐题查（先配好 脚本版本/单元/阶段）</p>
-          <p><b>按脚本一键审查</b> ＝ 不连手机，只对照脚本文字</p>
           <p><b>停止</b> ＝ 随时中断任务</p>
+          <p><b>📑 查看报告</b> ＝ 弹层内看「实时错题报告」（按模块分组，含位置/原因/建议）</p>
+          <p><b>⬇ 导出DOCX</b> ＝ 把全部错题导出为 Word 文件，给检查人员传阅</p>
+        </div>
+      </div>
+
+      <!-- 错题日志说明 -->
+      <div class="g-sec">
+        <div class="g-sec-h"><span class="g-no">▸</span>错题日志<span class="g-pos">右侧面板</span></div>
+        <div class="g-sec-b">
+          <p>检测中<b>实时更新</b>：错题按「模块 · 子模块」分组，每题显示在 App 中的位置、出错理由、改进建议、错题截图</p>
+          <p>评分规则：<b>基础完整性 3 维评分</b>（题干/选项/作答），配图/音频/答错后作为附加检查项展示</p>
         </div>
       </div>
 
@@ -948,7 +958,8 @@ async function renderServe(data){
     }else if(er.has_errors){
       es.innerHTML=`<span class="ml-2" style="color:var(--red);font-weight:600;font-size:12px">
         不通过 <b>${er.failed_count}/${er.total_questions}</b> 题</span>
-        <a href="/trace" target="_blank" class="ml-2 text-[11px] px-2 py-0.5 rounded-lg border border-[#bc4742] text-[#bc4742] hover:bg-[#fce4e4] no-underline" style="font-weight:500">查看错题详情 →</a>`
+        <span class="ml-2 text-[11px] px-2 py-0.5 rounded-lg border border-[#bc4742] text-[#bc4742] cursor-pointer hover:bg-[#fce4e4]" style="font-weight:500"
+          onclick="switchTab(3);document.getElementById('wrongBadge')&&document.getElementById('wrongBadge').scrollIntoView({behavior:'smooth',block:'center'})">去错题日志看 →</span>`
     }else{
       es.innerHTML=`<span class="ml-2" style="color:var(--ok-ink);font-weight:600;font-size:12px">全部通过 ✓</span>`
     }
@@ -1307,6 +1318,24 @@ function refreshLiveReport(){
       $('liveReportMeta').textContent=`已审查 ${st.total} 题 · 不通过 ${st.failed} 题 · 实时更新`;
       $('liveReportDownload').href='/api/errors/live';
       frame.src='/api/errors/live?t='+Date.now();
+    }else if(st.failed>0){
+      // ★ 有错题数据但报告未生成 → 即时生成再展示（"查看报告"按钮永远有实际内容）
+      $('liveReportMeta').textContent='正在生成错题报告…';
+      fetch('/api/errors/live/regenerate',{method:'POST'}).then(r=>r.json()).then(d=>{
+        if(d.success){
+          $('liveReportMeta').textContent=`已审查 ${st.total} 题 · 不通过 ${st.failed} 题 · 已生成`;
+          $('liveReportDownload').href=d.url;
+          frame.src=d.url;
+        }else{
+          $('liveReportMeta').textContent='暂无错题报告';
+          $('liveReportDownload').removeAttribute('href');
+          frame.srcdoc='<div style="font-family:sans-serif;color:#9aa5a0;padding:40px;text-align:center;">暂无错题报告</div>';
+        }
+      }).catch(()=>{
+        $('liveReportMeta').textContent='报告生成失败';
+        $('liveReportDownload').removeAttribute('href');
+        frame.srcdoc='<div style="font-family:sans-serif;color:#9aa5a0;padding:40px;text-align:center;">报告生成失败</div>';
+      });
     }else{
       $('liveReportMeta').textContent='尚无报告，请先运行一次审查';
       $('liveReportDownload').removeAttribute('href');

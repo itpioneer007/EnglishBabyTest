@@ -49,3 +49,17 @@ def register(app):
             "total": len(questions),
             "ready": bool(path and Path(path).exists()),
         })
+
+    @app.route("/api/errors/live/regenerate", methods=["POST"])
+    def api_error_live_regenerate():
+        """★ 即时重新生成实时错题报告（有数据但报告文件不存在/过期时前端调用）。
+        → 让「📑 查看报告」按钮永远有实际内容可看，不再显示"暂无报告"空壳。
+        """
+        try:
+            path = web_server._live_regen_error_report()
+            if path:
+                return jsonify({"success": True, "path": path,
+                                "url": "/api/errors/live?t=" + str(int(__import__("time").time()))})
+            return jsonify({"success": False, "error": "无错题数据可生成报告"}), 400
+        except Exception as e:
+            return jsonify({"success": False, "error": str(e)}), 500
