@@ -130,6 +130,62 @@ def register(app):
 
 
     # ========================================
+    # DOCX 错题报告（检查人员专用：按模块分组，含位置/原因/建议/截图）
+    # ========================================
+
+    @app.route("/api/export/docx", methods=["POST"])
+    def api_export_docx():
+        """
+        生成按模块分组的错题报告 DOCX。
+        POST Body: {} 或 { module: "听力专项" }（可选，只导出指定模块）
+        → 返回下载URL
+        """
+        data = request.get_json() or {}
+        only_module = data.get("module", "")
+
+        config = _load_export_config()
+        save_dir = config.get("save_dir", "") or str(Path(__file__).parent.parent / "outputs" / "reports")
+
+        # 加载巡检数据（含 qid → 用于解析模块/题号）
+        state_path = Path(__file__).parent.parent / "data" / "inspection_state.json"
+        questions = {}
+        st = {}
+        if state_path.exists():
+            with open(state_path, "r", encoding="utf-8") as f:
+                st = json.load(f)
+                questions = st.get("questions", {})
+
+        # 构造带 qid 的列表
+        qlist = []
+        for k, v in (questions.items() if isinstance(questions, dict) else []):
+            item = dict(v or {})
+            item["qid"] = k
+            if only_module and only_module not in k:
+                continue
+            qlist.append(item)
+
+        from src.report_exporter import ReportExporter
+        exporter = ReportExporter(save_dir)
+        report_path = exporter.export_docx(qlist, metadata={
+            "version": st.get("version", "未知版本"),
+            "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        })
+
+        if not report_path:
+            return jsonify({"success": False, "error": "报告生成失败（python-docx 不可用？）"}), 500
+
+        return jsonify({
+            "success": True,
+            "path": str(report_path),
+            "url": f"/api/export/download/{Path(report_path).name}",
+            "stats": {"total_questions": len(qlist),
+                      "error_questions": sum(1 for q in qlist
+                                             if q.get("overall_passed") is False
+                                             or q.get("question_type") == "错题截图")}
+        })
+
+
+    # ========================================
     # CSV 导出
     # ========================================
 

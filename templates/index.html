@@ -266,14 +266,18 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
         <span>已选 <b id="moduleSelCount" class="text-[#2d6a4f]">0</b></span>
       </div>
             <div class="space-y-1.5 shrink-0">
-        <!-- 听力专项：练/测 两组单元 -->
+        <!-- 听力专项：练/测 两组单元（可分别勾选是否检测） -->
         <div class="mod-card mod-tag">
           <div class="mod-card-head">
             <label class="mod-sel-label"><input type="checkbox" class="mod-sel" value="听力专项">听力专项</label>
             <button type="button" class="unit-clear" onclick="clearUnitPicks(this)">清空单元</button>
           </div>
-          <div class="unit-input-row"><span class="up-k">练</span><input class="unit-val unit-val-p" placeholder="范围/逗号/空格，留空=全部" title="练习单元范围：不限上限（按所选版本/年级实际单元填）；支持 1-5 / 1,3,5 / 空格分隔；留空=全部"></div>
-          <div class="unit-input-row"><span class="up-k">测</span><input class="unit-val unit-val-t" placeholder="范围/逗号/空格，留空=全部" title="测试单元范围：不限上限（按所选版本/年级实际单元填）；支持 1-5 / 1,3,5 / 空格分隔；留空=全部"></div>
+          <div class="unit-input-row">
+            <label class="inline-flex items-center gap-1 mr-2 text-sm"><input type="checkbox" class="tingli-part" value="practice" checked>练</label>
+            <span class="up-k">练</span><input class="unit-val unit-val-p" placeholder="范围/逗号/空格，留空=全部" title="练习单元范围：支持 1-5 / 1,3,5；留空=全部"></div>
+          <div class="unit-input-row">
+            <label class="inline-flex items-center gap-1 mr-2 text-sm"><input type="checkbox" class="tingli-part" value="test" checked>测</label>
+            <span class="up-k">测</span><input class="unit-val unit-val-t" placeholder="范围/逗号/空格，留空=全部" title="测试单元范围：支持 1-5 / 1,3,5；留空=全部（App 端测试模块目前可能已下线，届时此部分自动跳过）"></div>
         </div>
         <!-- 口语训练 -->
         <div class="mod-card mod-tag">
@@ -489,6 +493,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
             <span class="text-[10px] text-[#9aa5a0]">AI 检测中实时更新</span>
             <button onclick="openLiveReport()" title="在新弹层中查看实时错题报告"
               class="ml-auto text-[10.5px] px-2 py-0.5 rounded-md bg-[#bc4742] text-white hover:bg-[#9b2c2c]">📑 查看报告</button>
+            <button onclick="downloadDocxReport()" title="导出按模块分组的错题报告 DOCX（含位置/原因/建议/截图）"
+              class="text-[10.5px] px-2 py-0.5 rounded-md bg-[#2d6a4f] text-white hover:bg-[#1b4332]">⬇ 导出DOCX</button>
           </div>
           <div id="wrongList" class="flex-1 overflow-y-auto px-3 py-2 space-y-2">
             <div class="text-center py-6 text-[#9aa5a0] bg-[#faf8f3] rounded-lg text-[11px]">暂无错题</div>
@@ -798,7 +804,14 @@ async function startCooking(){
     if(name==='听力专项'){
       const pWrap=tag.querySelector('.unit-val-p')
       const tWrap=tag.querySelector('.unit-val-t')
-      moduleConfigs.push({name,units:pWrap?normalizeUnits(pWrap.value):'',testUnits:tWrap?normalizeUnits(tWrap.value):''})
+      const pChk=tag.querySelector('input.tingli-part[value="practice"]')
+      const tChk=tag.querySelector('input.tingli-part[value="test"]')
+      // ★ 练/测 开关：勾选才测；未勾选传 'NONE' 哨兵 → 后端跳过该部分
+      const pOn=pChk?pChk.checked:true
+      const tOn=tChk?tChk.checked:true
+      const pUnits=pOn?(pWrap?normalizeUnits(pWrap.value):''):'NONE'
+      const tUnits=tOn?(tWrap?normalizeUnits(tWrap.value):''):'NONE'
+      moduleConfigs.push({name,units:pUnits,testUnits:tUnits})
     }else{
       const v=tag.querySelector('.unit-val')
       moduleConfigs.push({name,units:v?normalizeUnits(v.value):''})
@@ -808,8 +821,13 @@ async function startCooking(){
   const modules=moduleConfigs.map(m=>m.name)
   const unitsMap={}
   moduleConfigs.forEach(m=>{
-    if(m.units) unitsMap[m.name]=m.units
-    if(m.testUnits) unitsMap['听力专项_测试']=m.testUnits
+    if(m.name==='听力专项'){
+      // ★ 听力专项始终传"练/测"两个键（NONE=跳过该部分），保证后端能正确判断
+      unitsMap['听力专项']=m.units||'NONE'
+      unitsMap['听力专项_测试']=m.testUnits||'NONE'
+    }else{
+      if(m.units) unitsMap[m.name]=m.units
+    }
   })
   const hasUnits=Object.keys(unitsMap).length>0
   // ★ 模块 → 上传脚本 自动匹配：有脚本的模块走 LLM 知识性审查，无脚本仅基础完整性
@@ -1264,6 +1282,19 @@ function openLiveReport(){
   const mask=$('liveReportMask');
   mask.classList.remove('hidden'); mask.classList.add('flex');
   refreshLiveReport();
+}
+function downloadDocxReport(){
+  fetch('/api/export/docx',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
+    .then(r=>r.json()).then(d=>{
+      if(d.success&&d.url){
+        const a=document.createElement('a');
+        a.href=d.url; a.download=''; document.body.appendChild(a); a.click(); a.remove();
+        const n=d.stats?`（共${d.stats.total_questions}题，错题${d.stats.error_questions}题）`:'';
+        alert('✅ 错题报告 DOCX 已生成并开始下载'+n+'\n\n按模块分组：每个板块错题放一起，含在App中的位置、出错理由、改进建议、错题截图。');
+      }else{
+        alert('❌ 导出失败：'+(d.error||'未知错误'));
+      }
+    }).catch(e=>alert('❌ 请求失败：'+e));
 }
 function closeLiveReport(){
   const mask=$('liveReportMask');

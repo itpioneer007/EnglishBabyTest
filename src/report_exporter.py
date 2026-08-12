@@ -435,6 +435,322 @@ class ReportExporter:
 
         return results
 
+    # ============================================================
+    # DOCX 错题报告（给检查人员查看：按模块分组，含位置/原因/建议/截图）
+    # ============================================================
+
+    @staticmethod
+    def _parse_qid(qid: str):
+        """从题目 key 解析位置信息 → (module, unit, stage, qno)
+        支持格式:
+          - "听力专项-脚本-Q19"          → (听力专项, 脚本, 无stage, 19)
+          - "auto-Q001"                 → (auto, 无, 无, 1)
+          - "听力专项-脚本-U6-Q19"       → (听力专项, 脚本, U6, 19)
+        """
+        s = str(qid)
+        m = re.match(r"^(.*?)-?(?:[Qq]0*(\d+))?$", s)
+        module = "未知模块"
+        stage = ""
+        qno = ""
+        # 拆出题号
+        qm = re.search(r"[Qq]0*(\d+)", s)
+        if qm:
+            qno = qm.group(1)
+        # 拆模块名（第一个 - 前）
+        if "-" in s:
+            module = s.split("-")[0].strip()
+        # 拆阶段（基础巩固/综合进阶/难点突破/脚本 等）
+        sm = re.search(r"(基础巩固|综合进阶|难点突破|脚本|练习|测试|单元评价|AI检测)", s)
+        if sm:
+            stage = sm.group(1)
+        return module, "", stage, qno
+
+    def export_docx(self, questions: list[dict], metadata: dict = None) -> str:
+        """生成按模块分组的错题报告 DOCX（检查人员专用）。
+
+        结构:
+          标题（版本/日期/总览统计）
+          一、模块 A（X 题错）
+            · 第N题 [题型] —— 位置说明
+              - 出错位置：模块 · 单元 · 第N题
+              - 出错理由：...
+              - 改进建议：...
+              [嵌入截图]
+          二、模块 B ...
+        """
+        try:
+            from docx import Document
+            from docx.shared import Pt, Inches, RGBColor
+            from docx.enum.text import WD_ALIGN_PARAGRAPH
+            from docx.enum.table import WD_TABLE_ALIGNMENT
+        except ImportError as e:
+            print(f"  ⚠ python-docx 不可用: {e}")
+            return ""
+
+        meta = metadata or {}
+        version = meta.get("version", "未知版本")
+        date_str = meta.get("date", datetime.now().strftime("%Y-%m-%d %H:%M"))
+
+        # 只取错题（overall_passed=False 或 question_type=错题截图）
+        errors = [q for q in questions
+                  if q.get("overall_passed") is False
+                  or q.get("question_type") == "错题截图"]
+        if not errors:
+            errors = [q for q in questions
+                      if q.get("overall_passed") is False
+                      or q.get("question_type") == "错题截图"]
+            # 仍无 → 尝试取所有（报告空白不好看）
+            if not errors and questions:
+                errors = [q for q in questions
+                          if not q.get("overall_passed", True)]
+
+        # 按模块分组（保持出现顺序）
+        # ★ 优先用 question_type（模块名：知识过关/口语训练等），找不到再从 qid 解析
+        groups = {}   # module_key -> {"name":..., "items":[...]}
+        order = []
+        for q in errors:
+            qid = q.get("qid", "")
+            if not qid:
+                qid = f"auto-Q{int(q.get('idx', 1)):03d}"
+            # ★ 优先 question_type（去掉括号后缀如"（共1分）"），否则用 qid 解析
+            qtype = (q.get("question_type", "") or "").strip()
+            qt_clean = re.sub(r"[（(].*?[）)]", "", qtype).strip()
+            if qt_clean and qt_clean not in ("错题截图", "?", ""):
+                mod = qt_clean
+                stage = ""
+            else:
+                mod, unit, stage, qno = self._parse_qid(qid)
+                if mod == "未知模块":
+                    mod = "其他"
+            key = f"{mod}|{stage}" if stage else mod
+            if key not in groups:
+                groups[key] = {"name": f"{mod}" + (f" · {stage}" if stage else ""),
+                               "items": []}
+                order.append(key)
+            groups[key]["items"].append(q)
+
+        doc = Document()
+
+        # 标题
+        title = doc.add_heading(f"英语宝错题报告", level=0)
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = p.add_run(f"版本：{version}　|　生成时间：{date_str}")
+        run.font.size = Pt(11)
+        run.font.color.rgb = RGBColor(0x88, 0x88, 0x88)
+
+        # 总览
+        doc.add_heading("总览", level=1)
+        summary = doc.add_paragraph()
+        total_err = len(errors)
+        total_q = len(questions)
+        summary.add_run(
+            f"共检测 {total_q} 题，其中错题/需复核 {total_err} 题，涉及 {len(groups)} 个模块板块。"
+        )
+
+        # 每个模块板块
+        for ki, key in enumerate(order, 1):
+            g = groups[key]
+            doc.add_heading(f"{ki}. {g['name']}（错题 {len(g['items'])} 题）", level=1)
+
+            for qi, q in enumerate(g["items"], 1):
+                qid = q.get("qid", "")
+                qtype = q.get("question_type", "未知题型")
+                qno = q.get("progress", "") or qid
+                idx = q.get("idx", "?")
+
+                # 位置说明（★ 已在分组大标题下展示模块，题内不再重复）
+                loc_str = f"第{idx}题"
+
+                # 题型标题
+                h = doc.add_heading(f"{qi}. 第{idx}题　[{qtype}]", level=2)
+
+                # 位置
+                p = doc.add_paragraph()
+                p.add_run("▸ 在 App 中的位置：").bold = True
+                p.add_run(f"{loc_str}（题干：{(q.get('stem') or '')[:60]}{'…' if len(q.get('stem') or '')>60 else ''}）")
+
+                # 出错理由
+                reasons = []
+                for dim_name, reason_field, ai_field in self._LIVE_DIMS:
+                    r = q.get(reason_field, "")
+                    if r and ("不通过" in r or "⚠" in r or "未" in r or "失败" in r
+                              or q.get(ai_field) is False):
+                        reasons.append(f"{dim_name}：{r}")
+                if not reasons:
+                    # 兜底：从 overall 说明
+                    if q.get("question_type") == "错题截图":
+                        reasons.append("答题答错（已截图）")
+                    else:
+                        reasons.append("界面检查未通过（存在不通过维度或缺失必要元素）")
+
+                p = doc.add_paragraph()
+                p.add_run("▸ 出错理由：").bold = True
+                p.add_run("\n".join(f"  · {r}" for r in reasons) if reasons else "  （无）")
+
+                # 改进建议（AI 启发式：根据原因生成）
+                sugg = self._build_suggestion(q, reasons)
+                p = doc.add_paragraph()
+                p.add_run("▸ 改进建议：").bold = True
+                p.add_run("\n".join(f"  · {s}" for s in sugg) if sugg else "  （请人工核对）")
+
+                # 截图
+                shot = q.get("screenshot", "")
+                if shot:
+                    # 尝试从 screenshots 目录找到图片并嵌入
+                    shots_dir = Path(__file__).parent.parent / "screenshots"
+                    img_path = shots_dir / shot
+                    if img_path.exists():
+                        try:
+                            doc.add_picture(str(img_path), width=Inches(3.2))
+                            doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+                        except Exception:
+                            pass
+                    else:
+                        p = doc.add_paragraph()
+                        p.add_run(f"（截图：{shot}，文件未找到）").font.color.rgb = RGBColor(0x99, 0x99, 0x99)
+
+                doc.add_paragraph()  # 空行分隔
+
+        # 页脚说明
+        doc.add_paragraph()
+        foot = doc.add_paragraph()
+        foot.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        r = foot.add_run("英语宝审查智能体 · 自动生成 · 供检查人员参考，最终判定以人工确认为准")
+        r.font.size = Pt(9)
+        r.font.color.rgb = RGBColor(0xbb, 0xbb, 0xbb)
+
+        # 保存
+        version_safe = re.sub(r'[\\/:*?"<>|]', '_', version)
+        filename = f"错题报告_{version_safe}_{datetime.now().strftime('%Y%m%d_%H%M')}.docx"
+        out_path = self.save_dir / filename
+        doc.save(str(out_path))
+        print(f"  ✅ DOCX 错题报告: {out_path}")
+        return str(out_path)
+
+    @staticmethod
+    def _build_suggestion(q: dict, reasons: list) -> list:
+        """根据出错理由生成个性化改进建议（针对具体错误内容，非固定模板）
+
+        每条 reason 都含具体错误描述（来自 LLM 审查 / 界面检查），
+        建议基于"错误类型 + 具体内容"动态生成，例如：
+          - 题干语法错 → 给出正确写法建议
+          - 题干与选项不符 → 建议改题型/改选项
+          - 选项数量不足 → 建议补齐选项
+        """
+        sugg = []
+        stem = (q.get("stem", "") or "").strip()
+        qtype = (q.get("question_type", "") or "").strip()
+        ai = {k: q.get(k) for k in ("ai_stem", "ai_content", "ai_image",
+                                    "ai_answer", "ai_audio", "ai_post_error")}
+
+        # ── 遍历每个维度 reason，提取具体错误并生成对应建议 ──
+        for r in reasons:
+            if not r:
+                continue
+            # 去掉维度前缀（"题干：""内容：""配图："等）
+            body = re.sub(r"^(题干|内容|配图|作答|音频|答错后)[：:]", "", r).strip()
+
+            # ⓪ ★ 优先采用 LLM 已给出的具体修改建议（"建议修改：xxx"）
+            m = re.search(r"建议修改[：:]\s*(.+)", body)
+            if m:
+                sugg.append(m.group(1).strip())
+                continue
+
+            # ① 题干语法/词序错误（含"应为"字样 → 错误原文+正确写法）
+            m = re.search(r"“(.+?)”应为“(.+?)”", body)
+            if m and ("语法" in body or "词序" in body or "错误" in body):
+                sugg.append(
+                    f"题干存在文字错误：「{m.group(1)}」应为「{m.group(2)}」。"
+                    f"请修正题干中的单词/词序，确保学生能正确理解题目。"
+                )
+                continue
+            # ② 题干语法错误（有"应为"但格式不同）
+            m = re.search(r"应为“(.+?)”", body)
+            if m and "语法" in body:
+                sugg.append(f"按正确写法「{m.group(1)}」修正题干文字，避免语法/词序错误。")
+                continue
+
+            # ③ 题干与题型/选项不符（"题目为…但…" → 建议改题型）
+            m = re.search(r"题目为“?([^，。；]+?)”?，但(?:脚本|实际)?(?:中)?(?:仅|只|没有|未)", body)
+            if m:
+                target = m.group(1).strip()
+                sugg.append(
+                    f"题干声称题型为「{target}」但与实际作答形式不符："
+                    f"请调整题干描述或改用与作答形式匹配的题型"
+                    f"（如改为填空题/选择题/配对题），保持题干与选项一致。"
+                )
+                continue
+            # ④ 选项数量不足（"仅提供了N个…"）
+            m = re.search(r"仅提供(?:了)?(\d+)个", body)
+            if m and ("选项" in body or "内容" in body):
+                n = int(m.group(1))
+                sugg.append(
+                    f"选项数量不足（当前{n}个）：请补齐选项至与题型要求一致"
+                    f"（选择题一般≥3个，判断/配对按题量配齐），避免选项缺失。"
+                )
+                continue
+
+            # ⑤ 选项与题干不匹配（"选项"+"不匹配/无关/不一致"）
+            if ("选项" in body or "内容" in body) and any(k in body for k in ("不匹配", "无关", "不一致", "不对应", "不符合")):
+                sugg.append(
+                    "选项与题干语义不匹配：请核对选项内容，确保各选项均围绕题干要求设置"
+                    "（正确项唯一、干扰项相关），避免学生因选项无关而困惑。"
+                )
+                continue
+            # ⑥ 题干未提取到/缺失
+            if "未提取到" in body or "未提供题干" in body:
+                sugg.append("题干文字缺失：请补充完整的题目要求描述，说明作答方式（听/读/选/写）。")
+                continue
+
+            # ⑦ 配图问题
+            if ("配图" in body or "图片" in body) and ("未匹配" in body or "不符" in body):
+                sugg.append("配图与题目内容不符或缺失：请核对配图，确保与题干/答案语义一致且清晰可见。")
+                continue
+            if ("配图" in body or "图片" in body) and "未检测" in body:
+                # 脚本审查未截图 → 温和提示（人工核对），非硬性错误
+                sugg.append("需连手机截图核对配图：脚本审查无法看到实际图片，建议人工查看配图与题干是否一致。")
+                continue
+
+            # ⑧ 音频问题
+            if "音频" in body and ("不可点击" in body or "未检测到播放" in body):
+                sugg.append("听力音频资源异常：请确保播放控件可点击、音频文件可正常播放（检查文件路径/格式/时长）。")
+                continue
+            if "音频" in body and "未检测" in body and ai.get("ai_audio") is not False:
+                sugg.append("需连手机截图核对音频控件：脚本审查无法验证播放按钮，建议人工确认听力音频可正常播放。")
+                continue
+
+            # ⑨ 作答元素问题
+            if "作答" in body and ("未识别" in body or "未检测" in body):
+                sugg.append("作答元素异常：请确保检查/录音/输入框等作答控件正常显示且可交互。")
+                continue
+
+        # ── 答错截图类（无六维 reason）──
+        if q.get("question_type") == "错题截图":
+            sugg.append("人工核对错题画面：定位答错原因（听音误解/选项混淆/知识点未掌握）")
+            sugg.append("针对错题知识点设计专项巩固练习，如高频错词/句型重复训练")
+
+        # ── 兜底：仍无建议 → 基于题型给提示 ──
+        if not sugg:
+            if "听" in qtype or "听力" in qtype:
+                sugg.append("人工复核该听力题：检查录音清晰度、语速、选项干扰项设计是否合理。")
+            elif "填空" in qtype or "补全" in qtype:
+                sugg.append("人工复核该填空/补全题：确认答案唯一性、空格数量与提示词是否匹配。")
+            elif "排序" in qtype or "排列" in qtype:
+                sugg.append("人工复核该排序题：确认选项顺序逻辑清晰、无歧义。")
+            else:
+                sugg.append("人工复核该题：对照脚本答案与 App 实际内容确认错误原因。")
+        # ★ 去重（同一条建议只保留一次，保持顺序）
+        seen = set()
+        uniq = []
+        for s in sugg:
+            key = s.strip()
+            if key and key not in seen:
+                seen.add(key)
+                uniq.append(s)
+        return uniq
+
     # 维度展示顺序：(中文名, reason字段, ai_布尔字段)
     _LIVE_DIMS = [
         ("题干", "stem_reason", "ai_stem"),

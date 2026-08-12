@@ -2981,25 +2981,27 @@ def _get_trace_engine():
 
 
 def _score_breakdown(qd: dict) -> dict:
-    """透明评分：每个「已检查」的维度等权，得分 = 通过数 / 已检查数 × 100。
+    """透明评分（★ 统一维度，让前端展示一致）：
 
-    返回明细让检查人员一眼看懂评分怎么来的：
-      score      总分（0-100）
-      checked_count / passed_count / failed_count  已检/通过/未通过 维度数
-      formula    评分公式（如 '2/4×100=50'）
-      dims       每个已检查维度的 {name, passed, reason, severity}
-    未检查的维度（null）不参与评分（该项未检测，不算分也不扣分）。
+    ★ 主评分（一致性保证）：仅 3 个核心维度 → 题干/选项/作答
+       通过数 / 已检查数 × 100。这 3 维是任何题型必检的（基础完整性）。
+       其他维度（配图/音频/答错后/报告）作为"附加检查项"展示，不参与主评分。
+    ★ 这样所有题"维度"统一，不会出现"3 维 vs 6 维"不一致。
     """
-    dims = [
+    # ★ 主评分：3 维（基础完整性，所有题统一必检）
+    main_dims = [
         ("题干", qd.get("ai_stem"), qd.get("stem_reason"), "medium"),
-        ("内容", qd.get("ai_content"), qd.get("content_reason"), "high"),
-        ("图片", qd.get("ai_image"), qd.get("image_reason"), "high"),
-        ("答案", qd.get("ai_answer"), qd.get("answer_reason"), "high"),
+        ("选项", qd.get("ai_content"), qd.get("content_reason"), "high"),
+        ("作答", qd.get("ai_answer"), qd.get("answer_reason"), "high"),
+    ]
+    # ★ 附加检查：4 维（按题型可选，不算主分）
+    extra_dims = [
+        ("配图", qd.get("ai_image"), qd.get("image_reason"), "high"),
         ("音频", qd.get("ai_audio"), qd.get("audio_reason"), "low"),
-        ("答错检查", qd.get("ai_post_error"), qd.get("post_error_reason"), "low"),
+        ("答错后", qd.get("ai_post_error"), qd.get("post_error_reason"), "low"),
         ("报告", qd.get("ai_report"), qd.get("report_reason"), "low"),
     ]
-    checked = [d for d in dims if d[1] is not None]
+    checked = [d for d in main_dims if d[1] is not None]
     passed = [d for d in checked if d[1] is True]
     total = len(checked)
     score = round(len(passed) / total * 100) if total else 0
@@ -3008,8 +3010,12 @@ def _score_breakdown(qd: dict) -> dict:
         "checked_count": total,
         "passed_count": len(passed),
         "failed_count": total - len(passed),
-        "formula": f"{len(passed)}/{total}×100={score}" if total else "未检查，无法评分",
+        # ★ 公式固定为 "3 维基础完整性检查"，让检查人员一眼明白评分逻辑
+        "formula": f"{len(passed)}/{total}×100={score}（基础完整性 3 维评分）" if total else "未检查，无法评分",
         "dims": [{"name": d[0], "passed": d[1], "reason": d[2] or "", "severity": d[3]} for d in checked],
+        # ★ 附加检查项（前端可单独展示，不参与主分）
+        "extra_dims": [{"name": d[0], "passed": d[1], "reason": d[2] or "", "severity": d[3]}
+                      for d in extra_dims if d[1] is not None],
     }
 
 
