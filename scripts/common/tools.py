@@ -441,20 +441,28 @@ def smart_find_unit_row(d, target, click_text="去答题", max_pages=8):
         if row:
             row_y = row.bounds[1]
             for e in elements:
-                if (e.text or "").strip() == click_text:
-                    # ★ 同行判断（行距放宽）+ 避开顶部遮挡区（y<350 是页面顶部版本条/工具条覆盖区，
-                    #   点击会被拦截无效，如单元自检列表 Unit1 被"当前版本"条挡住）
-                    if abs(e.bounds[1] - row_y) < 300 and e.bounds[1] >= 350:
+                t = (e.text or "").strip()
+                # ★ 按钮文字多状态匹配（用户确认）：
+                #   - "去答题"：首次作答
+                #   - "重新答题"：已答过一次（按钮文字变化）
+                #   - "继续答题"：中途退出后恢复（此时需从当前题继续，见 _enter_unit）
+                #   ★ 注意：不能匹配"已评测/全站平均分/分数"——那是分数展示块，不是按钮！
+                _btn_hit = (t == click_text or t in ("去答题", "重新答题", "继续答题")
+                            or (click_text in ("去答题", "重新答题", "继续答题") and t in ("去答题", "重新答题", "继续答题")))
+                if _btn_hit:
+                    # ★ 同行判断（行距放宽）：
+                    #   ★ 用户确认：默认先测前面的单元（如 Unit1 就在列表最顶部），
+                    #     找到同行按钮就**直接点击**，绝不下滑！
+                    #   ❌ 之前"y<350 判为遮挡区→下滑重试"是错的：Unit1 在最顶部，
+                    #     下滑反而把它滚出屏幕 → 永远找不到 → 死循环！
+                    #     （顶部版本条只是视觉覆盖，按钮仍可点击命中）
+                    if abs(e.bounds[1] - row_y) < 300:
                         try:
                             e.click()
                         except Exception:
                             d.click((e.bounds[0]+e.bounds[2])//2, (e.bounds[1]+e.bounds[3])//2)
                         return True
-                    elif abs(e.bounds[1] - row_y) < 300:
-                        # 同行但被遮挡（y<350）→ 记下，下滑后重试（可能滚出遮挡区）
-                        print(f"    ⚠ {click_text} 在遮挡区(y={e.bounds[1]})，下滑重试…")
-                        break
-        # 未找到 → 下滑翻页
+        # 未找到目标行/同行按钮 → 下滑翻页（只有找不到目标单元才下滑）
         try:
             S_swipe(d, 540, 1800, 540, 600, 0.3)
             time.sleep(0.4)

@@ -454,7 +454,11 @@ def _handle_sort_question(d, config):
             print(f"    ✅ 排序完成，下一题已出现")
             return True
         time.sleep(0.5)
-    return True
+    # ★★ 关键修复：循环结束仍无"检查/检测/查看报告/下一题" = 排序未完成
+    #   （可能序号没点中/页面还在加载）→ 必须返回 False 让主循环等待重试！
+    #   ❌ 之前无条件 return True → 失败也被主循环 q+=1 计一次 → 17题被计两次
+    #      → q 与真实题号错位 → 下一题"题号未推进超时"卡死（本次 18/36 卡死根因）
+    return False
 
 
 def _get_qno(d):
@@ -583,7 +587,9 @@ def _handle_sentence_sort(d, config):
             time.sleep(0.6)
             return True
     print(f"    ⚠ 句子点完{clicked}个但未出现检查按钮")
-    return True
+    # ★★ 与 _handle_sort_question 同样修复：未完成必须返回 False，
+    #   否则失败也被主循环 q+=1 计数 → q 错位 → 后续"题号未推进"卡死
+    return False
 
 
 def _handle_match_question(d, config):
@@ -1204,15 +1210,63 @@ def _handle_fill_blank(d, config):
 
     # 开场：确保 EditText 可见（首次进入"补全短文"题时 App 会自动激活系统键盘
     #   把方框挡住，dump 里看不到 EditText 节点；先按 back 收起键盘）
-    for _ in range(3):
+    #   ★ 用户确认的正确时序（H5 填空页）：
+    #     1) 进入填空页后页面加载 + 键盘弹出约需 4~5 秒
+    #     2) 等页面加载完成（题干关键词出现）→ 等键盘弹出 → back 收键盘 → EditText 可见
+    #   ★ 关键安全点：绝不能"没等页面加载完就 back"——back 会退出答题页弹"中途退出"！
+    #     所以开场严格按序：先等题干出现（页面加载完）→ 等键盘弹出（mInputShown 或等待）
+    #     → 再 back → 探测 EditText
+    _FILL_KWS = ('填空', '补全', '每空', '填写', '填词', '完成小短文')
+    _et_ok = False
+
+    # ① 等页面加载完成（题干关键词出现 或 EditText 已可见）
+    _page_loaded = False
+    for _ in range(6):
         try:
             _xml_probe = d.dump_hierarchy()
             if 'class="android.widget.EditText"' in _xml_probe:
-                break  # EditText 可见，可开始填方框
+                _et_ok = True
+                _page_loaded = True
+                break
+            if any(kw in _xml_probe for kw in _FILL_KWS):
+                _page_loaded = True
+                break
         except Exception:
             pass
-        d.press("back")
-        time.sleep(0.6)
+        time.sleep(1.0)
+    if not _page_loaded:
+        print("    ⚠ 页面加载超时（未见填空题干），跳过填空处理")
+        return False
+
+    # ② 若 EditText 尚不可见（键盘挡住）→ 等键盘弹出 → back 收键盘（只一次！）
+    #   ★ 关键：back 只执行一次。若收键盘后布局恢复慢、EditText 仍不可见，
+    #     绝不能再次 back（键盘已收，再 back 会触发"中途退出"弹窗）！
+    #     只继续等待探测，直到 EditText 出现或超时。
+    if not _et_ok:
+        time.sleep(4.0)   # 等键盘完全弹出
+        try:
+            _xml_probe = d.dump_hierarchy()
+            if 'class="android.widget.EditText"' in _xml_probe:
+                _et_ok = True
+        except Exception:
+            pass
+        if not _et_ok:
+            d.press("back")   # 收键盘（只一次！）
+            # 等布局恢复 + 探测（最多等 10 秒，绝不重复 back）
+            for _ in range(5):
+                time.sleep(2.0)
+                try:
+                    _xml_probe = d.dump_hierarchy()
+                    if 'class="android.widget.EditText"' in _xml_probe:
+                        _et_ok = True
+                        break
+                except Exception:
+                    pass
+    if not _et_ok:
+        # ★ 没有 EditText → 不是填空题（可能是阅读/图片选择题被误路由到这里），
+        #   直接返回 False，避免 40 轮空转下滑+误点"检查"，把非填空题消费掉
+        print("    ⚠ 未检测到 EditText，跳过填空处理")
+        return False
 
     def _find_empty_inputs():
         """找所有 text='' 的 EditText（未填的空框），按 y 排序。

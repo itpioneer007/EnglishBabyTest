@@ -92,7 +92,8 @@ def switch_version(d, target_version):
             break
     time.sleep(1.2)
     # 关闭设置面板 + 回主页
-    d.press('back'); time.sleep(0.6)
+    # ★ 用户确认：选完版本后只需按一次 back 就能回到"我"主界面（之前按两次
+    #   会多退一层，可能退过头）。back 一次回"我"主界面 → 点底部「英语」回主页。
     d.press('back'); time.sleep(0.6)
     if d(text='英语').exists(timeout=1.5):
         d(text='英语').click(); time.sleep(1.2)
