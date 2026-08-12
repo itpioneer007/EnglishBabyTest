@@ -373,7 +373,18 @@ def _detect_content_dimension():
                 count += 1
             log_msg(f"🧪 内容检查已补充: {count}题 ({'通过' if count > 0 else ''})", "success")
         except Exception as e:
-            log_msg(f"⚠ 批量内容检查失败: {str(e)[:80]}", "warning")
+            _err = str(e)
+            # ★ 友好识别常见 LLM 错误（配额/密钥/网络），给出可操作提示而非笼统报错
+            if "403" in _err or "Free quota" in _err or "AllocationQuota" in _err:
+                log_msg("⚠ 批量内容检查失败: 阿里云百炼免费额度已用完(403 Forbidden)。请在百炼控制台充值或关闭『仅使用免费额度』模式后重试", "warning")
+            elif "401" in _err or "Invalid" in _err or "Authentication" in _err:
+                log_msg("⚠ 批量内容检查失败: LLM API 密钥无效或过期(401)。请检查 .env 中的 LLM_API_KEY", "warning")
+            elif "timed out" in _err.lower() or "Timeout" in _err:
+                log_msg("⚠ 批量内容检查失败: LLM 请求超时。可稍后重试或分批检查", "warning")
+            elif "返回空内容" in _err:
+                log_msg(f"⚠ 批量内容检查失败: {_err[:100]}", "warning")
+            else:
+                log_msg(f"⚠ 批量内容检查失败: {_err[:80]}", "warning")
     except Exception as e:
         log_msg(f"⚠ 内容补充异常: {e}", "warning")
 

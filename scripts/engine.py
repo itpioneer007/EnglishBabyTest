@@ -852,6 +852,8 @@ def _answer_loop(d, config, module_name):
                       "原音", "小喇叭", "跳过", "温馨提示", "继续答题", "恭喜",
                       "回答正确", "回答错误", "很遗憾", "答对了", "答错了",
                       "练习结束还剩", "还剩", "得分", "用时", "获得", "本题得分")
+            # ★ 时间/得分/进度等非题干文本（状态栏时间 21:12、得分 77.0、进度 3/40）
+            _timer_pat = _re.compile(r"^\d{1,2}:\d{2}$|^还剩[：:]\s*\d{1,2}:\d{2}$|^\d+(\.\d+)?%?$|^\d+\s*/\s*\d+$|^\d+分$")
             for m in _re.finditer(r'resource-id="[^"]*question_title_tv[^"]*"[^>]*text="([^"]+)"', _xml):
                 t = m.group(1).strip()
                 if t and t not in seen:
@@ -860,10 +862,11 @@ def _answer_loop(d, config, module_name):
             for m in _re.finditer(r'text="([^"]{4,})"', _xml):
                 t = m.group(1).strip()
                 if not t or t in seen: continue
-                # ★ 过滤非题干文本（图片提示、按钮文字、反馈等）
+                # ★ 过滤非题干文本（图片提示、按钮文字、反馈、时间/得分等）
                 if t in ("点击图片查看高清大图", "查看高清大图", "点击查看高清大图"): continue
                 if "点击图片" in t or "高清大图" in t: continue
                 if any(n in t for n in _noise): continue
+                if _timer_pat.match(t): continue          # ★ 时间/得分/进度
                 if len(t) >= 60: continue
                 seen.add(t); stems.append(t)
                 if len(stems) >= 3: break

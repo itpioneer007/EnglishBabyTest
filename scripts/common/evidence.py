@@ -91,8 +91,11 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
                  "练习结束还剩", "还剩", "得分", "用时", "获得", "本题得分", "作答正确", "作答错误",
                  # ★ 图片提示等非题干
                  "点击图片查看高清大图", "查看高清大图", "点击查看高清大图", "高清大图")
-        # 计时器/倒计时（如 "19:58"、"还剩：19:58"）
-        _timer_pat = re.compile(r"还剩[：:]\s*\d{1,2}:\d{2}|\b\d{1,2}:\d{2}\b")
+        # 计时器/倒计时（如 "19:58"、"还剩：19:58"）+ 得分/进度（77.0、3/40、100%）
+        _timer_pat = re.compile(
+            r"^\d{1,2}:\d{2}$|^还剩[：:]\s*\d{1,2}:\d{2}$|"
+            r"^\d+(\.\d+)?%?$|^\d+\s*/\s*\d+$|^\d+分$"
+        )
         # ★ 优先 question_title_tv（App 真题干节点）
         for m in re.finditer(r'resource-id="[^"]*question_title_tv[^"]*"[^>]*text="([^"]+)"', xml):
             t = m.group(1).strip()
@@ -104,12 +107,13 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
         # ★ 兜底：其他长文本（缩短到 ≥4 字符，抓到"听录音选图"等短题干）
         for m in re.finditer(r'text="([^"]{4,})"', xml):
             t = m.group(1).strip()
-            t = _timer_pat.sub("", t).strip()
             if not t or t in seen or t in noise or len(t) >= 60:
                 continue
             if any(n in t for n in noise):
                 continue
             if "点击图片" in t or "高清大图" in t:
+                continue
+            if _timer_pat.match(t):      # ★ 时间/得分/进度（21:12、77.0、3/40）
                 continue
             seen.add(t)
             stems.append(t)

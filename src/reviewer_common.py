@@ -399,10 +399,19 @@ class LLMClient:
             return self._ask_with_ocr(prompt, paths[0])
 
         # 纯文本
-        try:
-            return self._call_api(prompt, image_paths=None)
-        except Exception as e:
-            return f"[LLM 调用失败] {e}"
+        # 纯文本（★ 带重试：网络波动/API限流会偶发空响应或异常，重试 2 次）
+        _last_err = ""
+        for _attempt in range(3):
+            try:
+                _r = self._call_api(prompt, image_paths=None)
+                if _r and _r.strip():
+                    return _r
+                _last_err = f"LLM 返回空内容（第{_attempt+1}次尝试）"
+            except Exception as e:
+                _last_err = f"[LLM 调用失败] {e}（第{_attempt+1}次尝试）"
+            import time as _t
+            _t.sleep(1.5 * (_attempt + 1))   # 递增退避：1.5s / 3s / 4.5s
+        return _last_err
 
     def _ask_with_ocr(self, prompt: str, image_path: str) -> str:
         """
