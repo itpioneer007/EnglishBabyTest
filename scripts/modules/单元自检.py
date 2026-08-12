@@ -384,7 +384,27 @@ def _answer_loop(d, max_q=200):
             opt = _m_opt.group(1)
         if opt:
             q += 1
-            d(text=opt).click()
+            # ★ 修复 StaleObjectException：页面切换/加载中元素会过期。
+            #   点击前重新 dump 验证 opt 仍在，且点击用坐标（避免 d(text=).click() 查两次）
+            _clicked = False
+            for _try in range(3):
+                try:
+                    _xml_try = d.dump_hierarchy()
+                    _mt = re.search(r'text="' + opt + r'"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', _xml_try)
+                    if _mt:
+                        _ox = (int(_mt.group(1)) + int(_mt.group(3))) // 2
+                        _oy = (int(_mt.group(2)) + int(_mt.group(4))) // 2
+                        d.click(_ox, _oy)
+                        _clicked = True
+                        break
+                except Exception:
+                    pass
+                time.sleep(0.4)
+            if not _clicked:
+                try:
+                    d(text=opt).click()
+                except Exception:
+                    print(f"      → 选 {opt} 点击失败（页面可能加载中），跳过")
             print(f"      → 选 {opt}")
             step_log(f"  第{q}题: 选 {opt} → 检查", "info")
             # 界面级完整性检查证据 → 前端证据卡（复用已 dump 的 xml0）
