@@ -329,6 +329,14 @@ def log_msg(msg: str, level: str = "info", evidence: list = None):
                 if shot:
                     key = f"auto-Q{qidx:03d}"
                     qs = _inspection_state.setdefault("questions", {})
+                    # ★ 模块上下文（错题定位用）
+                    try:
+                        from common.logger import get_current_module
+                        _cm, _cs = get_current_module()
+                    except Exception:
+                        _cm, _cs = "", ""
+                    if not _cm:
+                        _cm = _inspection_state.get("module", "")
                     if key in qs:
                         qs[key]["screenshot"] = shot
                     else:
@@ -336,6 +344,9 @@ def log_msg(msg: str, level: str = "info", evidence: list = None):
                         qs[key] = {
                             "idx": qidx,
                             "total": len(qs) + 1,
+                            "module": _cm,
+                            "stage": _cs,
+                            "module_qno": _inspection_state.get("_cur_module_qno", qidx),
                             "question_type": "错题截图",
                             "screenshot": shot,
                             "progress": f"Q{qidx}",
@@ -2597,6 +2608,23 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list):
       - overall: 可查维度≥3且无不通过 → 通过；否则 → 不通过；全是 skip → 未审
     """
     global _inspection_state
+    # ★ 模块上下文（scheduler 设置）：模块名/子模块/模块内题号
+    try:
+        from common.logger import get_current_module
+        _current_module_name, _current_stage_name = get_current_module()
+    except Exception:
+        _current_module_name, _current_stage_name = "", ""
+    if not _current_module_name:
+        _current_module_name = _inspection_state.get("module", "")
+        _current_stage_name = _inspection_state.get("stage", "")
+    # ★ 模块内题号：从最近一次"开始检测模块"或每模块计数维护
+    #   兼容旧逻辑：module_qno 优先取 scheduler 计数，否则用总题号
+    _cur_key = f"{_current_module_name}|{_current_stage_name}"
+    if _cur_key != _inspection_state.get("_cur_module_key", ""):
+        _inspection_state["_cur_module_key"] = _cur_key
+        _inspection_state["_cur_module_qno"] = 0
+    _inspection_state["_cur_module_qno"] = _inspection_state.get("_cur_module_qno", 0) + 1
+    _current_module_qno = _inspection_state["_cur_module_qno"]
     # 证据维度 → 前端六维映射（"题型"不映射到任何六维，仅作为元信息）
     field_map = {
         "题干": "stem",
@@ -2693,6 +2721,10 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list):
         "question_type": question_type,
         "screenshot": "",
         "progress": f"Q{qidx}",
+        # ★ 模块定位信息（哪个模块·哪个子模块·模块内第几题）→ 错题报告按此分组
+        "module": _current_module_name,
+        "stage": _current_stage_name,
+        "module_qno": _current_module_qno,
         # 六维判定
         "ai_stem": dims["stem"], "ai_content": dims["content"],
         "ai_image": dims["image"], "ai_answer": dims["answer"],

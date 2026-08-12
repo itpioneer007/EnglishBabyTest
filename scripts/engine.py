@@ -847,17 +847,23 @@ def _answer_loop(d, config, module_name):
             # ② 题干文字：★ 优先 question_title_tv，再兼容普通 text（过滤提示词）
             stems = []
             seen = set()
+            _noise = ("下一题", "上一题", "检查", "检测", "提交", "开始答题", "重新答题",
+                      "继续练习", "查看报告", "练习报告", "完成", "点击录音", "点击结束",
+                      "原音", "小喇叭", "跳过", "温馨提示", "继续答题", "恭喜",
+                      "回答正确", "回答错误", "很遗憾", "答对了", "答错了",
+                      "练习结束还剩", "还剩", "得分", "用时", "获得", "本题得分")
             for m in _re.finditer(r'resource-id="[^"]*question_title_tv[^"]*"[^>]*text="([^"]+)"', _xml):
                 t = m.group(1).strip()
                 if t and t not in seen:
                     seen.add(t); stems.append(t)
                 if len(stems) >= 3: break
-            for m in _re.finditer(r'text="([^"]{8,})"', _xml):
+            for m in _re.finditer(r'text="([^"]{4,})"', _xml):
                 t = m.group(1).strip()
                 if not t or t in seen: continue
-                # ★ 过滤非题干文本（图片提示、按钮文字等）
+                # ★ 过滤非题干文本（图片提示、按钮文字、反馈等）
                 if t in ("点击图片查看高清大图", "查看高清大图", "点击查看高清大图"): continue
                 if "点击图片" in t or "高清大图" in t: continue
+                if any(n in t for n in _noise): continue
                 if len(t) >= 60: continue
                 seen.add(t); stems.append(t)
                 if len(stems) >= 3: break
@@ -918,12 +924,24 @@ def _answer_loop(d, config, module_name):
                            "expected": "非听力/口语题",
                            "actual": "—",
                            "diff": "题干无'听录音/朗读'等关键词，本题非听力/口语题，无需音频"})
-            # ⑤ 作答元素（检查/录音/输入框）
-            has_act = ("检查" in _xml or "录音" in _xml or "完成" in _xml
-                       or "EditText" in _xml)
-            ev.append({"field": "作答", "type": "text_ok" if has_act else "text_mismatch",
-                       "expected": "可作答（检查/录音/输入）", "actual": "可作答" if has_act else "⚠ 未见作答元素",
-                       "diff": "作答元素存在" if has_act else "⚠ 检查/录音/输入元素未识别"})
+            # ⑤ 作答元素（★ 多信号检测：检查/检测/录音/输入/选项/可点击大图，特殊题型不再误判）
+            _act = (
+                "检查" in _xml or "检测" in _xml or "完成" in _xml or "提交" in _xml
+                or "录音" in _xml or "点击结束" in _xml or "点击录音" in _xml or "回放" in _xml
+                or "EditText" in _xml or "麦克风" in _xml or "record" in _xml.lower()
+                or bool(_re.search(r'text="[TFABCDE]"', _xml))
+                or "CheckBox" in _xml
+            )
+            if not _act:
+                _bc = _re.search(r'<node[^>]*clickable="true"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', _xml)
+                if _bc:
+                    _bx1, _by1, _bx2, _by2 = (int(_bc.group(1)), int(_bc.group(2)),
+                                              int(_bc.group(3)), int(_bc.group(4)))
+                    if (_bx2 - _bx1) > 300 and (_by2 - _by1) > 150:
+                        _act = True
+            ev.append({"field": "作答", "type": "text_ok" if _act else "text_mismatch",
+                       "expected": "可作答（检查/录音/输入/选项）", "actual": "可作答" if _act else "⚠ 未见作答元素",
+                       "diff": "作答元素存在" if _act else "⚠ 检查/录音/输入元素未识别"})
         except Exception:
             pass
         return ev

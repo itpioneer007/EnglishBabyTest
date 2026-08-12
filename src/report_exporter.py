@@ -505,23 +505,30 @@ class ReportExporter:
                           if not q.get("overall_passed", True)]
 
         # 按模块分组（保持出现顺序）
-        # ★ 优先用 question_type（模块名：知识过关/口语训练等），找不到再从 qid 解析
+        # ★ 分组：优先用记录里的 module/stage 字段（错题定位：哪个模块·哪个子模块）
+        #   找不到再退回 qid 解析（听力专项-脚本-Q19）；question_type 是"题型"不是模块名，不做分组依据
         groups = {}   # module_key -> {"name":..., "items":[...]}
         order = []
         for q in errors:
             qid = q.get("qid", "")
             if not qid:
                 qid = f"auto-Q{int(q.get('idx', 1)):03d}"
-            # ★ 优先 question_type（去掉括号后缀如"（共1分）"），否则用 qid 解析
-            qtype = (q.get("question_type", "") or "").strip()
-            qt_clean = re.sub(r"[（(].*?[）)]", "", qtype).strip()
-            if qt_clean and qt_clean not in ("错题截图", "?", ""):
-                mod = qt_clean
-                stage = ""
-            else:
-                mod, unit, stage, qno = self._parse_qid(qid)
+            # ① 优先 module 字段（web_server 记录时写入）
+            mod = (q.get("module", "") or "").strip()
+            stage = (q.get("stage", "") or "").strip()
+            if not mod:
+                # ② 从 qid 解析（有脚本格式：听力专项-脚本-Q19）
+                mod, unit, stage2, qno = self._parse_qid(qid)
+                if not stage:
+                    stage = stage2
                 if mod == "未知模块":
-                    mod = "其他"
+                    # ③ 退回 question_type（仅当 module 完全缺失时，如旧数据）
+                    qtype = (q.get("question_type", "") or "").strip()
+                    qt_clean = re.sub(r"[（(].*?[）)]", "", qtype).strip()
+                    if qt_clean and qt_clean not in ("错题截图", "?", "", "未知题型"):
+                        mod = qt_clean
+                    else:
+                        mod = "其他"
             key = f"{mod}|{stage}" if stage else mod
             if key not in groups:
                 groups[key] = {"name": f"{mod}" + (f" · {stage}" if stage else ""),
@@ -558,18 +565,21 @@ class ReportExporter:
                 qid = q.get("qid", "")
                 qtype = q.get("question_type", "未知题型")
                 qno = q.get("progress", "") or qid
-                idx = q.get("idx", "?")
+                # ★ 位置题号：优先模块内题号 module_qno（该子模块第几题），否则用 idx
+                idx = q.get("module_qno") or q.get("idx", "?")
+                if isinstance(idx, float):
+                    idx = int(idx) if idx == int(idx) else idx
 
-                # 位置说明（★ 已在分组大标题下展示模块，题内不再重复）
+                # 位置说明（★ 已在分组大标题下展示模块，题内只写第几题）
                 loc_str = f"第{idx}题"
 
                 # 题型标题
                 h = doc.add_heading(f"{qi}. 第{idx}题　[{qtype}]", level=2)
 
-                # 位置
+                # 位置（★ 显示"模块 · 子模块 · 第N题"完整路径，检查人员一目了然）
                 p = doc.add_paragraph()
                 p.add_run("▸ 在 App 中的位置：").bold = True
-                p.add_run(f"{loc_str}（题干：{(q.get('stem') or '')[:60]}{'…' if len(q.get('stem') or '')>60 else ''}）")
+                p.add_run(f"{g['name']} · {loc_str}（题干：{(q.get('stem') or '')[:60]}{'…' if len(q.get('stem') or '')>60 else ''}）")
 
                 # 出错理由
                 reasons = []

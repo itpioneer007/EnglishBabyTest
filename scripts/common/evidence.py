@@ -81,24 +81,38 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
 
         # ② 题干文字（页面上的长文本，排除按钮/进度/反馈弹窗/计时器）
         stems = []
+        seen = set()
         noise = ("下一题", "上一题", "检查", "提交", "开始答题", "重新答题",
                  "继续练习", "查看报告", "练习报告", "完成", "点击录音", "点击结束",
                  "原音", "小喇叭", "播放问题", "交卷", "确定交卷", "跳过",
                  "温馨提示", "继续答题",
                  # ★ 反馈弹窗 / 倒计时 / 得分等非题干文字（否则"恭喜你 回答正确"会被当题干）
                  "恭喜", "回答正确", "回答错误", "很遗憾", "答对了", "答错了",
-                 "练习结束还剩", "还剩", "得分", "用时", "获得", "本题得分", "作答正确", "作答错误")
+                 "练习结束还剩", "还剩", "得分", "用时", "获得", "本题得分", "作答正确", "作答错误",
+                 # ★ 图片提示等非题干
+                 "点击图片查看高清大图", "查看高清大图", "点击查看高清大图", "高清大图")
         # 计时器/倒计时（如 "19:58"、"还剩：19:58"）
         _timer_pat = re.compile(r"还剩[：:]\s*\d{1,2}:\d{2}|\b\d{1,2}:\d{2}\b")
-        for m in re.finditer(r'text="([^"]{6,})"', xml):
+        # ★ 优先 question_title_tv（App 真题干节点）
+        for m in re.finditer(r'resource-id="[^"]*question_title_tv[^"]*"[^>]*text="([^"]+)"', xml):
+            t = m.group(1).strip()
+            if t and t not in seen and len(t) < 60:
+                seen.add(t)
+                stems.append(t)
+            if len(stems) >= 3:
+                break
+        # ★ 兜底：其他长文本（缩短到 ≥4 字符，抓到"听录音选图"等短题干）
+        for m in re.finditer(r'text="([^"]{4,})"', xml):
             t = m.group(1).strip()
             t = _timer_pat.sub("", t).strip()
-            if not t or t in noise or len(t) >= 60:
+            if not t or t in seen or t in noise or len(t) >= 60:
                 continue
             if any(n in t for n in noise):
                 continue
-            if t not in stems:
-                stems.append(t)
+            if "点击图片" in t or "高清大图" in t:
+                continue
+            seen.add(t)
+            stems.append(t)
             if len(stems) >= 3:
                 break
         stem_txt = " / ".join(stems[:2]) if stems else "(无题干文字)"
@@ -181,12 +195,32 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
                        "actual": "—",
                        "diff": "题干无'听录音/朗读'等关键词，本题非听力/口语题，无需音频"})
 
-        # ⑤ 作答元素（检查/录音/输入框）
-        has_act = ("检查" in xml or "录音" in xml or "完成" in xml
-                   or "EditText" in xml or "麦克风" in xml or "record" in xml.lower())
-        ev.append({"field": "作答", "type": "text_ok" if has_act else "text_mismatch",
-                   "expected": "可作答（检查/录音/输入）", "actual": "可作答" if has_act else "未见作答元素",
-                   "diff": "作答元素存在" if has_act else "检查/录音/输入元素未识别"})
+        # ⑤ 作答元素（检查/检测/录音/输入/选项/图片点击区 —— ★ 多信号检测，特殊题型不再误判）
+        #   原理：任何"可作答"信号都算通过：
+        #   - 文字按钮：检查/检测/完成/提交/下一题/录音/点击结束/继续
+        #   - 输入类：EditText/输入框
+        #   - 选择类：A-E/T/F 字母选项、CheckBox、可点击大图（图片选项/排序/匹配）
+        _act_signals = (
+            "检查" in xml or "检测" in xml or "完成" in xml or "提交" in xml
+            or "录音" in xml or "点击结束" in xml or "点击录音" in xml or "回放" in xml
+            or "EditText" in xml or "麦克风" in xml or "record" in xml.lower()
+            or bool(re.search(r'text="[TFABCDE]"', xml))
+            or "CheckBox" in xml
+        )
+        # ★ 可点击大图（图片选项/排序/匹配题的作答入口）
+        if not _act_signals:
+            _big_click = re.search(
+                r'<node[^>]*clickable="true"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
+                xml
+            )
+            if _big_click:
+                x1, y1, x2, y2 = (int(_big_click.group(1)), int(_big_click.group(2)),
+                                  int(_big_click.group(3)), int(_big_click.group(4)))
+                if (x2 - x1) > 300 and (y2 - y1) > 150:
+                    _act_signals = True
+        ev.append({"field": "作答", "type": "text_ok" if _act_signals else "text_mismatch",
+                   "expected": "可作答（检查/录音/输入/选项）", "actual": "可作答" if _act_signals else "未见作答元素",
+                   "diff": "作答元素存在" if _act_signals else "检查/录音/输入元素未识别"})
     except Exception:
         pass
     return ev

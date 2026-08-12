@@ -49,6 +49,46 @@ def _switch_if_needed(d, version, grade):
             print(f"  ⚠ 切换版本/年级异常: {e}")
 
 
+def _back_to_home(d):
+    """★ 模块间回主页（修复切换卡顿）：back 循环直到主页特征出现。
+
+    之前只是 sleep 0.8s 打日志没有实际动作 → 下一模块从模块内部页开始
+    → 找不到入口 → 卡很久 → 最后重启 App（用户实测"切模块不丝滑"）。
+    主页特征：switch_textbook_tv / 教材精学 / 专项突破。
+    """
+    import re as _re
+    try:
+        _cur = d.app_current()
+        _is_yyb = (_cur or {}).get("package") == APP_PACKAGE
+    except Exception:
+        _is_yyb = False
+    if not _is_yyb:
+        # 退过头到桌面 → 冷启动回主页
+        try:
+            d.press("home"); time.sleep(0.4)
+            d.app_start(APP_PACKAGE); time.sleep(3)
+        except Exception:
+            pass
+        return
+    # back 循环回主页（最多 10 次，避免死循环）
+    for _ in range(10):
+        try:
+            xml = d.dump_hierarchy()
+            if ('switch_textbook_tv' in xml or '教材精学' in xml
+                    or '专项突破' in xml or '听课文' in xml):
+                break
+        except Exception:
+            pass
+        try:
+            d.press("back"); time.sleep(0.6)
+        except Exception:
+            break
+    # 兜底：确认主页，必要时清广告
+    for _ in range(2):
+        dismiss_global_popups(d)
+    close_ad(d)
+
+
 def run_all(module_names=None, d=None, version=None, grade=None, units=None, stop_check=None):
     """依次跑指定模块（默认全部），返回 {模块: {q, t, ok}}
 
@@ -133,6 +173,12 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
         module_units = units.get(name)
         units_desc = f"{module_units}" if module_units else "全部"
         step_log(f"▶ 开始检测第 {i+1}/{len(module_names)} 个模块: {name}（单元: {units_desc}）", "step")
+        # ★ 设置模块上下文（供错题定位：哪个模块·哪个子模块）
+        try:
+            from common.logger import set_current_module
+            set_current_module(name, "")
+        except Exception:
+            pass
         t0 = time.time()
         try:
             mod = importlib.import_module(MODULE_MAP[name])
@@ -146,15 +192,19 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
                 _t_on = test_units is not None and test_units != "NONE"
                 if _p_on and _t_on:
                     step_log(f"📌 听力专项: 练习单元{practice_units} + 测试单元{test_units} 分开检测", "step")
+                    set_current_module("听力专项", "练习")
                     q1 = mod.run_module(d, units=practice_units) if _p_on else 0
                     step_log(f"✅ 听力专项·练习 完成: {q1} 题", "success")
+                    set_current_module("听力专项", "测试")
                     q2 = mod.run_test_module(d, test_units=test_units) if _t_on else 0
                     step_log(f"✅ 听力专项·测试 完成: {q2} 题", "success")
                     q = q1 + q2
                 elif _p_on:
+                    set_current_module("听力专项", "练习")
                     q = mod.run_module(d, units=practice_units)
                     step_log(f"📌 听力专项: 仅练习（测试未勾选）完成 {q} 题", "info")
                 elif _t_on:
+                    set_current_module("听力专项", "测试")
                     q = mod.run_test_module(d, test_units=test_units)
                     step_log(f"📌 听力专项: 仅测试（练习未勾选）完成 {q} 题", "info")
                 elif practice_units == "NONE" and test_units == "NONE":
@@ -168,6 +218,8 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
                     q = q + q2
                     step_log(f"📌 听力专项: 练习+测试 全部完成（{q} 题）", "info")
             else:
+                # ★ 其他模块：设置模块上下文（模块名 + 子模块从模块内部 step_log 更新）
+                set_current_module(name, "")
                 if module_units:
                     q = mod.run_module(d, units=module_units)
                 else:
@@ -183,9 +235,10 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
             _tb_str = _tb.format_exc()
             step_log(f"❌ {name} 检测失败: {e} | {_tb_str.splitlines()[-3:] if _tb_str else ''}", "error")
 
-        # 模块间回到主页（保证下一模块干净起点；★ 不再切换年级，调度器只在开头切一次）
+        # 模块间回到主页（★ 修复：真正 back 回主页，保证下一模块干净起点；
+        #   之前只打日志不动作 → 卡顿+重启 App。不再切换年级，调度器只在开头切一次）
         step_log(f"↩ {name} 完成，返回主页准备下一个模块…", "info")
-        time.sleep(0.8)
+        _back_to_home(d)
 
     # 汇总
     total_q = sum(r.get("q", 0) for r in results.values())

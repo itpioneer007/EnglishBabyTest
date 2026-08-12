@@ -286,11 +286,15 @@ def settle_ads(d, wait_total=10):
       - 若在广告刚弹出的瞬间点击 → 误点广告 → 导航被带歪（找不到 tab/入口等怪异结果）。
       本函数在关键点击前调用：循环「检测→关闭→再检测」，直到连续 2 轮干净才返回，
       消除"点空/点广告"竞态。
+    ★ 日志与动作对应：实际关闭了弹窗/广告才打日志（且限前3轮避免刷屏），
+      没弹广告时静默快速通过，不再"只打一行关广告日志但动作在后面"。
     返回 True（尽力而为）。
     """
     clean = 0
     t0 = time.time()
+    _round = 0
     while time.time() - t0 < wait_total:
+        _round += 1
         closed = False
         try:
             if dismiss_global_popups(d):
@@ -304,6 +308,12 @@ def settle_ads(d, wait_total=10):
             pass
         if closed:
             clean = 0
+            if _round <= 3:
+                try:
+                    from common.logger import step_log
+                    step_log(f"🧹 已关闭弹窗/广告（第{_round}轮）", "info")
+                except Exception:
+                    pass
             time.sleep(0.5)
         else:
             clean += 1
