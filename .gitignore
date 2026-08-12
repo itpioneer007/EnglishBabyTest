@@ -65,3 +65,8 @@ outputs/reports/湘少版(2024审定)/
 outputs/web/marked_*.png
 outputs/web/live.png
 outputs/reports/latest/report_live.html
+
+# 运行时状态（每次运行变化，不入库）
+data/inspection_state.json
+outputs/reports/latest/
+outputs/web/live.png
