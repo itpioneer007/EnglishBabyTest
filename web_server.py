@@ -456,7 +456,7 @@ def log_msg(msg: str, level: str = "info", evidence: list = None):
                             "total": len(qs) + 1,
                             "module": _cm,
                             "stage": _cs,
-                            "module_qno": _inspection_state.get("_cur_module_qno", qidx),
+                            "module_qno": qidx,
                             "question_type": "错题截图",
                             "screenshot": shot,
                             "progress": f"Q{qidx}",
@@ -2727,14 +2727,9 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list):
     if not _current_module_name:
         _current_module_name = _inspection_state.get("module", "")
         _current_stage_name = _inspection_state.get("stage", "")
-    # ★ 模块内题号：从最近一次"开始检测模块"或每模块计数维护
-    #   兼容旧逻辑：module_qno 优先取 scheduler 计数，否则用总题号
-    _cur_key = f"{_current_module_name}|{_current_stage_name}"
-    if _cur_key != _inspection_state.get("_cur_module_key", ""):
-        _inspection_state["_cur_module_key"] = _cur_key
-        _inspection_state["_cur_module_qno"] = 0
-    _inspection_state["_cur_module_qno"] = _inspection_state.get("_cur_module_qno", 0) + 1
-    _current_module_qno = _inspection_state["_cur_module_qno"]
+    # ★ 模块内题号：优先直接用 engine 传来的题号 qidx（engine 的"第N题"就是
+    #   当前子模块内题号，App 页面显示 9/10 的 9），不再用跨子模块累加的计数器
+    _current_module_qno = qidx
     # 证据维度 → 前端六维映射（"题型"不映射到任何六维，仅作为元信息）
     field_map = {
         "题干": "stem",

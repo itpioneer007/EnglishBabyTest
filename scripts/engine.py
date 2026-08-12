@@ -1308,6 +1308,13 @@ def run_single_module(d, module_name, config):
                 return
             name = f"{module_name}/{sub['name']}"
             print(f"  --- [{i+1}/{len(sm)}] {sub['name']} ---")
+            # ★ 更新模块上下文中的子模块（stage）：让错题记录的 module_qno
+            #   按"模块·子模块"重置计数（否则跨子模块累加，难点突破会显示第28题）
+            try:
+                from common.logger import set_current_module
+                set_current_module(module_name, sub["name"])
+            except Exception:
+                pass
             # 子模块切换：固定规则（3个子模块固定顺序）
             #   第1个（基础巩固）：不滑；第2个（综合进阶）：左滑1次；第3个（难点突破）：左滑2次
             #   ★ 切换后读取页面当前子模块文字，展示"当前子模块: X"（用户要求知道测到哪了）

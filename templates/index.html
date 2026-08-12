@@ -1355,8 +1355,17 @@ function refreshLiveReport(){
 }
 function fmtLoc(id,q){
   // 期望格式：模块 + 单元 +（子模块）+ 题号，如「听力专项 · U6 · 基础巩固 · 第3题」
-  const s=String(id||'')
+  // ★ 优先用检测时记录的 module/stage/module_qno（App 页面 9/10 的 9 就是子模块内题号）
   const parts=[]
+  const mod=(q.module||'').trim(), stage=(q.stage||'').trim()
+  const qno=(q.module_qno!==undefined&&q.module_qno!==null&&q.module_qno!=='')?q.module_qno:(q.idx||'?')
+  if(mod||stage){
+    if(mod) parts.push(mod)
+    if(stage) parts.push(stage)
+    parts.push('第'+qno+'题')
+    return parts.join(' · ')
+  }
+  const s=String(id||'')
   // 模块名：auto- 前缀（来自答题循环）→ 用 question_type；否则取 qid 第一段
   if(s.startsWith('auto-')){
     parts.push(String(q.question_type||'题目').replace(/[（(].*?[）)]/g,'').replace(/测试$/,''))
@@ -1372,7 +1381,7 @@ function fmtLoc(id,q){
   if(sm) parts.push(sm)
   // 题号
   const qm=s.match(/[Qq]0*(\d+)/)
-  parts.push('第'+(qm?qm[1]:(q.idx||'?'))+'题')
+  parts.push('第'+(qm?qm[1]:qno)+'题')
   return parts.join(' · ')
 }
 let _wrongSig=''  // 错题列表内容签名（防每2秒重绘导致滚动抖动）
@@ -1401,6 +1410,8 @@ function updWrong(f){
   const sevCls={high:'bg-[#fee2e2] text-[#bc4742]',medium:'bg-[#fef3c7] text-[#92400e]',low:'bg-[#e0e7ff] text-[#3730a3]'}
   // ★ 错题也按模块/阶段分组（与六维面板一致的分组逻辑）
   const wGroupKey=(id,q)=>{
+    // ★ 优先用记录的 module/stage 字段（web_server 检测时写入，定位最准）
+    if(q.module) return `${q.module}${q.stage?' · '+q.stage:''}`
     const s=String(id)
     if(s.includes('-脚本-')){const mod=s.split('-')[0];return `${mod}${q.stage?' · '+q.stage:' · 脚本审查'}`}
     if(s.startsWith('auto-')){return `${String(q.question_type||'完整性检查').replace(/[（(].*?[）)]/g,'')} · 完整性检查`}
