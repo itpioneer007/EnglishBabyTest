@@ -1184,6 +1184,13 @@ function updFlowStrip(f){
   }).join('')
 }
 
+// ★ 题干清洗：过滤状态栏时间(21:12)/得分(77.0)/进度(3/40)/百分比(100%)等 UI 噪音
+function cleanStem(s){
+  s=(s||'').trim(); if(!s) return ''
+  const noise=/^(?:还剩[：:]?\s*\d{1,2}:\d{2}|\d{1,2}:\d{2}|\d+\.?\d*\s*%|\d+\s*\/\s*\d+|\d+\.\d+|\d+)$/
+  return s.split(/\s*(?:\/|｜|\|)\s*/).map(p=>p.trim()).filter(p=>p&&!noise.test(p)).join(' / ').slice(0,120)
+}
+
 function updQ(f){
   const qs=f.questions||{},ids=Object.keys(qs).sort(),t=ids.length
   const lb=ids.filter(id=>qs[id].human_label).length
@@ -1228,7 +1235,7 @@ function updQ(f){
       return `<div class="q-dim ${stCls}"><div class="label">${d[0]}</div><div class="st">${stTxt}</div></div>`
     }).join('')
     // ★ 生成题目内容展示区域：显示题干文字 + 选项（让检查人员知道这题是什么）
-    const stemTxt=(q.stem||'').trim()
+    const stemTxt=cleanStem(q.stem)
     const optTxt=(q.options||'').trim()
     let contentHtml=''
     if(stemTxt&&stemTxt!==`第${q.idx}题（${q.question_type||''}）`){

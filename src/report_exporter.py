@@ -125,6 +125,46 @@ class ReportExporter:
         self.save_dir.mkdir(parents=True, exist_ok=True)
 
     # ============================================================
+    # 题干清洗（过滤状态栏时间/得分/进度等 UI 噪音）
+    # ============================================================
+    @staticmethod
+    def _clean_stem(stem: str) -> str:
+        """清洗题干：去掉状态栏时间(21:12)/得分(77.0)/进度(3/40)/百分比(100%)等 UI 噪音。
+        按 engine 提取时的连接符" / "拆分，逐段判定；返回清洗后的题干，空则返回空串。"""
+        s = (stem or "").strip()
+        if not s:
+            return ""
+        _noise = re.compile(
+            r"^(?:"
+            r"还剩[：:]?\s*\d{1,2}:\d{2}"   # 还剩 19:58
+            r"|\d{1,2}:\d{2}"               # 21:12
+            r"|\d+\.?\d*\s*%"               # 77.0% / 100%
+            r"|\d+\s*/\s*\d+"               # 3/40
+            r"|\d+\.\d+"                    # 77.0
+            r"|\d+"                         # 100
+            r")\s*$"
+        )
+        # 按 engine 连接符拆（" / " 及兼容的 |｜·），中文逗号属于题干本身不拆
+        parts = [p.strip() for p in re.split(r"\s*(?:/|｜|\|)\s*", s)]
+        clean = [p for p in parts if p and not _noise.match(p)]
+        out = " / ".join(clean)
+        return out[:120] if out else ""
+
+    def _loc_label(self, q: dict, meta: dict = None) -> str:
+        """生成题目定位标签：模块 · 子模块 · 第N题（如：听力专项 · 练习 · 第3题）"""
+        mod = (q.get("module", "") or "").strip()
+        stage = (q.get("stage", "") or "").strip()
+        if not mod:
+            qid = q.get("qid", "")
+            _m = re.match(r"^([^-]+)-?([^-]*)$", qid or "")
+            if _m and _m.group(1) not in ("", "auto", "quick"):
+                mod = _m.group(1)
+        qno = q.get("module_qno") or q.get("idx") or q.get("progress") or "?"
+        if isinstance(qno, float):
+            qno = int(qno) if qno == int(qno) else qno
+        return f"{mod} · {stage}" if stage else str(mod)
+
+    # ============================================================
     # HTML 报告
     # ============================================================
 
@@ -237,7 +277,7 @@ class ReportExporter:
         qid = q.get("qid", "?")
         idx = q.get("idx", 0)
         qtype = q.get("question_type", "?")
-        stem = q.get("stem", "")[:60]
+        stem = self._clean_stem(q.get("stem", ""))[:60]
         overall_passed = q.get("overall_passed", False)
         error_dims = q.get("error_dimensions", [])
 
@@ -300,6 +340,7 @@ class ReportExporter:
     <span class="q-type">{qtype}</span>
     <span class="q-badge {badge_class}">{badge_text}</span>
   </div>
+  <div class="q-loc">{self._loc_label(q)} · 第{idx}题</div>
   <div class="dim-grid">
     {''.join(dim_rows)}
   </div>
@@ -579,9 +620,15 @@ class ReportExporter:
                 # 位置（★ 显示"模块 · 子模块 · 第N题"完整路径，检查人员一目了然）
                 p = doc.add_paragraph()
                 p.add_run("▸ 在 App 中的位置：").bold = True
-                p.add_run(f"{g['name']} · {loc_str}（题干：{(q.get('stem') or '')[:60]}{'…' if len(q.get('stem') or '')>60 else ''}）")
+                p.add_run(f"{g['name']} · {loc_str}")
 
-                # 出错理由
+                # 题干（★ 清洗掉时间/得分等 UI 噪音，非空才展示）
+                _stem_clean = self._clean_stem(q.get("stem", ""))
+                if _stem_clean:
+                    p = doc.add_paragraph()
+                    p.add_run("▸ 题干：").bold = True
+                    p.add_run(_stem_clean)
+
                 reasons = []
                 for dim_name, reason_field, ai_field in self._LIVE_DIMS:
                     r = q.get(reason_field, "")
@@ -893,7 +940,7 @@ class ReportExporter:
         qid = q.get("qid", "?")
         idx = q.get("idx", "?")
         qtype = q.get("question_type", "?")
-        stem = html.escape(str(q.get("stem", "") or ""))
+        stem = html.escape(str(self._clean_stem(q.get("stem", "")) or ""))
         script_answer = html.escape(str(q.get("script_answer", "") or ""))
         src = f'{html.escape(str(meta.get("version", "")))} · U{meta.get("unit", "?")} · {html.escape(str(meta.get("stage", "")))}'
 
@@ -934,11 +981,12 @@ class ReportExporter:
         return f'''<details class="card">
   <summary>
     <span class="badge">不通过</span>
-    <span class="qtitle">Q{idx} · {html.escape(qtype)}</span>
-    <span class="src">{src}</span>
+    <span class="qtitle">{html.escape(self._loc_label(q, meta))} · 第{idx}题</span>
+    <span class="qtype">[{html.escape(qtype)}]</span>
   </summary>
   <div class="body">
-    <div class="field"><b>题干：</b>{stem}</div>
+    <div class="field"><b>位置：</b>{html.escape(self._loc_label(q, meta))} · 第{idx}题</div>
+    <div class="field"><b>题干：</b>{stem or "（无题干文字）"}</div>
     <div class="field"><b>脚本答案：</b><span style="color:#2e7d32;">{script_answer}</span></div>
     <div class="cause"><div class="h">✕ 错误原因</div>{cause_html}</div>
     <div class="fix"><div class="h">✓ 修改建议</div>{fix_html}</div>
