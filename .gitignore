@@ -44,3 +44,24 @@ uploads/
 # 系统文件
 .DS_Store
 Thumbs.db
+
+# ★ 临时测试脚本（不入库，正式逻辑已合入模块）
+test_knowledge_module.py
+run_ai_loop.py
+run_ai_test.py
+_ai_*.py
+test_*.py
+
+# 临时调试截图（根目录）
+_q*.png
+_now*.xml
+_after*.xml
+_kw*.xml
+_ai_*.png
+
+# 生成的错题报告（输出产物，不入库）
+outputs/reports/*.docx
+outputs/reports/湘少版(2024审定)/
+outputs/web/marked_*.png
+outputs/web/live.png
+outputs/reports/latest/report_live.html

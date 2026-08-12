@@ -40,7 +40,7 @@ from common.evidence import collect_ui_evidence
 from engine import _handle_match_question, _handle_sort_question  # noqa: F401  (预留)
 
 APP_PACKAGE = "com.dinoenglish.yyb"
-GRADE_LEVEL = "五年级上册"
+GRADE_LEVEL = "六年级上册"
 BOOK_VERSION = "湘少版"
 
 
@@ -89,6 +89,28 @@ def _answer_loop(d, max_q=120):
     import re as _re
     q = 0
     _ev_q = -1  # 已发证据卡的题号（每题只发一次）
+
+    # ★ 实测修复：点"选项行"辅助（知识过关 A/B/C/T/F 字母在行左侧，
+    #   可点击的是整行容器；点字母坐标可能落空）
+    def _click_option_row(letter: str) -> bool:
+        try:
+            _xml = d.dump_hierarchy()
+            _m = _re.search(r'text="' + letter + r'"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', _xml)
+            if not _m:
+                return False
+            _oy = (int(_m.group(2)) + int(_m.group(4))) // 2
+            for _mr in _re.finditer(
+                r'<node[^>]*clickable="true"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
+                _xml
+            ):
+                _r1, _ry1, _r2, _ry2 = (int(_mr.group(1)), int(_mr.group(2)),
+                                        int(_mr.group(3)), int(_mr.group(4)))
+                if (_r2 - _r1) > 400 and _ry1 <= _oy <= _ry2:
+                    d.click((_r1 + _r2) // 2, (_ry1 + _ry2) // 2)
+                    return True
+        except Exception:
+            pass
+        return False
     for _ in range(max_q):
         # ★ 每题界面级完整性检查证据（题型/题干/选项/音频/作答）→ 前端证据卡
         #   在答题处理前采集当前页（新题加载后发一次，q 变化去重）
@@ -150,7 +172,7 @@ def _answer_loop(d, max_q=120):
             try:
                 if d(text="点击录音").exists(timeout=1):
                     d(text="点击录音").click()
-                    time.sleep(0.6)
+                    time.sleep(2.5)   # ★ 实测：录够时长才会出"下一题"
             except Exception:
                 pass
             try:
@@ -180,7 +202,7 @@ def _answer_loop(d, max_q=120):
             time.sleep(0.8)
             if d(text="点击录音").exists(timeout=0.8):
                 d(text="点击录音").click()
-                time.sleep(0.6)
+                time.sleep(2.5)   # ★ 实测：录够时长
             if d(text="点击结束").exists(timeout=0.8):
                 d(text="点击结束").click()
                 time.sleep(0.8)
@@ -365,11 +387,13 @@ def _answer_loop(d, max_q=120):
             continue
 
         # 2. 选择题（A 选项 + 检测按钮）
+        # ★ 实测修复：点选项行（字母在行左侧，整行可点击）
         if d(text="A").exists(timeout=0.15):
-            try:
-                d(text="A").click()
-            except Exception:
-                pass
+            if not _click_option_row("A"):
+                try:
+                    d(text="A").click()
+                except Exception:
+                    pass
             time.sleep(0.3)
             try:
                 if d(text="检测").exists(timeout=1.5):
@@ -381,12 +405,13 @@ def _answer_loop(d, max_q=120):
             q += 1
             continue
 
-        # 2.5 判断题（T/F 选项）
+        # 2.5 判断题（T/F 选项）★ 点选项行
         if d(text="T").exists(timeout=0.15) and d(text="F").exists(timeout=0.1):
-            try:
-                d(text="T").click()
-            except Exception:
-                pass
+            if not _click_option_row("T"):
+                try:
+                    d(text="T").click()
+                except Exception:
+                    pass
             time.sleep(0.3)
             try:
                 if d(text="检测").exists(timeout=1.5):
