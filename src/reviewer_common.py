@@ -499,10 +499,12 @@ class LLMClient:
             return "".join(texts)
 
         # OpenAI 兼容格式
+        # ★ 批量审查(33题等大prompt) JSON 输出可能超 1000 token 被截断 → 残缺JSON解析失败
+        #   提升到 4000 + 超时 120s
         body = json.dumps({
             "model": use_model,
             "messages": messages,
-            "max_tokens": 1000,
+            "max_tokens": 4000,
         }).encode("utf-8")
 
         req = Request(
@@ -513,7 +515,7 @@ class LLMClient:
                 "Authorization": f"Bearer {use_key}",
             },
         )
-        resp = urlopen(req, timeout=60)
+        resp = urlopen(req, timeout=120)
         result = json.loads(resp.read())
         return result["choices"][0]["message"]["content"]
 

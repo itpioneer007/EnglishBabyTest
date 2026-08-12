@@ -316,8 +316,43 @@ def _detect_content_dimension():
                  '输出JSON数组:[{"idx":1,"verdict":"PASS/REVIEW/REJECT","basis":"判断依据","lang":["问题描述"]},...]')
         prompt_text = f"批量内容审查:共{len(batch)}题\n" + "\n".join(batch) + "\n\n" + rules + "\n只输出JSON数组。"
         try:
-            raw = agent.llm.ask(prompt_text)
-            data = json.loads(raw[raw.find("["):raw.rfind("]")+1])
+            raw = (agent.llm.ask(prompt_text) or "").strip()
+            if not raw:
+                raise ValueError("LLM 返回空内容（可能请求超时/密钥失效）")
+            # ★ 健壮解析：LLM 可能返回 markdown 围栏 / 前后说明文字 / 部分对象
+            #   依次尝试：①整串JSON ②去markdown围栏 ③取 [] 区间 ④逐行对象
+            data = None
+            # ① 整串
+            try:
+                data = json.loads(raw)
+            except Exception:
+                pass
+            # ② 去 markdown ```json ... ```
+            if data is None:
+                _m = re.search(r"```(?:json)?\s*(.*?)```", raw, re.S)
+                if _m:
+                    try:
+                        data = json.loads(_m.group(1).strip())
+                    except Exception:
+                        pass
+            # ③ 取 [ 到 ] 区间
+            if data is None:
+                _l, _r = raw.find("["), raw.rfind("]")
+                if _l >= 0 and _r > _l:
+                    try:
+                        data = json.loads(raw[_l:_r+1])
+                    except Exception:
+                        pass
+            # ④ 逐行找 { "idx":... } 对象
+            if data is None:
+                _objs = re.findall(r"\{[^{}]*\"idx\"\s*:\s*\d+[^{}]*\}", raw)
+                if _objs:
+                    try:
+                        data = [json.loads(o) for o in _objs]
+                    except Exception:
+                        pass
+            if data is None:
+                raise ValueError(f"LLM 返回内容无法解析为 JSON: {raw[:80]!r}…")
             count = 0
             for item in data:
                 qi = item.get("idx", 0)
