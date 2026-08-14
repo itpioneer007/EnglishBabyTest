@@ -3584,6 +3584,66 @@ def api_upload_docx():
         return jsonify({"error": f"解析失败: {str(e)}"}), 500
 
 
+@app.route("/api/order/parse", methods=["POST"])
+def api_order_parse():
+    """解析上传的任务清单文件 → 提取文本
+
+    支持格式：.txt / .docx / .xlsx
+    返回: {"text": ..., "filename": ..., "format": "txt|docx|xlsx"}
+    前端拿到 text 后复用 applyOrder() 做版本/年级/模块识别
+    """
+    if "file" not in request.files:
+        return jsonify({"error": "未选择文件"}), 400
+    f = request.files["file"]
+    name = f.filename or "task.txt"
+    ext = name.lower().rsplit(".", 1)[-1] if "." in name else "txt"
+    try:
+        data = f.read()
+        if ext == "txt":
+            text = data.decode("utf-8", errors="replace")
+        elif ext in ("docx",):
+            import io as _io
+            from docx import Document
+            doc = Document(_io.BytesIO(data))
+            parts = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+            for tb in doc.tables:
+                for row in tb.rows:
+                    cells = [c.text.strip() for c in row.cells if c.text.strip()]
+                    if cells:
+                        parts.append(" | ".join(cells))
+            text = "\n".join(parts)
+        elif ext in ("xlsx", "xls"):
+            import io as _io
+            import openpyxl
+            wb = openpyxl.load_workbook(_io.BytesIO(data), data_only=True)
+            rows = []
+            for ws in wb.worksheets:
+                for row in ws.iter_rows(values_only=True):
+                    cells = [str(c).strip() for c in row if c is not None and str(c).strip()]
+                    if cells:
+                        rows.append(" | ".join(cells))
+            text = "\n".join(rows)
+        elif ext == "doc":
+            return jsonify({
+                "error": "老格式 .doc 暂不支持直接解析，请另存为 .docx 或 .txt 再上传",
+                "filename": name,
+            }), 400
+        else:
+            return jsonify({"error": f"不支持的文件格式 .{ext}（支持 .txt/.docx/.xlsx）"}), 400
+
+        text = (text or "").strip()
+        if not text:
+            return jsonify({"error": "文件内容为空或未提取到文字", "filename": name}), 400
+        log_msg(f"📋 已解析任务清单: {name}（{ext}，{len(text)} 字符）", "success")
+        return jsonify({"text": text, "filename": name, "format": ext})
+    except SystemExit:
+        log_msg("⏹ 任务已被立即停止", "warning")
+        return jsonify({"error": "已停止"}), 500
+    except Exception as e:
+        log_msg(f"⚠ 任务清单解析失败 {name}: {e}", "warning")
+        return jsonify({"error": f"解析失败: {str(e)[:100]}", "filename": name}), 500
+
+
 @app.route("/api/upload/list")
 def api_upload_list():
     """列出已上传的 DOCX 文件"""

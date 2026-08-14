@@ -727,7 +727,9 @@ function normalizeUnits(str){
   const tokens=String(str||'').split(/[\s,，]+/).filter(Boolean)
   const vals=[]
   tokens.forEach(t=>{
-    const m=t.trim().match(/^(\d+)(?:-(\d+))?$/)
+    // ★ 兼容 U 前缀（U3/U3-5/U1-U2/第5单元/单元3），剥离后按纯数字解析
+    const ts=String(t).trim().replace(/[Uu]nit|[Uu]|第|单元/g,'')
+    const m=ts.trim().match(/^(\d+)(?:-(\d+))?$/)
     if(!m) return
     const a=parseInt(m[1]),b=m[2]?parseInt(m[2]):a
     for(let u=a;u<=b;u++) vals.push(u)
@@ -790,11 +792,36 @@ async function pollLog(){
 }
 
 /* ========== 文件上传 ========== */
-function uploadOrder(e){
+async function uploadOrder(e){
   const f=e.target.files[0]
   if(!f) return
   addLog('info','已选择任务清单: '+f.name+' ('+(f.size/1024).toFixed(1)+'KB)')
-  addLog('step','注：清单文件解析功能即将上线，当前请使用文字描述')
+  const fd=new FormData()
+  fd.append('file',f)
+  try{
+    const r=await fetch('/api/order/parse',{method:'POST',body:fd})
+    const j=await r.json()
+    if(j.error){
+      addLog('warning','清单解析失败: '+j.error)
+      alert('清单解析失败: '+j.error)
+      return
+    }
+    $('orderInput').value=j.text
+    addLog('success','已提取 '+j.text.length+' 字符，开始自动识别配置…')
+    const ok=applyOrder(j.text)
+    if(ok){
+      addLog('success','✅ 已从清单识别出 版本/年级/模块/单元，核对后点「解析并开始检测」')
+      switchTab(1)
+    }else{
+      addLog('warning','清单中未识别出模块/版本，已把原文填入描述框，可手动调整')
+    }
+    addLog('info','清单内容: '+j.text.substring(0,300)+(j.text.length>300?'…':''))
+  }catch(err){
+    addLog('warning','清单上传失败: '+err)
+    alert('清单上传失败: '+err)
+  }finally{
+    e.target.value=''
+  }
 }
 
 /* ========== 开始检测（多模块执行） ========== */
