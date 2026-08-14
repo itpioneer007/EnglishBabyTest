@@ -194,6 +194,7 @@ def _answer_big_question(d, big_idx=0):
     """
     q = 0
     _ev_q = -1  # 已发证据卡的题号（每题只发一次）
+    _score_checked = False  # ★ 每大题只做一次分值检查（避免拖慢流程）
     for _ in range(15):  # 最多15小题（包含若干道口语题）
         # ★ 每题界面级完整性检查证据（题型/题干/选项/音频/作答）→ 前端证据卡
         #   口语题为录音作答：证据卡会显示"录音/麦克风"作答元素 + 题干文字
@@ -203,6 +204,15 @@ def _answer_big_question(d, big_idx=0):
                 from common.evidence import collect_ui_evidence
                 step_log(f"  第{q+1}题 完整性检查", "info",
                          collect_ui_evidence(_xml_ev, qtype="口语训练"))
+                # ★ 文档检查点：大题首题做一次分值核对（页面显示的分值是否正常）
+                if not _score_checked:
+                    _score_checked = True
+                    try:
+                        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                        from src.doc_checks import check_score_display
+                        check_score_display(d)
+                    except Exception:
+                        pass
                 _ev_q = q
             except Exception:
                 pass
@@ -214,6 +224,13 @@ def _answer_big_question(d, big_idx=0):
         if d(text="练习报告").exists(timeout=0.1):
             print(f"    ✅ 练习报告页出现，单元结束")
             step_log("📊 练习报告（单元完成）", "success")
+            # ★ 文档检查点：报告页核对（总分=得分之和、结果图标、题干文字）
+            try:
+                sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                from src.doc_checks import check_report_page
+                check_report_page(d, module_name="口语训练")
+            except Exception:
+                pass
             time.sleep(0.8)
             return q
 
@@ -344,6 +361,13 @@ def _after_unit_enter(d):
         d(text="好的，我知道啦~").click()
         print(f"    ✅ 好的，我知道啦~")
         time.sleep(0.8)
+    # ★ 文档检查点：试卷首页/单元目录核对（标题、总分/时量、按钮文字）
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from src.doc_checks import check_paper_header
+        check_paper_header(d, module_name="口语训练")
+    except Exception:
+        pass
     if d(text="开始答题").exists(timeout=3):
         d(text="开始答题").click()
         print(f"    ✅ 开始答题")

@@ -225,6 +225,14 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
         ev.append({"field": "作答", "type": "text_ok" if _act_signals else "text_mismatch",
                    "expected": "可作答（检查/录音/输入/选项）", "actual": "可作答" if _act_signals else "未见作答元素",
                    "diff": "作答元素存在" if _act_signals else "检查/录音/输入元素未识别"})
+
+        # ⑥ 分值显示（文档检查点：当前大题/页面分值是否正确）——附加信息，不判通过/不通过
+        _score_vals = re.findall(r'text="(\d+(?:\.\d+)?分)"', xml) or \
+                      re.findall(r'text="(?:本题|共|满分|总分)[^"]*(\d+(?:\.\d+)?)[^"]*分"', xml)
+        if _score_vals:
+            ev.append({"field": "分值", "type": "info",
+                       "expected": "分值显示", "actual": "、".join(_score_vals[:4]),
+                       "diff": f"检测到分值: {'、'.join(_score_vals[:4])}"})
     except Exception:
         pass
     return ev

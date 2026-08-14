@@ -2749,6 +2749,12 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list):
 
     for e in evidence:
         field = e.get("field", "")
+        # ★ 分值等附加信息：写入 note（不参与六维判定），供检查人员参考
+        if field == "分值":
+            _sc = (e.get("actual") or e.get("diff") or "").strip()
+            if _sc:
+                _inspection_state["_last_score_info"] = _sc
+            continue
         # 题型识别 → 只更新 question_type
         if field == "题型":
             diff = e.get("diff") or ""
@@ -2826,6 +2832,8 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list):
         "question_type": question_type,
         "screenshot": "",
         "progress": f"Q{qidx}",
+        # ★ 分值信息（evidence 附加项，供检查人员参考）
+        "score_info": _inspection_state.get("_last_score_info", ""),
         # ★ 模块定位信息（哪个模块·哪个子模块·模块内第几题）→ 错题报告按此分组
         "module": _current_module_name,
         "stage": _current_stage_name,
