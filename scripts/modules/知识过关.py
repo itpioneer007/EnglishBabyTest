@@ -152,7 +152,18 @@ def _answer_loop(d, max_q=120):
                 d(text="下一题").click()
             except Exception:
                 pass
-            time.sleep(0.6)
+            # ★ 提速+防竞态：轮询等新题渲染（题号推进/出现选项），替代固定 sleep(0.6)
+            try:
+                from common.tools import wait_until
+                _t_w = time.time()
+                while time.time() - _t_w < 1.8:
+                    _xw = d.dump_hierarchy()
+                    _xtxt = "".join(re.findall(r'text="([^"]+)"', _xw))
+                    if re.search(r'text="[TFABCDE]"', _xw) or "EditText" in _xw or "原音" in _xtxt:
+                        break
+                    time.sleep(0.1)
+            except Exception:
+                time.sleep(0.5)
             continue
 
         # 题型识别（页面文字）

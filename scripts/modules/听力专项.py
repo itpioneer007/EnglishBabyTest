@@ -237,7 +237,25 @@ def _test_answer_loop(d, max_q=45):
             step_log(f"  第{q+1}题 答错截图", "warning",
                      evidence=[{"field": "错题截图", "type": "wrong_shot",
                                 "screenshot": _wrong_shot}] if _wrong_shot else None)
-            time.sleep(0.6)
+            # ★ 竞态修复：等新题加载（"下一题"消失 或 出现选项/录音/查看报告），
+            #   替代固定 sleep(0.6)——快则省时，慢则防 dump 到过渡页误判
+            _t_w = time.time()
+            while time.time() - _t_w < 2.0:
+                try:
+                    _xw = d.dump_hierarchy()
+                    _xtxt = "".join(re.findall(r'text="([^"]+)"', _xw))
+                    # 新题就绪信号：出现作答元素（字母/图片选项/录音/输入框）或"查看报告"
+                    if ('text="[TFABCDE]"' in _xw or re.search(r'text="[TFABCDE]"', _xw)
+                            or "点击录音" in _xtxt or "EditText" in _xw
+                            or 'text="查看报告"' in _xw or "继续答题" in _xtxt):
+                        break
+                    # 题号推进（右上角 X/Y 中的 X 变化）
+                    _m_pr = re.search(r'text="(\d+)/(\d+)"', _xw)
+                    if _m_pr and int(_m_pr.group(1)) > q + 1:
+                        break
+                except Exception:
+                    pass
+                time.sleep(0.1)
             _idle = 0
             continue
         # ★ 回答后的反馈浮层（恭喜你 回答正确 / 很遗憾 回答错误）→ 原地等待其消失并

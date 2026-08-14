@@ -256,6 +256,55 @@ def safe_click(d, text, timeout=3) -> bool:
     except Exception:
         return False
 
+def wait_until(d, text, timeout=2.0, interval=0.15):
+    """★ 轮询等页面出现指定文本（替代固定 sleep，快则立即返回）。
+
+    用于"点击后等新界面刷新"场景：比固定 sleep 既快又稳——
+    页面 0.3s 就绪则 0.3s 返回，慢到 2s 也最多等 2s，避免竞态点空。
+    返回: True=已出现 / False=超时
+    """
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        try:
+            xml = d.dump_hierarchy()
+            if text in xml:
+                return True
+        except Exception:
+            pass
+        time.sleep(interval)
+    return False
+
+def wait_any(d, texts, timeout=2.0, interval=0.15):
+    """★ 轮询等任一目标文本出现；返回命中的文本，超时返回空串。"""
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        try:
+            xml = d.dump_hierarchy()
+            for t in texts:
+                if t in xml:
+                    return t
+        except Exception:
+            pass
+        time.sleep(interval)
+    return ""
+
+def click_then_wait(d, click_text, expect_text, timeout=2.5, click_timeout=2):
+    """★ 点击后等新界面刷新（消除"点击快于刷新"竞态）。
+
+    场景: 点"下一题/检查/继续答题"后，新页面可能 0.3s~2s 才渲染完。
+    固定 sleep(0.5) 对快页面浪费、对慢页面不够 → 用轮询。
+    若 expect_text 未出现则回退固定等待兜底（防止误判）。
+    返回: True=等待到目标元素 / False=超时
+    """
+    try:
+        d(text=click_text).click(timeout=click_timeout)
+    except Exception:
+        return False
+    ok = wait_until(d, expect_text, timeout=timeout)
+    if not ok:
+        time.sleep(0.4)  # 兜底：给慢加载一次额外机会
+    return ok
+
 def dismiss_global_popups(d):
     """关闭全局弹窗（★ 优化：一次 dump + 字符串匹配，避免逐词 UI 查询）"""
     try:

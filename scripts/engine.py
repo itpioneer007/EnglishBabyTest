@@ -1140,11 +1140,21 @@ def _answer_loop(d, config, module_name):
         _click_text(opt)
         print(f"      → 选 {opt}")
         step_log(f"  第{q}题: 选 {opt} → 检查", "info")
-        time.sleep(0.5); _xml = _dump()
-        if _has("检查"):
-            _click_text("检查")
+        # ★ 提速+防竞态：轮询等"检查"出现（替代固定 sleep(0.5)），页面快则立即继续
+        _t_check = time.time()
+        _check_found = False
+        while time.time() - _t_check < 1.8:
+            _xml = _dump()
+            if "检查" in _xml or "检测" in _xml:
+                _check_found = True
+                break
+            time.sleep(0.1)
+        if not _check_found:
+            time.sleep(0.3)  # 兜底：慢加载再等一次
+        if _has("检查") or _has("检测"):
+            _click_text("检查" if _has("检查") else "检测")
             print(f"      → 检查")
-            time.sleep(0.5); _need_dump = True
+            time.sleep(0.4); _need_dump = True
         continue
 
     return q

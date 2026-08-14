@@ -174,13 +174,39 @@ def _speak_question(d, wait_countdown=True):
     d.click(pos[0], pos[1])
     print(f"    🎤 点录音 ({pos[0]},{pos[1]})")
     step_log(f"🎤 点录音", "info")
-    time.sleep(0.35)
-
+    # ★ 竞态修复：等 App 把"点击录音"切换成"点击结束"状态再点（轮询替代固定0.35s）。
+    #   否则点快于刷新 → 第二次点击点空/误点，录音没结束就进入下一小题。
+    _t0 = time.time()
+    _ended = False
+    while time.time() - _t0 < 2.0:
+        try:
+            _x = d.dump_hierarchy()
+            if "点击结束" in _x or "点击完成" in _x:
+                _ended = True
+                break
+            # 状态已变（录音按钮消失）也算就绪
+            if "点击录音" not in _x and "点击录制" not in _x:
+                _ended = True
+                break
+        except Exception:
+            pass
+        time.sleep(0.1)
+    if not _ended:
+        time.sleep(0.3)  # 兜底：状态未切换也等一次再点（防点空）
     # 4. 点结束（同一位置，文字从"点击录音"变成"点击结束"）
     d.click(pos[0], pos[1])
     print(f"    ⏹ 点结束 ({pos[0]},{pos[1]})")
     step_log(f"⏹ 点结束", "info")
-    time.sleep(0.6)
+    # ★ 等"点击结束"消失（本轮小题完成，App 进入下一小题或出"下一题"）
+    _t1 = time.time()
+    while time.time() - _t1 < 1.5:
+        try:
+            _x2 = d.dump_hierarchy()
+            if "点击结束" not in _x2 and "点击完成" not in _x2:
+                break
+        except Exception:
+            pass
+        time.sleep(0.1)
     return True
 
 
