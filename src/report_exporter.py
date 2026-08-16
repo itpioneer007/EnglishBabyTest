@@ -214,7 +214,7 @@ class ReportExporter:
     <div class="summary-card s-fail"><div class="num">{failed}</div><div class="label">不通过</div></div>
     <div class="summary-card s-uncertain"><div class="num">{uncertain}</div><div class="label">需人工复核</div></div>
     <div class="summary-card s-conf"><div class="num">{avg_conf}%</div><div class="label">平均置信度</div></div>
-    <div class="summary-card"><div class="num">{round(passed/total*100) if total else 0}%</div><div class="label">通过率</div></div>
+    <div class="summary-card"><div class="num">{pass_rate}%</div><div class="label">通过率</div></div>
   </div>
 
   <div class="toolbar">
@@ -222,9 +222,7 @@ class ReportExporter:
     <button class="btn btn-outline" onclick="document.querySelectorAll('.details').forEach(d=>d.style.display=d.style.display==='none'?'block':'none')">展开/收起详情</button>
   </div>
 
-  {("""
-  <div class="no-data">暂无题目数据</div>
-  """ if not questions else cards_html)}
+  {cards_html if questions else no_data_html}
 
   <div class="footer">英语宝审查智能体 v3 · 自动生成 · 仅供参考，最终判定以人工确认为准</div>
 

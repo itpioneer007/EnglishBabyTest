@@ -3,7 +3,7 @@
 
 # 设备配置
 device:
-  serial: "SKSCIF4T7PFMQS5X"        # ADB设备序列号 (adb devices 查看)
+  serial: "3XQ0225715002935"        # ADB设备序列号 (adb devices 查看)
   screen_resolution: [1080, 2400]   # 手机屏幕分辨率
 
 # 英语宝APP
