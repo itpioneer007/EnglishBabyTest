@@ -171,7 +171,24 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
 .unit-input-wrap input{width:50px;padding:2px 5px;border:1px solid var(--line);border-radius:6px;font-size:11px;background:#fff;color:#3d3226}
 .unit-input-wrap input:focus{outline:none;border-color:var(--green-light)}
 /* ★ 模块卡片 + 单元勾选栏（替代齿轮展开，常驻展示） */
-.mod-card{border:1.5px solid var(--line);border-radius:12px;padding:8px 11px;background:#fff;transition:border-color .15s,background .15s,box-shadow .15s}
+.mod-card{border:1.5px solid var(--line);border-radius:10px;padding:6px 9px;background:#fff;transition:border-color .15s,background .15s,box-shadow .15s}
+/* ★ 矮屏(≤820px 高)时进一步压缩模块卡片：保证选择区不出现滚动条 */
+@media(max-height:820px){
+  .mod-card{padding:4px 8px;border-radius:8px}
+  .mod-sel-label{font-size:12.5px;gap:5px}
+  .mod-sel-label input{width:13px;height:13px}
+  .unit-input-row{margin-top:3px;gap:4px}
+  .unit-val{width:118px;padding:2px 8px;font-size:11px}
+  .up-k{min-width:26px;height:18px;font-size:10px}
+  .unit-clear{padding:1px 7px;font-size:10px}
+}
+/* ★ 矮屏压缩左侧配置卡上部（标题/提示/描述框/下拉），进一步腾出空间 */
+@media(max-height:820px){
+  #orderInput{min-height:30px!important;padding:2px 8px!important;font-size:11px!important}
+  .sec-note{font-size:10.5px!important;padding:4px 9px!important;margin-bottom:6px!important;line-height:1.5!important}
+  #tabAside{padding:8px!important}
+  #tabAside .grid.gap-3{gap:8px!important}
+}
 .mod-card:hover{border-color:#c9d8d0;box-shadow:0 1px 4px rgba(45,106,79,.06)}
 .mod-card.on{border-color:var(--green-light);background:#f0f7f3;box-shadow:0 0 0 1px var(--green-light)}
 .mod-card-head{display:flex;align-items:center;justify-content:space-between;gap:6px}
@@ -181,7 +198,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
 .unit-clear{font-size:10.5px;color:var(--gray);cursor:pointer;padding:2px 9px;border-radius:6px;border:1px solid var(--line);background:#fff;flex-shrink:0;transition:color .15s,border-color .15s}
 .unit-clear:hover{color:var(--red);border-color:var(--red);background:#fef6f6}
 /* 单元输入行（空格/横线分隔，常驻显示） */
-.unit-input-row{display:flex;align-items:center;gap:6px;margin-top:6px;flex-wrap:wrap}
+.unit-input-row{display:flex;align-items:center;gap:6px;margin-top:5px;flex-wrap:wrap}
 .up-k{display:inline-flex;align-items:center;justify-content:center;min-width:30px;height:20px;padding:0 7px;border-radius:6px;background:var(--green);color:#fff;font-size:10.5px;font-weight:600;letter-spacing:.5px;flex-shrink:0;line-height:1}
 .unit-val{width:140px;padding:4px 10px;border:1.5px solid var(--line);border-radius:8px;font-size:12px;background:#faf8f3;color:#2d3a33;outline:none;transition:border-color .15s,background .15s,box-shadow .15s;font-family:inherit}
 .unit-val:hover{border-color:#c9d8d0}
@@ -235,9 +252,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 max-w-[1600px] mx-auto h-full">
 
     <!-- 左卡：任务配置 + 一键检测按钮 -->
-    <div class="bg-white rounded-xl border border-[#e6dfd4] p-4 shadow-sm flex flex-col min-h-0">
-      <h3 class="font-bold text-[14px] text-[#1b4332] mb-2 flex items-center gap-2 shrink-0"><span class="w-5 h-5 rounded-full bg-[#2d6a4f] text-white flex items-center justify-center text-[10.5px] font-bold">1</span>任务配置 · 一键自动检测</h3>
-      <div class="sec-note shrink-0">
+    <div class="bg-white rounded-xl border border-[#e6dfd4] p-4 shadow-sm flex flex-col min-h-0 overflow-y-auto">
+      <h3 class="font-bold text-[13px] text-[#1b4332] mb-1.5 flex items-center gap-2 shrink-0"><span class="w-5 h-5 rounded-full bg-[#2d6a4f] text-white flex items-center justify-center text-[10.5px] font-bold">1</span>任务配置 · 一键自动检测</h3>
+      <div class="sec-note shrink-0" style="padding:5px 10px;margin-bottom:8px">
         <b>选好模块、上传脚本，一键全自动：</b>有脚本 → LLM 知识性审查；无脚本 → 基础完整性检查。
       </div>
 
@@ -246,7 +263,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
         <div class="col-span-2">
           <textarea id="orderInput" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();tryParseOrder()}"
             placeholder="一句话描述，如：湘少版五年级上册 听力专项U1难点突破 口语训练U1&#10;回车自动识别 版本/年级/模块/单元"
-            class="w-full min-h-[46px] border-[1.5px] border-dashed border-[#e6dfd4] rounded-lg p-2 text-[12.5px] resize-y leading-relaxed focus:outline-none focus:border-[#40916c] focus:bg-white bg-[#faf7f2]"></textarea>
+            class="w-full min-h-[38px] border-[1.5px] border-dashed border-[#e6dfd4] rounded-lg p-1.5 text-[12px] resize-none leading-snug focus:outline-none focus:border-[#40916c] focus:bg-white bg-[#faf7f2]"></textarea>
           <div class="text-[10.5px] text-[#6b7280] mt-1 leading-relaxed">回车自动识别 · 或 <span class="text-[#2d6a4f] underline underline-offset-2 cursor-pointer" onclick="$('fileOrder').click()">上传任务清单</span> · 支持 期中/期末/AI检测</div>
         </div>
         <div class="flex flex-col gap-2">
@@ -266,13 +283,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
       </div>
       <input type="file" id="fileOrder" accept=".txt,.docx,.xlsx,.doc,.xls" onchange="uploadOrder(event)" class="hidden">
 
-      <div class="flex items-center justify-between text-[11.5px] text-[#5c6f66] mt-2.5 mb-1.5 shrink-0">
+      <div class="flex items-center justify-between text-[11.5px] text-[#5c6f66] mt-2 mb-1 shrink-0">
         <span class="font-medium tracking-wide">要测的模块（可多选）· 单元默认全选，取消勾选可指定范围</span>
         <span>已选 <b id="moduleSelCount" class="text-[#2d6a4f] text-[12.5px]">0</b> 个</span>
       </div>
-            <div class="space-y-1.5 shrink-0">
-        <!-- 听力专项：练/测 两组单元（可分别勾选是否检测） -->
-        <div class="mod-card mod-tag">
+            <div class="grid grid-cols-1 xl:grid-cols-2 gap-1.5 shrink-0">
+        <!-- 听力专项：练/测 两组单元（可分别勾选是否检测）→ 占满整行，其他模块两列排布 -->
+        <div class="mod-card mod-tag xl:col-span-2">
           <div class="mod-card-head">
             <label class="mod-sel-label"><input type="checkbox" class="mod-sel" value="听力专项">听力专项</label>
             <button type="button" class="unit-clear" onclick="clearUnitPicks(this)">清空单元</button>
@@ -327,7 +344,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
       </div>
 
       <!-- 行动：极简——一个「解析并自动检测」按钮（有脚本→LLM审查 / 无脚本→基础完整性） -->
-      <div class="mt-auto pt-3 mb-[30px] shrink-0">
+      <div class="mt-auto pt-3 mb-[30px] shrink-0 sticky bottom-0 bg-white z-10">
         <button id="btnCook" onclick="startCooking()" class="w-full py-3 bg-gradient-to-r from-[#1b4332] to-[#2d6a4f] text-white rounded-xl font-bold text-[14px] shadow-md hover:shadow-lg hover:-translate-y-px transition active:scale-[.98] disabled:opacity-60 flex items-center justify-center gap-2"><span class="text-[15px] leading-none">▶</span>解析并自动检测</button>
         <!-- ↓ 以下旧按钮/区块隐藏保留（JS 引用安全，界面不展示） -->
         <div class="hidden grid grid-cols-2 gap-2 mt-2">
