@@ -517,14 +517,29 @@ set_log_callback(log_msg)
 set_stop_check(lambda: _is_stop_requested())
 
 
+# ★ 设备连接缓存：_connect_device 每次可能 5-20s（u2 初始化），错题自动截图
+#   每题调用会严重拖慢 → 缓存成功连接，断连后自动重连
+_DEV_CACHE = {"d": None}
+
 def _connect_device():
-    """连接当前选中的设备（带就绪检查 + 短超时）
+    """连接当前选中的设备（带就绪检查 + 短超时 + 连接缓存）
 
     - 设置 u2 全局超时（默认 300s，设备断连时每个操作挂 5 分钟 = 看起来卡死）
     - 检查设备在线，未连接/离线 → 抛 RuntimeError（上层记 error 日志）
     - 整个连接过程硬超时 20s：u2.connect 初始化（装ATX/起server）可能很慢
     """
     import threading
+    # ★ 缓存复用：已连接且设备在线 → 直接返回（错题截图每秒调用时避免 5-20s 重连）
+    try:
+        _cached = _DEV_CACHE.get("d")
+        if _cached is not None:
+            try:
+                if _cached.info:
+                    return _cached
+            except Exception:
+                _DEV_CACHE["d"] = None  # 连接失效 → 重连
+    except Exception:
+        pass
     result = {}
     def _do_connect():
         try:
@@ -543,6 +558,7 @@ def _connect_device():
                 result["err"] = "设备连接失败（u2 无响应）"
                 return
             result["d"] = d
+            _DEV_CACHE["d"] = d  # ★ 缓存成功连接
         except SystemExit:
             log_msg("⏹ 任务已被立即停止", "warning")
         except Exception as e:
@@ -2880,6 +2896,28 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
     else:
         overall = None   # 检查不足3维 → 标未审
 
+    # ★ 自动截图：错题（overall=False）自动抓当前页面截图，供错题报告嵌入。
+    #   用户要求"错题日志中的每道错题都要有截图"；听力专项有答错截图，
+    #   口语训练等模块没有 → 这里统一兜底（每题判定不通过即截图）。
+    _auto_shot = ""
+    if overall is False:
+        try:
+            _shot_dir = PROJECT_ROOT / "screenshots"
+            _shot_dir.mkdir(parents=True, exist_ok=True)
+            _auto_shot = f"auto_{_current_module_name or 'mod'}_q{qidx:03d}_{datetime.now().strftime('%H%M%S')}.png"
+            _conn = _connect_device()
+            if _conn is not None:
+                for _r in range(3):
+                    try:
+                        _conn.screenshot(str(_shot_dir / _auto_shot))
+                        break
+                    except OSError:
+                        if _r >= 2:
+                            raise
+                        time.sleep(0.5)
+        except Exception:
+            _auto_shot = ""
+
     total = len(_inspection_state.get("questions", {})) + 1
     qid = f"auto-Q{qidx:03d}"
 
@@ -2899,7 +2937,7 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
         "idx": qidx,
         "total": total,
         "question_type": question_type,
-        "screenshot": "",
+        "screenshot": _auto_shot,  # ★ 错题自动截图（听力专项答错截图 + 通用兜底）
         "progress": progress_str,
         # ★ 分值信息（evidence 附加项，供检查人员参考）
         "score_info": _inspection_state.get("_last_score_info", ""),
