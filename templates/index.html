@@ -903,8 +903,16 @@ async function startCooking(){
   const docxs=getUploadedDocxs()
   const {v:matchV,g:matchG}=curVersionGrade()
   const docxMap={}
+  // ★ 手动选中的脚本（reviewDocx 下拉）作为兜底：自动匹配失败时用它关联
+  //   （用户上传脚本与模块名不完全一致时也能审查，如"知识过关脚本"给"口语训练"用）
+  const manualDocx=$('reviewDocx')?$('reviewDocx').value:''
+  const manualOk=manualDocx&&manualDocx!=='— 尚未上传 —'&&manualDocx!==''
   moduleConfigs.forEach(m=>{
-    const _d=matchDocxForModule(m.name,docxs,matchV,matchG)
+    let _d=matchDocxForModule(m.name,docxs,matchV,matchG)
+    if(!_d&&manualOk){
+      // ★ 单模块时：手动下拉选的脚本直接关联（多模块时避免误关联，仅单模块用）
+      if(moduleConfigs.length===1) _d=manualDocx
+    }
     if(_d) docxMap[m.name]=_d
   })
   let confirmMsg = '确认启动多模块检测？\n'

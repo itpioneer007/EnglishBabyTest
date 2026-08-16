@@ -50,6 +50,27 @@ def _split_opts(t: str) -> list:
     return [p.strip() for p in parts if p.strip()]
 
 
+def _is_knowledge_line(content: str) -> bool:
+    """判断"知识点："后的数字行是否为知识点内容（而非题干）。
+    - 知识点特征：含音标（/ /）、含中英括号注释（(...)（...））、含特殊符号（·、—、~、+）、
+      或含 be 动词/助动词等语法结构（am/is/are、do/does、don't、can't）
+    - 题干特征：以"选择/判断/填空/朗读/听/排序/匹配/回答/看图"等开头 → 不是知识点
+    """
+    _s = content.strip()
+    if not _s:
+        return False
+    # 题干特征词开头 → 不是知识点
+    if re.match(r'^(选择|判断|填空|朗读|跟读|听|排序|排列|匹配|连线|回答|看图|补全|连词|根据|用|写出|抄写|翻译|What|Where|When|Who|How|Can|Do|Does|Is|Are)', _s, re.IGNORECASE):
+        return False
+    # 知识点特征：音标 / 括号注释（含中英文方括号）/ 特殊符号
+    if re.search(r'/[^/]+/|（[^）]+）|\([^)]+\)|\[[^\]]+\]|[·—~+×＝=]', _s):
+        return True
+    # 语法结构（am/is/are doing、don't 等）
+    if re.search(r"\b(am|is|are|don't|can't|doesn't|do|does)\b", _s, re.IGNORECASE):
+        return True
+    return False
+
+
 def parse(filepath: str) -> list[YingYuBaoQuestion]:
     """解析英语宝听力专项 DOCX（段落模式）
 
@@ -67,6 +88,7 @@ def parse(filepath: str) -> list[YingYuBaoQuestion]:
     pending = None          # 当前正在累积的题
     current_unit = 0
     current_stage = ""
+    _in_knowledge = False   # ★ 是否在"知识点："后的列表区（数字行是知识点，不是新题）
     global_counter = 0      # ★ 全局题号：跨阶段连续递增（脚本每个阶段内部题号从1重数，不能直接用）
     # 大题标题（一、二、...）用正则跳过；题号是全局连续数字
 
@@ -96,6 +118,15 @@ def parse(filepath: str) -> list[YingYuBaoQuestion]:
         if m:
             current_unit = int(m.group(1))
             continue
+        # ★ 兼容口语训练脚本标题格式："口语训练新湘少版五上U7" / "五上U10" / "U6"
+        #   （脚本标题常写"五上U7"，无 "Unit " 前缀 → 旧正则识别不到 → 全部题 unit=0
+        #   → 按单元过滤失效 → 脚本审查结果为空，用户实测"脚本审查没生效"）
+        m = re.search(r'(?:上|下|册|书)?[Uu]\s*(\d{1,2})\b', t)
+        if m and ('U' in t or 'u' in t):
+            _cand = int(m.group(1))
+            if 1 <= _cand <= 20 and '关键词' not in t[:6]:
+                current_unit = _cand
+                continue
 
         # Stage 识别
         if t in ('基础巩固', '综合进阶', '难点突破'):
@@ -110,6 +141,19 @@ def parse(filepath: str) -> list[YingYuBaoQuestion]:
             #   不是新题，跳过（避免把匹配题截断成多个假题）
             if re.search(r'[（(]\s*[）)]', content):
                 continue
+            # ★ 知识点行后的数字行：若是"知识点内容"（含音标/括号注释/特殊符号/长句）
+            #   才并入知识点列表；若像题干（选择/判断/填空/朗读/听…）则正常当题。
+            #   ★ 修复：知识过关脚本"知识点："后紧跟题干行（"1. 选择与对话相符的图片"），
+            #     不能误吞——只有明显知识点特征（音标/括号/符号）才算。
+            if _in_knowledge and _is_knowledge_line(content):
+                pending.knowledge_points.append(t)
+                continue
+            _in_knowledge = False  # 新题 → 退出知识点列表区
+            # ★ 口语训练脚本：朗读大题是"1. I have a red car / 2. We play..."连续句子列表，
+            #   它们是【一道朗读题的多个句子】。特征：句子行无选项（后面不跟 A./B./C.）、
+            #   且下一个非空行是元数据块（一级题型/难度/关键词）。
+            #   策略：先创建题（题干=当前句），若发现是列表（无选项+后续元数据块），
+            #   在元数据块处理时把累积句子合并成一道题的题干。
             if pending is not None and (pending.stem or pending.answer or pending.options):
                 _finalize(pending)
             num = int(m.group(1))
@@ -144,6 +188,28 @@ def parse(filepath: str) -> list[YingYuBaoQuestion]:
 
         # 元数据
         if t.startswith('一级题型：'):
+            # ★ 口语训练脚本合并：朗读大题的句子列表（1. 2. 3. 连续数字行、无选项无答案）
+            #   是【一道题的多个句子】，解析时被拆成多道假题 → 在此合并还原。
+            #   特征：pending 无 options/answer，题型为朗读/跟读/口语/复述/背诵，
+            #   且 questions 尾部有 stage_idx 连续的纯句子题（无选项无答案）。
+            _t1 = t.replace('一级题型：', '').strip()
+            if pending is not None and not pending.options and not pending.answer \
+                    and _t1 in ('朗读', '跟读', '口语', '复述', '背诵'):
+                _sentences = [pending.stem] if pending.stem else []
+                _base_unit = pending.unit or current_unit
+                _base_idx = pending.stage_idx
+                # 往前合并：questions 尾部 stage_idx 连续递减、无选项无答案的纯句子题
+                while questions and not questions[-1].options and not questions[-1].answer \
+                        and questions[-1].stage_idx == _base_idx - 1:
+                    _prev = questions.pop()
+                    _sentences.insert(0, _prev.stem or "")
+                    _base_idx = _prev.stage_idx
+                    if _prev.unit:
+                        _base_unit = _prev.unit
+                if len(_sentences) > 1:
+                    pending.stem = "\n".join(s for s in _sentences if s).strip()
+                    pending.stage_idx = _base_idx
+                    pending.unit = _base_unit
             pending.type_1 = t.replace('一级题型：', '').strip()
         elif t.startswith('二级题型：'):
             pending.type_2 = t.replace('二级题型：', '').strip()
@@ -153,8 +219,10 @@ def parse(filepath: str) -> list[YingYuBaoQuestion]:
             pending.keywords = [k.strip() for k in t.replace('关键词：', '').split('#') if k.strip()]
         elif t.startswith('知识点：'):
             pending.knowledge_points = [t.replace('知识点：', '').strip()]
+            _in_knowledge = True  # ★ 后续数字行是知识点列表（"1. ar发音 2. ..."），不当题
         elif t.startswith('技能：'):
             pending.skill = t.replace('技能：', '').strip()
+            _in_knowledge = False  # 元数据结束
         elif t.startswith('认知目标：'):
             pending.cognitive_target = t.replace('认知目标：', '').strip()
 

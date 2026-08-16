@@ -304,11 +304,14 @@ def _detect_content_dimension(module: str = ""):
         docx_path = PROJECT_ROOT / "uploads" / _docx
         if not docx_path.exists():
             return
+        # ★ 按当前模块单元过滤脚本（用户要求：脚本含多单元，只比对所选单元）
+        #   从 _inspection_state 读当前单元（多模块检测启动时记录）
+        _unit_cur = int(_inspection_state.get("unit", 0) or 0)
         from src.review_agent import ReviewAgent, ReviewConfig
-        cfg = ReviewConfig(docx_path=str(docx_path), unit=0, screenshot_dir="", verbose=False)
+        cfg = ReviewConfig(docx_path=str(docx_path), unit=_unit_cur, screenshot_dir="", verbose=False)
         agent = ReviewAgent(cfg)
         if not agent.script_questions: return
-        log_msg(f"📄 {module} 自动补充内容检查 (批量, {_docx}, {len(agent.script_questions)}题)", "info")
+        log_msg(f"📄 {module} 自动补充内容检查 (批量, {_docx}, 单元{_unit_cur or '全部'}, {len(agent.script_questions)}题)", "info")
         batch = []; qid_map = {}
         for qid, q in list(_inspection_state.get("questions", {}).items()):
             idx = (q or {}).get("idx", 0)
