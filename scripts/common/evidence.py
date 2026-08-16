@@ -251,13 +251,27 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
                            "actual": "未检测到播放控件",
                            "diff": "⚠ 题干含'听录音'但页面未检测到扬声器/播放标识"})
         elif is_speaking:
-            # 口语题：播放控件(小喇叭/导读) + 录音控件(麦克风) 都要检查
-            ev.append({"field": "音频", "type": "text_ok" if play_clickable else "text_mismatch",
-                       "expected": "口语题须有可点击的播放控件(小喇叭/导读音频)",
-                       "actual": "播放控件" + ("(可点击)" if play_clickable else "(存在但不可点击)") if play_found else "未检测到播放控件",
-                       "diff": ("小喇叭/播放标识可见且可点击" if play_clickable
-                                else ("⚠ 小喇叭存在但不可点击（无法播放音频）" if play_found
-                                      else "⚠ 口语题未检测到小喇叭/播放控件"))})
+            # ★ 口语题：是否检查播放控件(小喇叭)取决于题干是否要求"点击小喇叭/播放问题"
+            #   ★ 用户实测：有些口语小题没有小喇叭，题干没提到"小喇叭/播放"就不该检查！
+            #   题干/页面含"小喇叭/播放问题/先听/听一听再读/点小喇叭" → 必须有小喇叭可点
+            #   否则 → 播放控件 skip（该小题就是直接朗读，无需小喇叭）
+            _need_play = any(k in xml for k in
+                             ("小喇叭", "播放问题", "点击播放", "先听", "听一听再",
+                              "点小喇叭", "播放录音", "听音跟读", "听录音跟读", "播放"))
+            if _need_play:
+                ev.append({"field": "音频", "type": "text_ok" if play_clickable else "text_mismatch",
+                           "expected": "口语题须有可点击的播放控件(小喇叭/导读音频)",
+                           "actual": "播放控件" + ("(可点击)" if play_clickable else "(存在但不可点击)") if play_found else "未检测到播放控件",
+                           "diff": ("小喇叭/播放标识可见且可点击（题干要求点击小喇叭）" if play_clickable
+                                    else ("⚠ 小喇叭存在但不可点击（无法播放音频）" if play_found
+                                          else "⚠ 题干要求点击小喇叭但未检测到播放控件"))})
+            else:
+                # ★ 题干没提小喇叭 → 不检查播放控件（该小题直接朗读，无小喇叭属正常）
+                ev.append({"field": "音频", "type": "skip",
+                           "expected": "口语题无需小喇叭",
+                           "actual": "直接朗读",
+                           "diff": "题干未提及小喇叭/播放，本题直接朗读作答，无需检查小喇叭"})
+            # 麦克风始终检查（口语题作答核心）
             ev.append({"field": "作答", "type": "text_ok" if mic_clickable else "text_mismatch",
                        "expected": "口语题须有可点击的麦克风(录音作答)",
                        "actual": "麦克风/录音控件" + ("(可点击)" if mic_clickable else "(存在但不可点击)") if mic_found else "未检测到麦克风",

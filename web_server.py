@@ -445,10 +445,12 @@ def log_msg(msg: str, level: str = "info", evidence: list = None):
         try:
             # ★ 修复：兼容实际消息格式——"第1题 检查"(可能带前导空格) 与
             #   "第1题 完整性检查"(测试循环) 都能命中
-            m = re.match(r"\s*第(\d+)题\s*(?:完整性)?\s*检查", msg)
+            #   ★ 口语训练："第2大题·第3小题 完整性检查"（大题·小题精确定位）
+            m = re.match(r"\s*(?:第(\d+)大题·)?第(\d+)(?:题|小题)\s*(?:完整性)?\s*检查", msg)
             if m:
-                qidx = int(m.group(1))
-                _record_module_evidence(qidx, msg, evidence)
+                _big = int(m.group(1)) if m.group(1) else None
+                qidx = int(m.group(2))
+                _record_module_evidence(qidx, msg, evidence, big=_big)
         except Exception:
             pass
 
@@ -456,9 +458,9 @@ def log_msg(msg: str, level: str = "info", evidence: list = None):
     #   触发条件：消息含"第N题 答错截图"且 evidence 带 type="wrong_shot" + screenshot 文件名
     if evidence and isinstance(evidence, list) and evidence:
         try:
-            m = re.match(r"\s*第(\d+)题\s*答错截图", msg)
+            m = re.match(r"\s*(?:第(\d+)大题·)?第(\d+)(?:题|小题)\s*答错截图", msg)
             if m:
-                qidx = int(m.group(1))
+                qidx = int(m.group(2))
                 shot = ""
                 for e in evidence:
                     if e.get("type") == "wrong_shot":
@@ -2737,13 +2739,14 @@ def _live_regen_error_report():
 
 
 # ★ 多模块检测每题界面级证据 → 审查结果区（无脚本也能展示 AI 通过/不通过）
-def _record_module_evidence(qidx: int, msg: str, evidence: list):
+def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None):
     """把 engine.py 每题收集的 5 维界面证据（题型/题干/选项/音频/作答）
     映射成前端六维卡片字段写入 _inspection_state["questions"]。
 
     判定规则：
       - text_ok → 通过(true)；text_mismatch → 不通过(false)；skip → 未检(None)
       - overall: 可查维度≥3且无不通过 → 通过；否则 → 不通过；全是 skip → 未审
+    big: 大题号（口语训练"第2大题·第3小题"精确定位；None=无大题概念）
     """
     global _inspection_state
     # ★ 模块上下文（scheduler 设置）：模块名/子模块/模块内题号
@@ -2852,21 +2855,30 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list):
     qid = f"auto-Q{qidx:03d}"
 
     # ★ 描述文字：让检查人员知道题目大概内容和位置
+    # ★ 描述文字：让检查人员知道题目大概内容和位置
     if not stem_text:
         stem_text = f"第{qidx}题（{question_type}）"
+    # ★ 大题号定位（口语训练"第2大题·第3小题"）：错题报告能定位到 大题·小题
+    if big:
+        stem_text = f"第{big}大题·{stem_text}" if not stem_text.startswith("第") else f"第{big}大题·{stem_text}"
+        progress_str = f"大{big}-Q{qidx}"
+    else:
+        progress_str = f"Q{qidx}"
+    _loc = {"big": big} if big else {}
 
     _inspection_state["questions"][qid] = {
         "idx": qidx,
         "total": total,
         "question_type": question_type,
         "screenshot": "",
-        "progress": f"Q{qidx}",
+        "progress": progress_str,
         # ★ 分值信息（evidence 附加项，供检查人员参考）
         "score_info": _inspection_state.get("_last_score_info", ""),
         # ★ 模块定位信息（哪个模块·哪个子模块·模块内第几题）→ 错题报告按此分组
         "module": _current_module_name,
         "stage": _current_stage_name,
         "module_qno": _current_module_qno,
+        **_loc,
         # 六维判定
         "ai_stem": dims["stem"], "ai_content": dims["content"],
         "ai_image": dims["image"], "ai_answer": dims["answer"],

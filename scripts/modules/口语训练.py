@@ -261,11 +261,12 @@ def _answer_big_question(d, big_idx=0):
     for _ in range(15):  # 最多15小题（包含若干道口语题）
         # ★ 每题界面级完整性检查证据（题型/题干/选项/音频/作答）→ 前端证据卡
         #   口语题为录音作答：证据卡会显示"录音/麦克风"作答元素 + 题干文字
+        #   ★ 精确定位：标注"第big_idx大题·第M小题"（用户要求错题能定位到题）
         if q != _ev_q:
             try:
                 _xml_ev = d.dump_hierarchy()
                 from common.evidence import collect_ui_evidence
-                step_log(f"  第{q+1}题 完整性检查", "info",
+                step_log(f"  第{big_idx}大题·第{q+1}小题 完整性检查", "info",
                          collect_ui_evidence(_xml_ev, qtype="口语训练"))
                 # ★ 文档检查点：大题首题做一次分值核对（页面显示的分值是否正常）
                 if not _score_checked:
