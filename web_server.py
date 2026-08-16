@@ -56,7 +56,8 @@ app = Flask(__name__)
 from routes import register_trace, register_batch, register_export
 register_trace(app)
 register_batch(app)
-register_export(app)
+# ★ 导出优先读内存 _inspection_state（多模块检测含全部模块；文件会被新任务覆盖）
+register_export(app, state_provider=lambda: _inspection_state)
 # ★ 借鉴队友：实时错题报告路由（/api/errors/live、/api/errors/live-status）
 import routes.error_log_routes as _error_log_routes
 _error_log_routes.register(app)
@@ -2712,6 +2713,31 @@ def _save_inspection_state():
     )
 
 
+def _save_inspection_state_merge():
+    """★ 合并保存：保留旧文件里【其他模块】的题目（多模块检测时，
+    新模块结果不与旧模块互相覆盖——否则导出的错题报告只会剩最后一个模块）。
+    仅多模块检测的 LLM 审查完成后调用（此时内存含本次全部模块结果）。"""
+    import json
+    p = PROJECT_ROOT / "data" / "inspection_state.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        old = {}
+        if p.exists():
+            old = json.loads(p.read_text(encoding="utf-8") or "{}")
+    except Exception:
+        old = {}
+    # 合并 questions：本次内存的覆盖同 qid；旧文件里不冲突的保留
+    _qs = dict(old.get("questions") or {})
+    _qs.update(dict(_inspection_state.get("questions") or {}))
+    _merged = dict(old)
+    _merged["questions"] = _qs
+    # 时间/模块信息以最新为准
+    for k in ("version", "grade", "module", "start_time", "end_time"):
+        if _inspection_state.get(k):
+            _merged[k] = _inspection_state[k]
+    p.write_text(json.dumps(_merged, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def _live_regen_error_report():
     """
     ★ 实时重新生成"仅错误"的可折叠卡片 HTML 报告（审查中每出一道错题即调用）。
@@ -4412,7 +4438,7 @@ def _run_llm_script_review(module: str, docx: str, version: str, unit):
             qid = f"{module}-脚本-Q{rr.idx:02d}"
             _inspection_state["questions"][qid] = _qreview_to_state(
                 module, docx, unit, rr, stage=getattr(q, "stage", "") or "")
-        _save_inspection_state()
+        _save_inspection_state_merge()
         # ★ 触发实时错题报告（前端「📑 查看报告」）
         try:
             _live_regen_error_report()

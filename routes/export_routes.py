@@ -62,8 +62,13 @@ def _save_export_config(config):
         json.dump(config, f, ensure_ascii=False, indent=2)
 
 
-def register(app):
-    """注册报告导出相关路由到 Flask app"""
+def register(app, state_provider=None):
+    """注册报告导出相关路由到 Flask app
+
+    state_provider: 可选 callable，返回当前内存 _inspection_state（dict）。
+       ★ 多模块检测结果在内存中是最新的（含全部模块），文件可能被
+         新任务启动时清空覆盖 → 导出必须优先读内存，文件仅作兜底。
+    """
 
     # ========================================
     # 导出配置
@@ -96,14 +101,24 @@ def register(app):
         config = _load_export_config()
         save_dir = config.get("save_dir", "") or str(Path(__file__).parent.parent / "outputs" / "reports")
         
-        # 加载巡检数据
-        state_path = Path(__file__).parent.parent / "data" / "inspection_state.json"
+        # ★ 加载巡检数据：优先内存（多模块最新结果），文件兜底
+        st = {}
         questions = {}
-        if state_path.exists():
-            with open(state_path, "r", encoding="utf-8") as f:
-                st = json.load(f)
-                questions = st.get("questions", {})
-        
+        if state_provider:
+            try:
+                _mem = state_provider() or {}
+                if _mem.get("questions"):
+                    st = _mem
+                    questions = _mem.get("questions", {})
+            except Exception:
+                pass
+        if not questions:
+            state_path = Path(__file__).parent.parent / "data" / "inspection_state.json"
+            if state_path.exists():
+                with open(state_path, "r", encoding="utf-8") as f:
+                    st = json.load(f)
+                    questions = st.get("questions", {})
+
         # 过滤：指定ID或全部
         ids = data.get("result_ids", [])
         if ids:
@@ -146,14 +161,24 @@ def register(app):
         config = _load_export_config()
         save_dir = config.get("save_dir", "") or str(Path(__file__).parent.parent / "outputs" / "reports")
 
-        # 加载巡检数据（含 qid → 用于解析模块/题号）
-        state_path = Path(__file__).parent.parent / "data" / "inspection_state.json"
-        questions = {}
+        # ★ 加载巡检数据：优先内存（多模块检测最新结果，含全部模块）；
+        #   文件仅兜底（服务重启后无内存时用文件）
         st = {}
-        if state_path.exists():
-            with open(state_path, "r", encoding="utf-8") as f:
-                st = json.load(f)
-                questions = st.get("questions", {})
+        questions = {}
+        if state_provider:
+            try:
+                _mem = state_provider() or {}
+                if _mem.get("questions"):
+                    st = _mem
+                    questions = _mem.get("questions", {})
+            except Exception:
+                pass
+        if not questions:
+            state_path = Path(__file__).parent.parent / "data" / "inspection_state.json"
+            if state_path.exists():
+                with open(state_path, "r", encoding="utf-8") as f:
+                    st = json.load(f)
+                    questions = st.get("questions", {})
 
         # 构造带 qid 的列表
         qlist = []
@@ -196,12 +221,21 @@ def register(app):
         config = _load_export_config()
         save_dir = config.get("save_dir", "") or str(Path(__file__).parent.parent / "outputs" / "reports")
         
-        state_path = Path(__file__).parent.parent / "data" / "inspection_state.json"
+        # ★ 加载巡检数据：优先内存（多模块最新结果），文件兜底
         questions = {}
-        if state_path.exists():
-            with open(state_path, "r", encoding="utf-8") as f:
-                questions = json.load(f).get("questions", {})
-        
+        if state_provider:
+            try:
+                _mem = state_provider() or {}
+                if _mem.get("questions"):
+                    questions = _mem.get("questions", {})
+            except Exception:
+                pass
+        if not questions:
+            state_path = Path(__file__).parent.parent / "data" / "inspection_state.json"
+            if state_path.exists():
+                with open(state_path, "r", encoding="utf-8") as f:
+                    questions = json.load(f).get("questions", {})
+
         # 只导出错误题
         failed = {k: v for k, v in questions.items() if not v.get("overall_passed")}
         
@@ -226,12 +260,21 @@ def register(app):
     @app.route("/api/export/screenshots", methods=["POST"])
     def api_export_screenshots():
         """打包错误题截图成 zip 供下载"""
-        state_path = Path(__file__).parent.parent / "data" / "inspection_state.json"
+        # ★ 加载巡检数据：优先内存（多模块最新结果），文件兜底
         questions = {}
-        if state_path.exists():
-            with open(state_path, "r", encoding="utf-8") as f:
-                questions = json.load(f).get("questions", {})
-        
+        if state_provider:
+            try:
+                _mem = state_provider() or {}
+                if _mem.get("questions"):
+                    questions = _mem.get("questions", {})
+            except Exception:
+                pass
+        if not questions:
+            state_path = Path(__file__).parent.parent / "data" / "inspection_state.json"
+            if state_path.exists():
+                with open(state_path, "r", encoding="utf-8") as f:
+                    questions = json.load(f).get("questions", {})
+
         # 找不通过的题
         failed = {k: v for k, v in questions.items() if not v.get("overall_passed")}
         if not failed:
