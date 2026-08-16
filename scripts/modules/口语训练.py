@@ -307,7 +307,12 @@ def _answer_big_question(d, big_idx=0):
             if d(text="确定交卷").exists(timeout=2):
                 d(text="确定交卷").click()
                 print(f"    ✅ 确定交卷")
-                time.sleep(1.2)
+                # ★ 等练习报告渲染（1-2s 延迟）：确保上层 _run_unit_questions
+                #   能检测到"练习报告"→ 不会误进下一大题记假错题
+                for _r in range(5):
+                    if d(text="练习报告").exists(timeout=0.5):
+                        break
+                    time.sleep(0.5)
             return q
 
         # 完成判断：下一题（大题答完）——仅当本大题已答过题 或 页面有录音按钮时才允许
@@ -468,6 +473,14 @@ def _run_unit_questions(d, unit_num):
     """进入单元后的答题循环（多个大题）"""
     total = 0
     for big in range(1, 10):
+        # ★ 前置检查：交卷后练习报告页渲染有 1-2s 延迟，上一轮可能没检测到。
+        #   若已在练习报告/交卷确认页 → 直接结束（防止误进"第5大题"记假错题）
+        try:
+            if d(text="练习报告").exists(timeout=0.3) or d(text="确定交卷").exists(timeout=0.3):
+                print(f"  ✅ 已交卷/练习报告，结束（不进入第{big}大题）")
+                return total
+        except Exception:
+            pass
         # ★ 大题切换后等待页面稳定：
         #   第一大题 → 等 18s（"请阅读题目"倒计时结束+第一个麦克风出现，用户实测根因）
         #   后续大题 → 3s 快速（页面已加载过，切换快）
@@ -485,8 +498,12 @@ def _run_unit_questions(d, unit_num):
             step_log(f"📝 开始第{big}大题", "step")
         q = _answer_big_question(d, big_idx=big)
         total += q
-        # 若交卷/练习报告了则退出（交卷后出现练习报告页）
-        if d(text="确定交卷").exists(timeout=0.8) or d(text="练习报告").exists(timeout=0.8):
+        # ★ 若本大题 0 小题（q==0）→ 说明已交卷/结束/页面已到报告页，不再进入下一大题
+        #   （交卷后练习报告渲染延迟，上一轮检测可能失败，q==0 是可靠信号）
+        if q == 0:
+            return total
+        # 若交卷/练习报告了则退出（交卷后出现练习报告页；timeout 提高到 3s 等渲染）
+        if d(text="确定交卷").exists(timeout=3) or d(text="练习报告").exists(timeout=3):
             break
         time.sleep(0.4)
     return total
