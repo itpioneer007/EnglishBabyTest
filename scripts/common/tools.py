@@ -436,7 +436,7 @@ def back_to_home(d, grade_level):
 
 
 # ==================== ⑧ 智能单元定位（随机应变按名字找内容） ====================
-def smart_find_unit_row(d, target, click_text="去答题", max_pages=8):
+def smart_find_unit_row(d, target, click_text="去答题", max_pages=8, prefer_restart=False):
     """智能定位目标单元/测试行并点击其按钮 —— 不写死标题，随机应变
 
     target: 单元引用
@@ -444,6 +444,8 @@ def smart_find_unit_row(d, target, click_text="去答题", max_pages=8):
       - 关键词("期中"/"期末"/"AI检测"/"湘少三上期中评价")：先点筛选 tab（如有），
         再匹配标题包含关键词的行
     click_text: 目标行旁按钮文字（"去答题"/"去练习"）
+    prefer_restart: ★ 为 True 时不接受"继续答题"（上次中途退出状态）——只匹配
+      "去答题/重新答题"，保证从第 1 题重头测（避免漏测中途退出后的前段题目）
     返回: 是否点击成功
     """
     import re as _re
@@ -499,6 +501,8 @@ def smart_find_unit_row(d, target, click_text="去答题", max_pages=8):
                 break
         if row:
             row_y = row.bounds[1]
+            # ★ prefer_restart：同行只接受"去答题/重新答题"（排除"继续答题"）
+            _accept = ("去答题", "重新答题") if prefer_restart else ("去答题", "重新答题", "继续答题")
             for e in elements:
                 t = (e.text or "").strip()
                 # ★ 按钮文字多状态匹配（用户确认）：
@@ -506,8 +510,8 @@ def smart_find_unit_row(d, target, click_text="去答题", max_pages=8):
                 #   - "重新答题"：已答过一次（按钮文字变化）
                 #   - "继续答题"：中途退出后恢复（此时需从当前题继续，见 _enter_unit）
                 #   ★ 注意：不能匹配"已评测/全站平均分/分数"——那是分数展示块，不是按钮！
-                _btn_hit = (t == click_text or t in ("去答题", "重新答题", "继续答题")
-                            or (click_text in ("去答题", "重新答题", "继续答题") and t in ("去答题", "重新答题", "继续答题")))
+                _btn_hit = (t == click_text or t in _accept
+                            or (click_text in _accept and t in _accept))
                 if _btn_hit:
                     # ★ 同行判断（行距放宽）：
                     #   ★ 用户确认：默认先测前面的单元（如 Unit1 就在列表最顶部），

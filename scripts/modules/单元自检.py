@@ -491,7 +491,9 @@ def _enter_unit(d, unit_num):
     # ★ 方式0：智能定位（支持数字/区间/关键词，自动处理 期中/期末 tab）
     #   ★ 按钮多状态（用户确认）：首次="去答题"，答过="重新答题"，
     #     中途退出="继续答题"，已交卷显示"已评测 N分"（点它=重新答题）
-    if smart_find_unit_row(d, unit_num, click_text="去答题"):
+    #   ★ prefer_restart=True：不接受"继续答题"（上次中途退出）——必须从第 1 题重头测，
+    #     避免漏测中途退出前的题目（用户实测：U3 中途退出后从第 12 题开始，前 11 题漏检）
+    if smart_find_unit_row(d, unit_num, click_text="去答题", prefer_restart=True):
         print(f"    ✅ 智能定位按钮 ({unit_num})")
         time.sleep(0.6)
         _after_enter_unit(d)
@@ -562,6 +564,8 @@ def _after_enter_unit(d):
     """进入单元后的公共处理：弹窗 + 开始答题（重试等待，页面可能慢加载）
     ★ 修复：可能连续弹多个"训练规则说明"（点一次"好的，我知道啦~"后可能再弹一个），
       循环点直到弹窗消失；再点"开始答题"。
+    ★ 若出现"重新答题"（中途恢复页/重测入口）→ 点它重头开始（保证从第1题测，
+      避免恢复上次中途进度漏测前段题目）
     """
     # 弹窗"好的，我知道啦~"（循环点，直到弹窗全部消失；最多12次）
     for _ in range(12):
@@ -571,6 +575,14 @@ def _after_enter_unit(d):
             time.sleep(0.4)
         else:
             break
+    # ★ 重头开始：出现"重新答题"（恢复页入口）→ 点它（从第1题重测）
+    for _ in range(3):
+        if d(text="重新答题").exists(timeout=0.6):
+            d(text="重新答题").click()
+            print(f"    ✅ 重新答题（重头开始）")
+            time.sleep(1.0)
+            break
+        time.sleep(0.3)
     # 开始答题（最多等8秒）
     for _ in range(6):
         if d(text="开始答题").exists(timeout=1):
