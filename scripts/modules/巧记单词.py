@@ -69,20 +69,63 @@ def _resolve_units(units, default_units):
 
 
 def _enter_qiaoji(d):
-    """主页 → 教材精学 → 巧记单词卡片"""
-    # 确认主页
-    for _ in range(5):
-        if d(text="教材精学").exists(timeout=1):
+    """首页 → 巧记单词入口（★ 适配新版横滑首页）
+
+    ★ 新版首页改版（2026-08）：模块入口在"横向滑动"的页面里，
+      "巧记单词"已改名"单词听写"（模块入口区，如 x=161,y=1984）。
+      旧版"教材精学→卡片"结构已移除，硬编码坐标会点到相邻入口(语音评测)！
+
+    策略：确认在首页 → 横向滑动找"单词听写/巧记单词"文本 → 点它
+    """
+    import re as _re
+    # 1. 回到首页（底部"英语"tab；找不到则 back）
+    try:
+        _cur = d.app_current() or {}
+        if (_cur.get("package") or "") != "com.tencent.english":
+            d.press("home"); time.sleep(0.5)
+    except Exception:
+        pass
+    # 2. 横滑查找"单词听写/巧记单词"（最多横滑 8 屏）
+    for _ in range(8):
+        try:
+            xml = d.dump_hierarchy()
+        except Exception:
+            xml = ""
+        for _kw in ("单词听写", "巧记单词"):
+            m = _re.search(_kw + r'[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml)
+            if m:
+                x1, y1, x2, y2 = (int(m.group(i)) for i in range(1, 5))
+                cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+                try:
+                    d.click(cx, cy)
+                except Exception:
+                    pass
+                print(f"    ✅ 点{_kw} @({cx},{cy})")
+                time.sleep(2.0)
+                # 验证进入（页头含"单词听写/巧记单词"）
+                try:
+                    _xml2 = d.dump_hierarchy()
+                except Exception:
+                    _xml2 = ""
+                if _kw in _xml2:
+                    return True
+                # 可能弹窗/加载中，再确认一次
+                time.sleep(1.5)
+                try:
+                    _xml3 = d.dump_hierarchy()
+                except Exception:
+                    _xml3 = ""
+                if _kw in _xml3 or "单词同步闯关" in _xml3 or "马上闯关" in _xml3:
+                    return True
+                return False
+        # 未找到 → 横向滑动（模块入口区在横滑页）
+        try:
+            from common.tools import S_swipe
+            S_swipe(d, 950, 850, 150, 850, 0.4); time.sleep(0.8)
+        except Exception:
             break
-        d.press("back"); time.sleep(0.6)
-    # 点巧记单词卡片（卡片是 ImageButton，坐标定位）
-    d.click(*S(d, *QIAOJI_CARD))
-    print(f"    ✅ 点巧记单词卡片")
-    time.sleep(1.6)
-    if not d(text="巧记单词").exists(timeout=3):
-        print(f"    ❌ 未进入巧记单词页")
-        return False
-    return True
+    print(f"    ❌ 未找到单词听写/巧记单词入口")
+    return False
 
 
 def _enter_sync_challenge(d):
