@@ -55,7 +55,13 @@ def _back_to_home(d):
     之前只是 sleep 0.8s 打日志没有实际动作 → 下一模块从模块内部页开始
     → 找不到入口 → 卡很久 → 最后重启 App（用户实测"切模块不丝滑"）。
     主页特征：switch_textbook_tv / 教材精学 / 专项突破。
+    ★ 速度优化：dump 加短超时（WebView 大页面 dump 可能 1-2s）、
+      back 间隔 0.4s、最多 8 次；仍回不到主页就冷启动（比空转快）。
     """
+    def _is_home_xml(_xml):
+        return ('switch_textbook_tv' in _xml or '教材精学' in _xml
+                or '专项突破' in _xml or '听课文' in _xml
+                or '口语训练' in _xml or '小学' in _xml)
     import re as _re
     try:
         _cur = d.app_current()
@@ -70,17 +76,16 @@ def _back_to_home(d):
         except Exception:
             pass
         return
-    # back 循环回主页（最多 10 次，避免死循环）
-    for _ in range(10):
+    # back 循环回主页（最多 8 次，避免死循环；每次检查 + 快速 back）
+    for _ in range(8):
         try:
-            xml = d.dump_hierarchy()
-            if ('switch_textbook_tv' in xml or '教材精学' in xml
-                    or '专项突破' in xml or '听课文' in xml):
-                break
+            xml = d.dump_hierarchy(timeout=2) if hasattr(d, "dump_hierarchy") else d.dump_hierarchy()
         except Exception:
-            pass
+            xml = ""
+        if xml and _is_home_xml(xml):
+            break
         try:
-            d.press("back"); time.sleep(0.6)
+            d.press("back"); time.sleep(0.4)
         except Exception:
             break
     # 兜底：确认主页，必要时清广告

@@ -4553,10 +4553,18 @@ def api_modules_run():
                     log_msg(f"🔍 {_mod} 无匹配脚本 → 仅基础完整性检查", "info")
                     return
                 log_msg(f"📖 {_mod} 有匹配脚本「{_docx}」→ 自动化后追加 LLM 知识性审查", "info")
+                # ★ 修复模块间卡顿：LLM 审查改异步线程，不阻塞 run_all 的模块循环
+                #   （原同步调用：听力专项完成后在主页面卡几分钟等逐题 LLM 审查，
+                #     审查完才继续口语训练 → 用户实测"主页卡好久"）
                 try:
-                    _run_llm_script_review(_mod, _docx, version, units.get(_mod, "") or 0)
+                    _t = threading.Thread(
+                        target=_run_llm_script_review,
+                        args=(_mod, _docx, version, units.get(_mod, "") or 0),
+                        daemon=True,
+                    )
+                    _t.start()
                 except Exception as _e:
-                    log_msg(f"❌ {_mod} LLM 知识性审查失败: {_e}", "error")
+                    log_msg(f"❌ {_mod} LLM 知识性审查启动失败: {_e}", "error")
 
             results = sched.run_all(
                 module_names, d, version=version, grade=grade,
