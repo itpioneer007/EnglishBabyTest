@@ -22,8 +22,9 @@ APP_PACKAGE = "com.dinoenglish.yyb"
 GRADE_LEVEL = "五年级上册"
 BOOK_VERSION = "湘少版"
 
-# 主页「语音评测」卡片位置（教材精学第一行第 3 张）
-VOICE_CARD = (876, 441)  # 新版主页教材精学第一行第3张卡片  # 基准坐标，使用时 S(d, *VOICE_CARD)
+# 主页「语音评测」卡片位置（教材精学第三张大卡片，x=876,y=1191；入口是图片形式无文字）
+# ★ 之前 (876,441) 是错误坐标——Y=441 在顶部轮播广告区，点击广告导致异常退出
+VOICE_CARD = (876, 1191)
 
 
 def _enter_voice_eval(d):

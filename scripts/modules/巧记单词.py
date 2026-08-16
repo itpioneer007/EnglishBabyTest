@@ -40,9 +40,9 @@ BOOK_VERSION = "湘少版"
 # 每单元关卡数（1~5 + boss = 6 关）
 LEVELS_PER_UNIT = 6
 
-# 主页「巧记单词」卡片位置（教材精学第一行第3张，x=876,y=1191；与 MODULE_COORDS 一致）
-# ★ 之前 (540,441) 是错误坐标——Y=441 在顶部轮播广告区，点击广告导致异常退出
-QIAOJI_CARD = (876, 1191)
+# 主页「巧记单词」卡片位置（教材精学第二张大卡片，x=540,y=1191；入口是图片形式无文字）
+# ★ 之前 (876,1191) 实际是语音评测卡片，不是巧记单词（导致选巧记单词却跑去语音评测！）
+QIAOJI_CARD = (540, 1191)
 
 
 UNITS = [1]  # U1 验证；打通后 list(range(1, 10))
@@ -69,62 +69,41 @@ def _resolve_units(units, default_units):
 
 
 def _enter_qiaoji(d):
-    """首页 → 巧记单词入口（★ 适配新版横滑首页）
+    """首页 → 教材精学 → 巧记单词卡片（图片形式入口）
 
-    ★ 新版首页改版（2026-08）：模块入口在"横向滑动"的页面里，
-      "巧记单词"已改名"单词听写"（模块入口区，如 x=161,y=1984）。
-      旧版"教材精学→卡片"结构已移除，硬编码坐标会点到相邻入口(语音评测)！
-
-    策略：确认在首页 → 横向滑动找"单词听写/巧记单词"文本 → 点它
+    ★ 入口是 ImageView 图片卡片（text/content-desc 都为空），不能用文本定位。
+      ① 先到"教材精学"页（首页下方入口）
+      ② 点第二张大卡片 QIAOJI_CARD=(540,1191)
+      ③ 验证进入：页面有"单词同步闯关"按钮/"分级排行"等巧记单词特征
     """
-    import re as _re
-    # 1. 回到首页（底部"英语"tab；找不到则 back）
-    try:
-        _cur = d.app_current() or {}
-        if (_cur.get("package") or "") != "com.tencent.english":
-            d.press("home"); time.sleep(0.5)
-    except Exception:
-        pass
-    # 2. 横滑查找"单词听写/巧记单词"（最多横滑 8 屏）
-    for _ in range(8):
+    # 确认在首页（教材精学在首页，特征：教材精学/小学/湘少版）
+    for _ in range(5):
+        xml = d.dump_hierarchy()
+        if "教材精学" in xml and ("小学" in xml or "湘少版" in xml):
+            break
+        d.press("back"); time.sleep(0.6)
+    # 进教材精学（若已在则跳过）
+    if not d(text="听课文").exists(timeout=1):
+        for _ in range(3):
+            if d(text="教材精学").exists(timeout=1.5):
+                d(text="教材精学").click()
+                time.sleep(1.6)
+                break
+            d.press("back"); time.sleep(0.6)
+    # 点巧记单词卡片（ImageView 图片按钮，坐标定位）
+    d.click(*S(d, *QIAOJI_CARD))
+    print(f"    ✅ 点巧记单词卡片")
+    time.sleep(2.0)
+    # 验证进入：巧记单词页有"单词同步闯关"按钮 + "掌握 X/N 词" + "你已通关"
+    for _ in range(3):
         try:
             xml = d.dump_hierarchy()
         except Exception:
             xml = ""
-        for _kw in ("单词听写", "巧记单词"):
-            m = _re.search(_kw + r'[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml)
-            if m:
-                x1, y1, x2, y2 = (int(m.group(i)) for i in range(1, 5))
-                cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-                try:
-                    d.click(cx, cy)
-                except Exception:
-                    pass
-                print(f"    ✅ 点{_kw} @({cx},{cy})")
-                time.sleep(2.0)
-                # 验证进入（页头含"单词听写/巧记单词"）
-                try:
-                    _xml2 = d.dump_hierarchy()
-                except Exception:
-                    _xml2 = ""
-                if _kw in _xml2:
-                    return True
-                # 可能弹窗/加载中，再确认一次
-                time.sleep(1.5)
-                try:
-                    _xml3 = d.dump_hierarchy()
-                except Exception:
-                    _xml3 = ""
-                if _kw in _xml3 or "单词同步闯关" in _xml3 or "马上闯关" in _xml3:
-                    return True
-                return False
-        # 未找到 → 横向滑动（模块入口区在横滑页）
-        try:
-            from common.tools import S_swipe
-            S_swipe(d, 950, 850, 150, 850, 0.4); time.sleep(0.8)
-        except Exception:
-            break
-    print(f"    ❌ 未找到单词听写/巧记单词入口")
+        if "单词同步闯关" in xml or "单词分类复习" in xml or "全脑排行榜" in xml or "你已通关" in xml:
+            return True
+        time.sleep(1.0)
+    print(f"    ❌ 未进入巧记单词页")
     return False
 
 
