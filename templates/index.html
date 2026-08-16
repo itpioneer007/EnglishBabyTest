@@ -1147,7 +1147,18 @@ function parseOrder(text){
     }
     if(p.name==='听力专项'){
       const after=text.slice(p.idx)
-      if(/测试|测验/.test(after) && !/练习/.test(after)) {m.testUnits=m.units;m.units=''}
+      const hasTest=/测试|测验/.test(after), hasPractice=/练习/.test(after)
+      if(hasTest && !hasPractice){m.testUnits=m.units;m.units=''}
+      else if(hasTest && hasPractice){
+        // ★ 练习+测试混合: 按'测试/测验'后的U归测, 之前的归练
+        const tm=after.match(/测试|测验/)
+        if(tm){const tIdx=tm.index;const testPart=after.slice(tIdx)
+          const uu=m.units.split(' ').map(x=>parseInt(x,10)).filter(n=>!isNaN(n))
+          const tU=uu.filter(n=>testPart.includes('U'+n)||testPart.includes('u'+n)||testPart.includes('第'+n+'单元')||testPart.includes('单元'+n)||testPart.includes(' '+n))
+          const pU=uu.filter(n=>!tU.includes(n))
+          m.testUnits=tU.join(' ');m.units=pU.join(' ')
+        }
+      }
       for(const s of ['基础巩固','综合进阶','难点突破']){
         if(after.includes(s)){m.sub=s;break}
       }
@@ -1192,6 +1203,11 @@ function applyOrder(text){
       if(m.name==='听力专项' && tag){
         const pWrap=tag.querySelector('.unit-val-p')
         const tWrap=tag.querySelector('.unit-val-t')
+        const pChk=tag.querySelector('input.tingli-part[value="practice"]')
+        const tChk=tag.querySelector('input.tingli-part[value="test"]')
+        // ★ 练/测勾选同步: 有练习单元→勾练; 有测试单元→勾测; 没有则取消(避免默认勾全)
+        if(pChk) pChk.checked=!!m.units
+        if(tChk) tChk.checked=!!m.testUnits
         if(pWrap && m.units) pWrap.value=m.units
         if(tWrap && m.testUnits) tWrap.value=m.testUnits
       }else{
