@@ -147,6 +147,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
 .g-sec-b .g-how b{color:var(--green)}
 .g-tip{font-size:11.5px;color:var(--warn-ink);background:var(--warn-bg);border-radius:8px;padding:8px 12px;margin:7px 0}
 .g-tip b{color:#7c4a03}
+/* ★ 六维检查示意图（指南内网格） */
+.g-dims{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:7px 0 3px}
+.g-dim-i{border:1px solid var(--line);border-radius:8px;padding:6px 9px;background:#f0f7f4;font-size:11.5px;color:#3d4a43}
+.g-dim-i b{display:block;color:var(--green-deep);font-size:12px;margin-bottom:1px}
+@media(max-width:560px){.g-dims{grid-template-columns:repeat(2,1fr)}}
 /* ★ 精简版指南：横向流程条 */
 .g-flow{display:flex;align-items:stretch;gap:6px;margin:10px 0 14px}
 .g-step{flex:1;border:1px solid var(--line);border-radius:10px;padding:9px 10px;background:#fbfaf6;text-align:center;min-width:0}
@@ -532,7 +537,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
 <div class="guide-mask" id="guideMask" onclick="closeGuide()">
   <div class="guide" onclick="event.stopPropagation()">
     <div class="flex items-center justify-between px-5 py-3 bg-gradient-to-r from-[#1b4332] to-[#2d6a4f] text-white">
-      <h2 class="font-bold text-[15px]">界面使用指南 · 4 步上手</h2>
+      <h2 class="font-bold text-[15px]">界面使用指南 · 快速上手</h2>
       <button class="bg-white/20 hover:bg-white/35 rounded-lg px-3 py-1 text-[12px] transition" onclick="closeGuide()">关闭</button>
     </div>
     <div class="guide-body">
@@ -565,11 +570,38 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
         </div>
       </div>
 
+      <!-- 任务清单：一句话/文件 双通道 -->
+      <div class="g-sec">
+        <div class="g-sec-h"><span class="g-no">★</span>怎么下达检测任务<span class="g-pos">两种方式</span></div>
+        <div class="g-sec-b">
+          <p><b>一句话描述</b> ＝ 描述框输入「湘少版五年级上册 听力专项U1 口语训练U2」，<b>回车自动识别</b>版本/年级/模块/单元并自动勾选</p>
+          <p><b>上传任务清单</b> ＝ 支持 .txt / .docx / .xlsx 文件，自动提取内容并识别配置，核对后一键开始</p>
+          <p class="g-how">识别范围：版本（湘少/人教/外研…）、年级册、6个模块、U号区间、听力专项的练/测/子模块、期中/期末/AI检测</p>
+        </div>
+      </div>
+
+      <!-- 六维检查示意 -->
+      <div class="g-sec">
+        <div class="g-sec-h"><span class="g-no">▦</span>每题怎么查<span class="g-pos">六维自动评分</span></div>
+        <div class="g-sec-b">
+          <p>每题自动做 6 项检查，结果实时上屏（绿=通过 / 红=不通过 / 灰=未检）：</p>
+          <div class="g-dims">
+            <div class="g-dim-i"><b>题干</b>文字正确/完整</div>
+            <div class="g-dim-i"><b>内容</b>知识性/逻辑错误</div>
+            <div class="g-dim-i"><b>配图</b>与题目匹配</div>
+            <div class="g-dim-i"><b>作答</b>能否正常作答</div>
+            <div class="g-dim-i"><b>音频</b>喇叭可播/内容匹配</div>
+            <div class="g-dim-i"><b>答错后</b>答案/知识点核对</div>
+          </div>
+          <p class="g-how"><b>错配识别：</b>判断题给了 ABC、填空题缺输入框、朗读题无麦克风等「题干要求与实际作答方式不符」，会自动揪出并在作答维度标红</p>
+        </div>
+      </div>
+
       <!-- 常用按钮速查 -->
       <div class="g-sec">
-        <div class="g-sec-h"><span class="g-no">★</span>四个入口怎么用<span class="g-pos">按需使用</span></div>
+        <div class="g-sec-h"><span class="g-no">✓</span>四个入口怎么用<span class="g-pos">按需使用</span></div>
         <div class="g-sec-b">
-          <p><b>解析并开始检测</b> ＝ 选模块/版本/年级后一键跑（自动答题 + 逐题审查）</p>
+          <p><b>解析并开始检测</b> ＝ 选模块/版本/年级后一键跑（自动答题 + 逐题审查 + 首页/报告页/分值核对）</p>
           <p><b>快速检查</b> ＝ 手机切到题目页再点，从当前题逐题截图审查</p>
           <p><b>停止</b> ＝ 随时中断任务</p>
           <p><b>📑 查看报告</b> ＝ 弹层内看「实时错题报告」（按模块分组，含位置/原因/建议）</p>
@@ -581,8 +613,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
       <div class="g-sec">
         <div class="g-sec-h"><span class="g-no">▸</span>错题日志<span class="g-pos">右侧面板</span></div>
         <div class="g-sec-b">
-          <p>检测中<b>实时更新</b>：错题按「模块 · 子模块」分组，每题显示在 App 中的位置、出错理由、改进建议、错题截图</p>
-          <p>评分规则：<b>基础完整性 3 维评分</b>（题干/选项/作答），配图/音频/答错后作为附加检查项展示</p>
+          <p>检测中<b>实时更新</b>：错题按「模块 · 子模块」分组，每题显示在 App 中的位置（如：听力专项 · 难点突破 · 第4题）、出错理由、改进建议、错题截图</p>
+          <p>评分规则：<b>六维评分</b>（题干/内容/配图/作答/音频/答错后），任一维不通过即标为错题</p>
         </div>
       </div>
 
@@ -643,7 +675,9 @@ async function pollStatus(){
     const on=s.device_connected
     $('devDot').className='w-2.5 h-2.5 rounded-full '+(on?'bg-green-400':'bg-amber-400')
     $('devStatus').textContent=on?(s.device_serial||'已连接'):'离线'
-    $('devMeta').textContent=(s.model||'')+(s.current_version?' · v'+s.current_version:'')
+    $('devMeta').textContent=(s.model||'')
+    const _selVer=$('setupVersion')?$('setupVersion').value:''
+    if(_selVer) $('devMeta').textContent+=($('devMeta').textContent?' · ':'')+'目标: '+_selVer
     const now=Date.now()
     if(now-_devListTs>8000){
       _devListTs=now
