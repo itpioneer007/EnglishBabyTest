@@ -519,8 +519,7 @@ def run_test_module(d, test_units=None):
     for ui, unit_num in enumerate(_tunits):
         print(f"\n  🎯 测试目标 [{unit_num}] [{ui+1}/{len(_tunits)}]")
         # ★ 智能定位：数字/区间/关键词（期中/期末/AI检测…）随机应变找"去答题"
-        #   ★ 注：App 开发方目前已下线"测试"模块（页面只有"练习"tab），
-        #     此循环实际不会命中；保留原逻辑不动，等 App 恢复测试后再用。
+        #   ★ App 测试模块已恢复：正常点击测试 tab 后逐单元测（此前下线时自动跳过）
         found = smart_find_unit_row(d, unit_num, click_text="去答题")
         if not found:
             print(f"  ❌ 找不到目标 [{unit_num}] 的去答题"); continue
