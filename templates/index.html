@@ -86,14 +86,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
 .q-dim.fail .st{color:var(--red)}
 .q-dim.skip{background:#faf8f3;border-color:var(--line)}
 .q-dim.skip .st{color:var(--gray-2)}
-.q-reasons{font-size:12.5px;color:#475569;background:#faf8f3;border-radius:8px;padding:9px 13px;margin-bottom:9px;line-height:1.8}
+.q-reasons{font-size:13px;color:#3d4a43;background:#faf8f3;border-radius:8px;padding:9px 13px;margin-bottom:9px;line-height:1.8}
 .q-reasons.ok{color:var(--ok-ink);background:var(--ok-bg)}
 .q-reasons b{color:var(--green-deep)}
-.q-reason-line{font-size:11.5px;margin-bottom:2px}
+.q-reason-line{font-size:12px;margin-bottom:2px}
 /* ★ 题目内容展示区 */
-.q-content{margin-bottom:8px;padding:8px 11px;background:#f0f7f4;border-radius:8px;border-left:3px solid var(--green-deep)}
-.q-stem{font-size:13px;color:#1a202c;font-weight:500;line-height:1.6;word-break:break-all}
-.q-opts{font-size:12px;color:#475569;margin-top:4px;line-height:1.5}
+.q-content{margin-bottom:8px;padding:9px 12px;background:#f0f7f4;border-radius:8px;border-left:3px solid var(--green-deep)}
+.q-stem{font-size:13.5px;color:#1a202c;font-weight:500;line-height:1.7;word-break:break-all}
+.q-opts{font-size:12.5px;color:#475569;margin-top:4px;line-height:1.5}
 /* ★ 错误报告汇总卡片 */
 .q-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .q-actions .note{flex:1;min-width:100px;padding:6px 10px;border:1.5px solid var(--line);border-radius:7px;font-size:12.5px;outline:none;background:#fff}
@@ -171,17 +171,22 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
 .unit-input-wrap input{width:50px;padding:2px 5px;border:1px solid var(--line);border-radius:6px;font-size:11px;background:#fff;color:#3d3226}
 .unit-input-wrap input:focus{outline:none;border-color:var(--green-light)}
 /* ★ 模块卡片 + 单元勾选栏（替代齿轮展开，常驻展示） */
-.mod-card{border:1.5px solid var(--line);border-radius:10px;padding:6px 9px;background:#fff;transition:border-color .15s,background .15s}
+.mod-card{border:1.5px solid var(--line);border-radius:12px;padding:8px 11px;background:#fff;transition:border-color .15s,background .15s,box-shadow .15s}
+.mod-card:hover{border-color:#c9d8d0;box-shadow:0 1px 4px rgba(45,106,79,.06)}
+.mod-card.on{border-color:var(--green-light);background:#f0f7f3;box-shadow:0 0 0 1px var(--green-light)}
 .mod-card-head{display:flex;align-items:center;justify-content:space-between;gap:6px}
-.mod-sel-label{display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;color:#3d3226;cursor:pointer;flex:1;min-width:0;user-select:none}
-.mod-sel-label input{accent-color:var(--green);width:14px;height:14px;flex-shrink:0;cursor:pointer}
-.unit-clear{font-size:10px;color:var(--gray);cursor:pointer;padding:1px 8px;border-radius:6px;border:1px solid var(--line);background:#fff;flex-shrink:0}
-.unit-clear:hover{color:var(--red);border-color:var(--red)}
+.mod-sel-label{display:flex;align-items:center;gap:7px;font-size:13.5px;font-weight:650;color:#2d3a33;cursor:pointer;flex:1;min-width:0;user-select:none;letter-spacing:.2px}
+.mod-sel-label:hover{color:var(--green-deep)}
+.mod-sel-label input{accent-color:var(--green);width:15px;height:15px;flex-shrink:0;cursor:pointer}
+.unit-clear{font-size:10.5px;color:var(--gray);cursor:pointer;padding:2px 9px;border-radius:6px;border:1px solid var(--line);background:#fff;flex-shrink:0;transition:color .15s,border-color .15s}
+.unit-clear:hover{color:var(--red);border-color:var(--red);background:#fef6f6}
 /* 单元输入行（空格/横线分隔，常驻显示） */
-.unit-input-row{display:flex;align-items:center;gap:6px;margin-top:5px;flex-wrap:wrap}
-.unit-val{width:130px;padding:3px 9px;border:1.5px solid var(--line);border-radius:7px;font-size:11.5px;background:#faf8f3;color:#3d3226;outline:none;transition:border-color .15s,background .15s}
-.unit-val:focus{border-color:var(--green-light);background:#fff}
-.unit-val::placeholder{color:#a8b3ae;font-size:10.5px}
+.unit-input-row{display:flex;align-items:center;gap:6px;margin-top:6px;flex-wrap:wrap}
+.up-k{display:inline-flex;align-items:center;justify-content:center;min-width:30px;height:20px;padding:0 7px;border-radius:6px;background:var(--green);color:#fff;font-size:10.5px;font-weight:600;letter-spacing:.5px;flex-shrink:0;line-height:1}
+.unit-val{width:140px;padding:4px 10px;border:1.5px solid var(--line);border-radius:8px;font-size:12px;background:#faf8f3;color:#2d3a33;outline:none;transition:border-color .15s,background .15s,box-shadow .15s;font-family:inherit}
+.unit-val:hover{border-color:#c9d8d0}
+.unit-val:focus{border-color:var(--green-light);background:#fff;box-shadow:0 0 0 2px rgba(64,145,108,.12)}
+.unit-val::placeholder{color:#a8b3ae;font-size:11px}
 .file-list .item{font-size:11.5px;padding:2px 0;color:#475569;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .file-list .item::before{content:"· ";color:var(--green)}
 .info-row{display:flex;justify-content:space-between;padding:5px 0;font-size:12.5px;border-bottom:1px dashed var(--line)}
@@ -261,9 +266,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
       </div>
       <input type="file" id="fileOrder" accept=".txt,.docx,.xlsx,.doc,.xls" onchange="uploadOrder(event)" class="hidden">
 
-      <div class="flex items-center justify-between text-[11px] text-[#6b7280] mt-2.5 mb-1 shrink-0">
-        <span>要测的模块（可多选）· 单元默认全选，取消勾选可指定范围</span>
-        <span>已选 <b id="moduleSelCount" class="text-[#2d6a4f]">0</b></span>
+      <div class="flex items-center justify-between text-[11.5px] text-[#5c6f66] mt-2.5 mb-1.5 shrink-0">
+        <span class="font-medium tracking-wide">要测的模块（可多选）· 单元默认全选，取消勾选可指定范围</span>
+        <span>已选 <b id="moduleSelCount" class="text-[#2d6a4f] text-[12.5px]">0</b> 个</span>
       </div>
             <div class="space-y-1.5 shrink-0">
         <!-- 听力专项：练/测 两组单元（可分别勾选是否检测） -->
@@ -367,8 +372,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
 
         <!-- 自动匹配展示（按选中模块分组） -->
         <div class="mt-2.5">
-          <span class="block text-[11px] font-semibold text-[#475569] mb-1">脚本自动匹配（按选中模块）</span>
-          <div id="moduleMatchList" class="space-y-1 text-[11.5px]">
+          <span class="block text-[12px] font-semibold text-[#3d4a43] mb-1 tracking-wide">脚本自动匹配（按选中模块）</span>
+          <div id="moduleMatchList" class="space-y-1 text-[12px]">
             <div class="text-[#9aa5a0] text-center py-2 bg-[#faf8f3] rounded-lg">尚未选模块</div>
           </div>
         </div>
