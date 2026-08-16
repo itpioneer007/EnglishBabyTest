@@ -4374,7 +4374,9 @@ def _qreview_to_state(module: str, docx: str, unit, r, stage: str = "") -> dict:
         "audio_reason": dims["audio"][1], "post_error_reason": dims["post_error"][1],
         "overall_passed": overall,
         "overall_score": round(len(passed) / max(len(checked), 1), 2) if checked else 0.0,
-        "stem": f"第{r.idx}题（{r.question_type or '脚本题'}）",
+        # ★ 题干显示实际内容（脚本题 stem；口语训练朗读题为多句子）
+        "stem": (r.stem_check.actual or "").strip() if getattr(r.stem_check, "actual", "") else
+                f"第{r.idx}题（{r.question_type or '脚本题'}）",
         "options": "", "script_answer": r.script_answer or "",
         "note": f"LLM 知识性审查 · 脚本 {docx}",
     }

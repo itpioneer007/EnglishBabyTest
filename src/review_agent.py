@@ -526,12 +526,14 @@ class ReviewAgent:
                     "与录音原文不一致属于正常出题机制（学生需听录音判断该陈述对错），"
                     "绝不能因『题干与录音不一致/相矛盾』判不通过；题干存在且可读即判通过。",
                     f"题干: {stem_txt}\n题型: {qtype}（判断题，答案格式为 T/F）", "stem")
+                r.stem_check.actual = stem_txt[:200]
             else:
                 r.stem_check = _llm_dim(
                     "检查题干数据是否完整：是否缺失、是否短到无法理解、是否有明显错别字。"
                     "不要对题干措辞风格/出题设计作价值判断（如'与题型不匹配'这类主观批评不算问题）；"
                     "题干存在且可读即判通过。",
                     f"题干: {stem_txt}", "stem")
+                r.stem_check.actual = stem_txt[:200]
         elif is_audio_q or is_image_q:
             r.stem_check = CheckResult(passed=False, score=0.0, method="skip",
                                        error="脚本未提供题干文字（听音/图片题题干在音频或图中）",
