@@ -343,6 +343,9 @@ class ReviewAgent:
         # 听音/听力/图片类题型：题干与选项内容在音频/图片中，脚本文字里没有，属正常
         is_audio_q = ("听音" in qtype or "听力" in qtype or "音频" in qtype)
         is_image_q = ("图片" in qtype or "看图" in qtype)
+        # ★ 口语类题型（朗读/跟读/口语/发音）：作答方式是"点麦克风录音"，本就没有选项，
+        #   AI 不应按选择题判"无ABC选项"（用户实测：麦克风可点却被判答案维度不过）
+        is_speak_q = any(k in qtype for k in ("朗读", "跟读", "口语", "发音", "读一读", "读单词", "读句子"))
 
         # (1) 题干检查
         stem_txt = (q.stem or "").strip()
@@ -368,7 +371,7 @@ class ReviewAgent:
             r.stem_check.method = "text"
             r.stem_check.details.append(f"纯文字检查: 题干完整（{len(stem_txt)} 字）")
 
-        # (2) 内容检查：选项完整性（听音/图片题选项在图中，跳过）
+        # (2) 内容检查：选项完整性（听音/图片题选项在图中，跳过；口语题无选项，跳过）
         opts = q.options or []
         opt_clean = [o for o in opts if o and str(o).strip()]
         if is_image_q and len(opt_clean) < 2:
@@ -377,6 +380,12 @@ class ReviewAgent:
             r.content_check.method = "skip"
             r.content_check.error = "图片选择题：选项为图片，纯文字无法核对"
             r.content_check.details.append("纯文字模式无法核对图片选项（需连手机截图）")
+        elif is_speak_q:
+            # ★ 口语题（录音作答）：无选项属正常，跳过（不再误判"无选项"）
+            r.content_check.passed = True
+            r.content_check.score = 1.0
+            r.content_check.method = "skip"
+            r.content_check.details.append("口语题：作答方式为录音（点麦克风），无选项属正常")
         elif len(opt_clean) >= 2:
             r.content_check.passed = True
             r.content_check.score = 1.0
@@ -395,7 +404,13 @@ class ReviewAgent:
 
         # (3) 作答检查：答案非空 + 格式
         ans = (q.answer or "").strip()
-        if not ans:
+        if is_speak_q:
+            # ★ 口语题：作答=录音（点麦克风说），脚本无文字答案属正常，跳过
+            r.answer_check.passed = True
+            r.answer_check.score = 1.0
+            r.answer_check.method = "skip"
+            r.answer_check.details.append("口语题：作答方式为录音（点麦克风），脚本无文字答案属正常")
+        elif not ans:
             r.answer_check.passed = False
             r.answer_check.score = 0.0
             r.answer_check.error = "答案为空"

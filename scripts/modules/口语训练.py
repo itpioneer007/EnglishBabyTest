@@ -139,6 +139,43 @@ def _click_horn(d, min_y=400):
     return pos
 
 
+def _click_next_btn(d):
+    """点击"下一题"按钮（大题答完时出现）
+    ★ 口语训练是原生 SpokeTestActivity：按钮可能无 text（图片/rid），
+      d(text="下一题") 找不到。三重检测：
+      ① 文本"下一题/下一题按钮/next"
+      ② resource-id 含 next/next_btn/btn_next
+      ③ 兜底：右下角固定区域（next 按钮通常在右下角 (900-1050, y1900-2150)）
+    """
+    import re as _re
+    try:
+        xml = d.dump_hierarchy()
+    except Exception:
+        xml = ""
+    # ① 文本
+    for t in ("下一题", "下一题", "next", "Next"):
+        try:
+            if d(textContains=t).exists(timeout=0.1):
+                d(textContains=t).click()
+                return True
+        except Exception:
+            pass
+    # ② rid 含 next
+    m = _re.search(r'resource-id="[^"]*next[^"]*"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml)
+    if m:
+        x1, y1, x2, y2 = (int(m.group(i)) for i in range(1, 5))
+        d.click((x1 + x2) // 2, (y1 + y2) // 2)
+        return True
+    # ③ 兜底：右下角区域找可点击节点（next 按钮位置）
+    for m2 in _re.finditer(r'<node[^>]*clickable="true"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml):
+        x1, y1, x2, y2 = (int(m2.group(i)) for i in range(1, 5))
+        cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+        if cx > 600 and cy > 1700 and (x2 - x1) < 400:  # 右下角小按钮
+            d.click(cx, cy)
+            return True
+    return False
+
+
 def _wait_countdown(d, timeout=15):
     """等待'请阅读题目'倒计时结束（出现'点击录音'文字）。
     速度优化：轮询间隔 0.25s，出现录音按钮立即返回。
@@ -281,6 +318,9 @@ def _answer_big_question(d, big_idx=0):
             time.sleep(0.8)
             return q
 
+        # ★ 用户优化：麦克风全部点击完出现下一题后快速点下一题（不等倒计时）
+        #   下滑策略改为：只要当前页没有"点击录音"按钮（无论大题刚切换/录音结束/需要下一小题）
+        #   就立即下滑（最多 2 屏），不再等 _wait_countdown 慢轮询
         # 检查是否小喇叭题型（页面有"小喇叭"提示或喇叭图标）
         # 方式1：找"小喇叭"文字
         has_horn = False
@@ -296,24 +336,35 @@ def _answer_big_question(d, big_idx=0):
                 step_log(f"🔊 点小喇叭", "info")
                 time.sleep(0.6)
 
-        # 作答小题（用户约定流程：每道小题点"点击录音"→点"点击结束"，找不到就下滑）
-        if _speak_question(d):
+        # ★ 用户要求：先快速试一次(不等倒计时)；若没找到"点击录音"则立即下滑（不等15s）
+        #   之前路径：_speak_question 默认 wait_countdown=True → _wait_countdown 等15s
+        #   → 每题白白等 15s，即使录音按钮马上就有
+        #   优化：第一次尝试不预等；若 _speak_question 失败 → 立刻下滑（不等倒计时）
+        if _speak_question(d, wait_countdown=False):
             q += 1
-        else:
-            # 没找到录音按钮：可能大题刚切换（倒计时中）或需下滑
-            # 先等倒计时结束再判断
-            _wait_countdown(d)
-            if _speak_question(d, wait_countdown=False):
-                q += 1
-                continue
-            # 仍没有：下滑查看下一小题
-            S_swipe(d, 540, 1600, 540, 800, 0.4)
-            time.sleep(0.5)
-            # 再尝试一次
-            if _speak_question(d, wait_countdown=False):
-                q += 1
-            else:
-                time.sleep(0.4)
+            continue
+        # 没找到录音按钮：用户要求"页面没有麦克风图标就往下滑"——直接下滑，不等
+        # ★★★ 优化：下滑前不再 _wait_countdown（用户实测白白等 15s+）
+        S_swipe(d, 540, 1600, 540, 800, 0.4)
+        time.sleep(0.4)
+        # 再试一次（同样不等倒计时）
+        if _speak_question(d, wait_countdown=False):
+            q += 1
+            continue
+        # 仍没有：再滑一次（覆盖长页面）
+        S_swipe(d, 540, 1600, 540, 800, 0.4)
+        time.sleep(0.4)
+        if _speak_question(d, wait_countdown=False):
+            q += 1
+            continue
+        # ★ 用户要求：麦克风全部点完 → 出现"下一题"就点（大题结束）
+        #   下滑 2 次仍无录音按钮 = 本大题已答完，找"下一题"按钮（支持文本/rid/右下角坐标）
+        if _click_next_btn(d):
+            print(f"    ➡ 下一题（大题完成）")
+            step_log(f"➡ 进入下一大题", "step")
+            time.sleep(0.6)
+            continue
+        time.sleep(0.4)
     return q
 
 
@@ -405,9 +456,10 @@ def _run_unit_questions(d, unit_num):
     """进入单元后的答题循环（多个大题）"""
     total = 0
     for big in range(1, 10):
-        # 大题切换后等待页面稳定（倒计时结束/录音按钮出现），最多15s
+        # ★ 大题切换后等待页面稳定：缩短为最多 3s（原来 15s 用户实测太慢）
+        #   找不到录音按钮就交给 _answer_big_question 的"立即下滑"逻辑处理
         t_st = time.time()
-        while time.time() - t_st < 15:
+        while time.time() - t_st < 3:
             if _find_record_btn(d):
                 break
             time.sleep(0.12)

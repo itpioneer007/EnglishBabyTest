@@ -51,27 +51,71 @@ def _detect_image_options(xml: str) -> int:
 
 def _find_control(xml: str, keywords: tuple) -> tuple:
     """在 XML 中查找含关键词的控件节点，返回 (found, clickable)
+    - 优先匹配 clickable="true" 的节点（避免误命中介绍/标签文本）
     - 逐节点匹配 text/content-desc 含任一关键词
-    - ★ 也匹配 resource-id 中的 play/sound/audio/speaker 模式
-      （真实 App 扬声器按钮常是 rid=id/play_box，text/content-desc 为空）
+    - ★ 也匹配 resource-id 中的 play/sound/audio/speaker/mic 模式
+      （真实 App 扬声器/麦克风按钮常是 rid=id/play_box，text/content-desc 为空）
     - clickable 取该节点是否 clickable="true"
     """
+    # 第一轮：只找 clickable=true 的节点（避免误命中介绍文案等非控件文本）
     for m in re.finditer(r'<node[^>]*>', xml):
         tag = m.group(0)
+        if 'clickable="true"' not in tag:
+            continue
         for kw in keywords:
             if kw in tag:
-                clickable = 'clickable="true"' in tag
-                return True, clickable
-        # resource-id 模式：play_box / play_btn / btn_play / ic_play / iv_play / sound / audio / speaker
-        if re.search(r'resource-id="[^"]*(play|sound|audio|speaker)[^"]*"', tag):
-            clickable = 'clickable="true"' in tag
-            return True, clickable
+                return True, True
+        if re.search(r'resource-id="[^"]*(play|sound|audio|speaker|mic)[^"]*"', tag):
+            return True, True
+    # 第二轮：兜底找含关键词/rid 的节点（含 clickable=false 的）
+    nodes = list(re.finditer(r'<node[^>]*>', xml))
+    for idx, m in enumerate(nodes):
+        tag = m.group(0)
+        hit = False
+        for kw in keywords:
+            if kw in tag:
+                hit = True
+                break
+        if not hit and re.search(r'resource-id="[^"]*(play|sound|audio|speaker|mic)[^"]*"', tag):
+            hit = True
+        if not hit:
+            continue
+        clickable = 'clickable="true"' in tag
+        # ★ 容器内子节点可点击 → 视为可点击（真实 App 录音按钮 record_btn 是
+        #   ViewGroup 容器 clickable=false，但容器内子 View 可点击——口语训练麦克风实测）
+        if not clickable:
+            b = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+            if b:
+                bx1, by1, bx2, by2 = map(int, b.groups())
+                for m2 in nodes[idx + 1:]:
+                    t2 = m2.group(0)
+                    b2 = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', t2)
+                    if not b2:
+                        continue
+                    x1, y1, x2, y2 = map(int, b2.groups())
+                    if x1 >= bx1 and y1 >= by1 and x2 <= bx2 and y2 <= by2:
+                        if 'clickable="true"' in t2:
+                            clickable = True
+                            break
+                    else:
+                        break  # 超出容器范围 = 非子节点
+        return True, clickable
     return False, False
 
 
 def collect_ui_evidence(xml: str, qtype: str = "") -> list:
     """从页面 XML 提取四维完整性证据。返回 evidence 列表（供 step_log 前端证据卡）"""
     ev = []
+    # ★ is_speaking/is_listening 提前定义：③ 选项检查（口语题跳过"无选项"）在 ④ 之前执行，
+    #   必须在函数开头就可用，否则 NameError 被 except 吞掉 → 证据只返回前 2 项（用户实测）
+    SPEAK_KWS_EARLY = ("朗读", "读一读", "跟读", "读单词", "读句子", "大声读",
+                       "repeat", "口语", "跟录音读", "已朗读", "未朗读", "正在朗读")
+    LISTEN_KWS_EARLY = ("听录音", "听音", "听一听", "听对话", "听短文", "听句子",
+                        "听单词", "listen", "听下面", "听材料", "听问题")
+    is_speaking = any(kw in xml for kw in SPEAK_KWS_EARLY) if xml else False
+    is_speaking = is_speaking or qtype in ("口语训练", "朗读", "跟读", "人机对话")
+    is_listening = any(kw in xml for kw in LISTEN_KWS_EARLY) if xml else False
+    is_listening = is_listening or qtype in ("听力专项", "听力训练", "磨耳精听")
     try:
         xml = xml or ""
         # ① 题型识别
@@ -79,7 +123,7 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
                    "expected": qtype or "选择题",
                    "actual": qtype or "选择题", "diff": f"识别为[{qtype or '选择题'}]"})
 
-        # ② 题干文字（页面上的长文本，排除按钮/进度/反馈弹窗/计时器）
+        # ② 题干文字（页面上的长文本，排除按钮/进度/反馈弹窗/计时器/顶部导航）
         stems = []
         seen = set()
         noise = ("下一题", "上一题", "检查", "提交", "开始答题", "重新答题",
@@ -90,7 +134,22 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
                  "恭喜", "回答正确", "回答错误", "很遗憾", "答对了", "答错了",
                  "练习结束还剩", "还剩", "得分", "用时", "获得", "本题得分", "作答正确", "作答错误",
                  # ★ 图片提示等非题干
-                 "点击图片查看高清大图", "查看高清大图", "点击查看高清大图", "高清大图")
+                 "点击图片查看高清大图", "查看高清大图", "点击查看高清大图", "高清大图",
+                 # ★ 顶部导航/标题/按钮（口语训练答题页顶部"口语训练湘少六上U1"+ "退出训练"
+                 #   + "答题卡" + "口语训练"模块标题都被误当题干——必须排除）
+                 "退出训练", "答题卡", "口语训练", "听力专项", "口语训练", "单元自检",
+                 "知识过关", "巧记单词", "语音评测", "全脑记词", "单词听写",
+                 "已朗读", "未朗读", "正在朗读", "朗读", "跟读", "读一读", "听一听",
+                 "上一页", "下一页", "上一小题", "下一小题",
+                 "训练规则说明", "好的，我知道啦~", "好的，我知道了",
+                 "开始测试", "开始考试", "开始练习", "考试结束", "本次考试结束",
+                 "耗时", "时长", "总时长", "用时", "提交答卷", "重新作答", "查看解析",
+                 "答案", "正确答案", "错误答案", "本次得分", "本大题", "本小题",
+                 "分值", "共", "满分", "本组",
+                 # ★ 口语训练列表页/答题页顶部栏（用户实测"考前突破/当前版本/练习记录"被误当题干）
+                 "考前突破", "当前版本", "练习记录", "退出训练",
+                 # ★ 口语训练进度（"口语训练湘少六上U1"是顶部标题，含 U 编号的也排除）
+                 "口语训练湘少")
         # 计时器/倒计时（如 "19:58"、"还剩：19:58"）+ 得分/进度（77.0、3/40、100%）
         _timer_pat = re.compile(
             r"^\d{1,2}:\d{2}$|^还剩[：:]\s*\d{1,2}:\d{2}$|"
@@ -143,6 +202,12 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
             ev.append({"field": "选项", "type": "text_ok",
                        "expected": "存在可选项", "actual": f"图片选项×{image_opt_count}",
                        "diff": f"本题为图片题，检测到 {image_opt_count} 个图片选项（CheckBox/大图）"})
+        elif is_speaking:
+            # ★ 口语题（录音作答）：无选项属正常，作答方式为"点麦克风"
+            #   此前误判"未检测到选项"与 AI"无ABC选项"（用户实测）现跳过
+            ev.append({"field": "选项", "type": "skip",
+                       "expected": "口语题无选项", "actual": "录音作答",
+                       "diff": "口语题作答方式为点麦克风录音，无需选项"})
         else:
             ev.append({"field": "选项", "type": "text_mismatch",
                        "expected": "存在可选项", "actual": "(无)",
@@ -157,13 +222,19 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
                       "听单词", "listen", "听下面", "听材料", "听问题")
         SPEAK_KWS = ("朗读", "读一读", "跟读", "读单词", "读句子", "大声读",
                      "repeat", "口语", "跟录音读")
-        is_listening = any(kw in xml for kw in LISTEN_KWS)
-        is_speaking = any(kw in xml for kw in SPEAK_KWS)
+        # ★ 同时用传入的 qtype（口语训练题在答题页 XML 不含"朗读/跟读"等关键词，
+        #   qtype 参数更可靠：口语训练模块明确传 qtype="口语训练"）
+        #   （is_listening/is_speaking 已在函数开头基于 qtype+XML 预定义，这里增强 XML 关键词命中）
+        is_listening = is_listening or any(kw in xml for kw in LISTEN_KWS)
+        is_speaking = is_speaking or any(kw in xml for kw in SPEAK_KWS)
 
         # 播放/扬声器控件检测：找含关键词的节点，并判断是否可点击
         PLAY_KWS = ("播放", "喇叭", "扬声器", "ic_play", "btn_play",
-                    "play_btn", "audio", "sound", "▶")
-        MIC_KWS = ("麦克风", "录音", "record", "mic", "开始作答")
+                    "play_btn", "audio", "sound", "▶", "原音")
+        # ★ 麦克风检测：口语训练答题页录音控件核心文本是"点击录音/点击结束"
+        #   （实际麦克风图标是图片无文本）。这些文本控件 100% 关联到录音功能，可靠。
+        MIC_KWS = ("麦克风", "录音", "record", "mic", "开始作答",
+                   "点击录音", "点击结束", "点击完成", "继续作答")
         play_found, play_clickable = _find_control(xml, PLAY_KWS)
         mic_found, mic_clickable = _find_control(xml, MIC_KWS)
 
@@ -210,6 +281,7 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
             or "EditText" in xml or "麦克风" in xml or "record" in xml.lower()
             or bool(re.search(r'text="[TFABCDE]"', xml))
             or "CheckBox" in xml
+            or "朗读" in xml or "跟读" in xml   # ★ 口语题必有"朗读"/"跟读"题型文本
         )
         # ★ 可点击大图（图片选项/排序/匹配题的作答入口）
         if not _act_signals:

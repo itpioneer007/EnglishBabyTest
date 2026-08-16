@@ -282,6 +282,31 @@ def test_content_check_rules():
            f"误报={r_cons5.get('diff','')[:40] if r_cons5 else '无'}")
     print(f"  {'✅ 正常' if not r_cons5 else '❌ 误报'}: 判断句子对错")
 
+    # ★ 回归: 口语训练答题页（record_btn 容器 clickable=false 但子节点可点 + iv_play 小喇叭）
+    from common.evidence import collect_ui_evidence
+    _spk_xml = ('<node resource-id="com.dinoenglish.yyb:id/tv_exit" text="退出训练" bounds="[43,153][233,222]"/>'
+                '<node resource-id="com.dinoenglish.yyb:id/question_title_tv" text="Listen and repeat: Anne went to Beijing" bounds="[50,500][1030,600]"/>'
+                '<node resource-id="com.dinoenglish.yyb:id/iv_play" clickable="true" bounds="[106,1392][188,1460]"/>'
+                '<node resource-id="com.dinoenglish.yyb:id/record_btn" clickable="false" bounds="[425,2227][655,2267]">'
+                '<node clickable="true" bounds="[440,2232][640,2262]"/></node>')
+    _spk_evs = collect_ui_evidence(_spk_xml, qtype="口语训练")
+    _spk_fields = {e.get("field") for e in _spk_evs}
+    _spk_ok = len(_spk_evs) >= 6 and "音频" in _spk_fields and "作答" in _spk_fields
+    _audio_ev = next((e for e in _spk_evs if e.get("field") == "音频"), {})
+    _ans_ev = [e for e in _spk_evs if e.get("field") == "作答" and "麦克风" in str(e.get("actual"))]
+    _audio_ok = _audio_ev.get("type") == "text_ok"
+    _mic_ok = bool(_ans_ev) and _ans_ev[0].get("type") == "text_ok"
+    _stem_ev = next((e for e in _spk_evs if e.get("field") == "题干"), {})
+    _stem_ok = "Anne went to Beijing" in str(_stem_ev.get("actual", ""))
+    record("口语答题页证据完整(6项+)", True, _spk_ok, f"fields={sorted(_spk_fields)}")
+    record("口语题小喇叭可点击", True, _audio_ok, f"audio={_audio_ev.get('diff','')[:40]}")
+    record("口语题麦克风可点击(容器子节点)", True, _mic_ok, f"ans={_ans_ev[0].get('diff','')[:40] if _ans_ev else 'N/A'}")
+    record("口语题干提取正确(非顶部导航)", True, _stem_ok, f"stem={str(_stem_ev.get('actual',''))[:40]}")
+    print(f"  {'✅' if _spk_ok else '❌'} 口语答题页证据完整({len(_spk_evs)}项)")
+    print(f"  {'✅' if _audio_ok else '❌'} 小喇叭可点击: {_audio_ev.get('diff','')[:50]}")
+    print(f"  {'✅' if _mic_ok else '❌'} 麦克风可点击: {_ans_ev[0].get('diff','')[:50] if _ans_ev else 'N/A'}")
+    print(f"  {'✅' if _stem_ok else '❌'} 题干: {str(_stem_ev.get('actual',''))[:50]}")
+
 
 # =============================================================
 # 测试 4：doc_checks（LLM 视觉判断）
