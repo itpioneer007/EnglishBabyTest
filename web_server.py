@@ -2736,6 +2736,7 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list):
         "选项": "content",
         "音频": "audio",
         "作答": "answer",
+        "作答匹配": "answer",   # ★ 题型-作答一致性（判断题给ABC等）→ 作答维度
     }
     dims = {"stem": None, "content": None, "image": None,
             "answer": None, "audio": None, "post_error": None}

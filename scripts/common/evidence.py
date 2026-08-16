@@ -233,6 +233,100 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
             ev.append({"field": "分值", "type": "info",
                        "expected": "分值显示", "actual": "、".join(_score_vals[:4]),
                        "diff": f"检测到分值: {'、'.join(_score_vals[:4])}"})
+
+        # ⑦ 题型-作答一致性（题干要求 vs 实际元素，揪出"判断题给了ABC"这类错配）
+        _cons = collect_consistency_evidence(xml, qtype or "")
+        if _cons:
+            ev.append(_cons)
     except Exception:
         pass
     return ev
+
+
+# ============================================================
+# 题型-作答一致性检查（★ 揪错核心：题干要求 vs 实际作答方式）
+# ============================================================
+# 依据题干关键词推断"应该是什么作答方式"，与实际检测到的元素对比：
+#   - 判断题题干（判断/对错/相符/√×/是否正确）→ 必须 T/F 或 √/× 两态
+#   - 填空/补全题干 → 必须 输入框(EditText) 或 词库选择
+#   - 排序题干 → 必须 可点击排序元素（CheckBox/整句），不是 A/B/C 单选
+#   - 听力/朗读题干 → 必须有音频控件（喇叭/播放），朗读还须麦克风
+# 若题干要求与页面实际作答方式矛盾 → 返回 text_mismatch 证据，供前端/报告揪出。
+
+_JUDGE_KWS = ("判断", "对错", "相符", "一致", "是否正确", "正确打", "打勾", "√", "×")
+_FILL_KWS = ("填空", "补全", "填写", "填词", "每空", "完成句子", "句型转换")
+_SORT_KWS = ("排序", "排列", "按顺序", "连词成句", "给句子排序", "按正确顺序")
+_LISTEN_KWS = ("听录音", "听音", "听一听", "听对话", "听短文", "听句子", "听单词")
+_SPEAK_KWS = ("朗读", "跟读", "读一读", "跟录音读", "大声读")
+
+
+def collect_consistency_evidence(xml: str, qtype: str = "") -> dict:
+    """题型-作答一致性检查：题干关键词推断期望作答方式，与实际元素对比。
+
+    返回: 发现错配时返回 {"field":"作答匹配","type":"text_mismatch",...} 证据；
+          一致时返回 None（不干扰正常证据流）。
+    """
+    try:
+        xml = xml or ""
+        full = xml
+        texts = "".join(re.findall(r'text="([^"]*)"', xml))
+        has_letter_abc = any(f'text="{c}"' in xml for c in ("A", "B", "C", "D"))
+        has_tf = 'text="T"' in xml or 'text="F"' in xml
+        has_edit = "EditText" in xml
+        has_checkbox = "CheckBox" in xml
+        has_wordbank = bool(re.search(r'select_btn|word_bank|wordbank', xml))
+        play_found, _ = _find_control(xml, ("播放", "喇叭", "扬声器", "play", "audio", "sound"))
+        mic_found, _ = _find_control(xml, ("麦克风", "录音", "record", "mic"))
+
+        # ① 判断题题干 → 应 T/F 或 √/×，不应 A/B/C/D
+        if any(kw in texts for kw in _JUDGE_KWS):
+            if has_letter_abc and not has_tf:
+                return {"field": "作答匹配", "type": "text_mismatch",
+                        "expected": "判断题应为 T/F 或 √/× 两态选项",
+                        "actual": f"A/B/C/D 字母选项{'（含T/F）' if has_tf else ''}",
+                        "diff": "⚠ 题干含'判断/对错/相符'（判断题），但页面提供 A/B/C/D 选项而非 T/F"}
+            # ★ 判断题已给 T/F（正确作答方式）→ 本维度通过，不继续走后续规则
+            #   （否则"听录音"会触发听力规则，在 mock 无喇叭时误报）
+            if has_tf:
+                return None
+
+        # ② 填空/补全题干 → 应输入框或词库，不应纯 A/B/C/D
+        if any(kw in texts for kw in _FILL_KWS):
+            if has_letter_abc and not has_edit and not has_wordbank:
+                return {"field": "作答匹配", "type": "text_mismatch",
+                        "expected": "填空/补全题应提供输入框或词库选择",
+                        "actual": "A/B/C/D 单选选项",
+                        "diff": "⚠ 题干含'填空/补全'（填空题），但页面是 A/B/C/D 单选而非输入框"}
+
+        # ③ 排序题干 → 应可点击排序元素（CheckBox/句子），不应是 A/B/C/D 单选
+        if any(kw in texts for kw in _SORT_KWS):
+            if has_letter_abc and not has_checkbox and not has_wordbank:
+                return {"field": "作答匹配", "type": "text_mismatch",
+                        "expected": "排序题应提供可点击排序元素（句子/方框/序号）",
+                        "actual": "A/B/C/D 单选选项",
+                        "diff": "⚠ 题干含'排序/排列'（排序题），但页面是 A/B/C/D 单选而非排序元素"}
+
+        # ④ 朗读/口语题干 → 必须有麦克风（录音作答）
+        if any(kw in texts for kw in _SPEAK_KWS):
+            if not mic_found:
+                return {"field": "作答匹配", "type": "text_mismatch",
+                        "expected": "朗读/口语题应提供麦克风（录音作答）",
+                        "actual": "未检测到麦克风/录音控件",
+                        "diff": "⚠ 题干含'朗读/跟读'（口语题），但页面无麦克风，无法录音作答"}
+            if mic_found:
+                # ★ 朗读题已有麦克风（可录音作答）→ 通过，不再走听力规则误报"无喇叭"
+                #   （朗读题题干常含"听录音"，但喇叭由"音频"维度单独检查）
+                return None
+
+        # ⑤ 听力题干 → 必须有音频播放控件
+        if any(kw in texts for kw in _LISTEN_KWS):
+            if not play_found:
+                return {"field": "作答匹配", "type": "text_mismatch",
+                        "expected": "听力题应提供音频播放控件（喇叭）",
+                        "actual": "未检测到播放控件",
+                        "diff": "⚠ 题干含'听录音'（听力题），但页面无喇叭/播放控件"}
+            return None
+
+    except Exception:
+        pass
+    return None

@@ -254,6 +254,24 @@ def test_content_check_rules():
            f"diff={audio_ev2[0].get('diff','')[:40] if audio_ev2 else 'N/A'}")
     print(f"  {'❌ 揪出' if is_fail_click else '✅ 没揪出'}: 音频={audio_ev2[0].get('diff','')[:40] if audio_ev2 else 'none'}")
 
+    # ★ 题型-作答一致性检查（题干要求 vs 实际作答方式）
+    from common.evidence import collect_consistency_evidence
+    # 错误: 判断题给了 ABC
+    r_cons1 = collect_consistency_evidence('<node text="判断对错"/><node text="A"/><node text="B"/>')
+    record("判断题给ABC（一致性揪出）", True, r_cons1 is not None,
+           f"diff={r_cons1.get('diff','')[:40] if r_cons1 else 'N/A'}")
+    print(f"  {'❌ 揪出' if r_cons1 else '✅ 没揪出'}: 判断题给ABC")
+    # 正常: 判断题给了 TF
+    r_cons2 = collect_consistency_evidence('<node text="判断对错"/><node text="T"/><node text="F"/>')
+    record("判断题给TF（一致性正常）", True, r_cons2 is None,
+           f"误报={r_cons2.get('diff','')[:40] if r_cons2 else '无'}")
+    print(f"  {'✅ 正常' if not r_cons2 else '❌ 误报'}: 判断题给TF")
+    # 错误: 朗读题无麦克风
+    r_cons3 = collect_consistency_evidence('<node text="朗读下列句子"/><node text="Hello"/>')
+    record("朗读题无麦克风（一致性揪出）", True, r_cons3 is not None,
+           f"diff={r_cons3.get('diff','')[:40] if r_cons3 else 'N/A'}")
+    print(f"  {'❌ 揪出' if r_cons3 else '✅ 没揪出'}: 朗读题无麦克风")
+
 
 # =============================================================
 # 测试 4：doc_checks（LLM 视觉判断）
