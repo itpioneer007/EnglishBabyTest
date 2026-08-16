@@ -2902,6 +2902,9 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
     _auto_shot = ""
     if overall is False:
         try:
+            # ★ 截图前等 0.8s：页面内容（排序项/选项）渲染有延迟，立即截图
+            #   会截到空白/半渲染画面（用户实测"排序题内容还没出来"）
+            time.sleep(0.8)
             _shot_dir = PROJECT_ROOT / "screenshots"
             _shot_dir.mkdir(parents=True, exist_ok=True)
             _auto_shot = f"auto_{_current_module_name or 'mod'}_q{qidx:03d}_{datetime.now().strftime('%H%M%S')}.png"
@@ -4468,6 +4471,15 @@ def _run_llm_script_review(module: str, docx: str, version: str, unit):
             screenshot_dir=str(PROJECT_ROOT / "screenshots"),
             unit=_u, verbose=False,
         ))
+        # ★ 单元不匹配提示：脚本不含所选单元（用户实测"单元根本没脚本"，
+        #   静默显示"0题"误导人）→ 明确日志：脚本实际覆盖哪些单元
+        if not agent.script_questions:
+            _units_ok = sorted(u for u in getattr(agent, "script_units", set()) if u > 0)
+            _note = (f"脚本「{docx}」不含单元 {_u or '全部'}！"
+                     f"脚本实际单元: {_units_ok if _units_ok else '未解析到'}"
+                     f"（所选单元与脚本不匹配，跳过 LLM 脚本审查）")
+            log_msg(f"⚠️ {module} {_note}", "warning")
+            return
         # ★ 不传 screenshots：自动化过程只有答错截图，旧截图与本次题目对不上会误导 LLM 判定
         #   → 统一走 LLM 脚本审查（_review_script_llm：脚本信息 → LLM 六维判定，理由具体有说服力）
         results = agent.review(screenshots={})

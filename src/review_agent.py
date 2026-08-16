@@ -151,6 +151,7 @@ class ReviewAgent:
         
         # 脚本数据
         self.script_questions: list[YingYuBaoQuestion] = []
+        self.script_units: set = set()  # ★ 脚本实际包含的单元集合（供"单元不匹配"提示）
         self._load_script()
 
         # 知识库
@@ -178,11 +179,21 @@ class ReviewAgent:
     def _load_script(self):
         if self.cfg.docx_path and Path(self.cfg.docx_path).exists():
             self.script_questions = parse(self.cfg.docx_path)
+            # ★ 脚本实际单元分布（含单元=0 表示解析不到单元号）
+            self.script_units = {q.unit for q in self.script_questions}
             # 过滤
             if self.cfg.unit:
                 self.script_questions = [
                     q for q in self.script_questions if q.unit == self.cfg.unit
                 ]
+                # ★ 单元不匹配提示：脚本不含所选单元（用户实测"单元根本没脚本"，
+                #   静默显示 0 题误导人 → 明确提示脚本实际覆盖哪些单元）
+                if not self.script_questions:
+                    _units_sorted = sorted(u for u in self.script_units if u > 0)
+                    _u0 = 0 in self.script_units
+                    print(f"⚠ 脚本不含单元 {self.cfg.unit}！脚本实际单元: "
+                          f"{_units_sorted if _units_sorted else '无(未解析到)'}"
+                          f"{' + 未标注单元' if _u0 else ''}")
             if self.cfg.stage:
                 self.script_questions = [
                     q for q in self.script_questions if q.stage == self.cfg.stage

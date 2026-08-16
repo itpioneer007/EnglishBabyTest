@@ -926,6 +926,23 @@ async function startCooking(){
     confirmMsg += '\n单元范围: '
     confirmMsg += moduleConfigs.filter(m=>m.units).map(m=>`${m.name}=${m.units}`).join(', ')
   }
+  // ★ 脚本-单元匹配校验：脚本文件名含"U6-10"而所选单元不在其中 → 警告
+  //   （用户实测：跑口语训练U1却匹配到"U6-U10"脚本 → LLM审查0题，静默无提示）
+  moduleConfigs.forEach(m=>{
+    const _d=docxMap[m.name]; if(!_d) return
+    const _uRaw=(m.units||'').toString()
+    const _firstU=parseInt(_uRaw)||0
+    if(!_firstU) return
+    const _m=/U(\d+(?:\s*[-~]\s*\d+)?)/i.exec(_d)
+    if(!_m) return
+    const _rng=_m[1].replace(/\s+/g,'')
+    let _lo=_hi=0
+    const _mm=/^(\d+)(?:[-~](\d+))?$/.exec(_rng)
+    if(_mm){_lo=parseInt(_mm[1]);_hi=_mm[2]?parseInt(_mm[2]):_lo}
+    if(_hi && (_firstU<_lo || _firstU>_hi)){
+      confirmMsg += `\n⚠️ 警告: ${m.name} 所选单元 ${_firstU} 不在脚本 ${_d} 的单元范围(U${_lo}-U${_hi})内，脚本审查将无匹配题！`
+    }
+  })
   if(orderText) confirmMsg += `\n清单描述: "${orderText.substring(0,80)}${orderText.length>80?'…':''}"`
   if(!confirm(confirmMsg)) return
   const btn=$('btnCook')

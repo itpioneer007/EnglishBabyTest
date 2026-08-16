@@ -59,9 +59,12 @@ def _back_to_home(d):
       back 间隔 0.4s、最多 8 次；仍回不到主页就冷启动（比空转快）。
     """
     def _is_home_xml(_xml):
+        # ★ 主页特征收紧：不能含'口语训练/小学'等宽泛词（练习报告页/单元列表页
+        #   也含这些词 → 误判已回主页 → 实际还在子页面 → 下一模块入口找不到
+        #   → run_module 用 back 硬退 → 退出 App 到桌面！）
         return ('switch_textbook_tv' in _xml or '教材精学' in _xml
                 or '专项突破' in _xml or '听课文' in _xml
-                or '口语训练' in _xml or '小学' in _xml)
+                or '全脑记词' in _xml or '单词听写' in _xml)
     import re as _re
     try:
         _cur = d.app_current()

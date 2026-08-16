@@ -215,6 +215,9 @@ def _test_answer_loop(d, max_q=45):
             #   并同步到前端「最近截图」展示（web_server 识别 evidence 写入面板）
             _wrong_shot = ""
             try:
+                # ★ 截图前等 0.8s：题目内容（排序项/选项）渲染有延迟，
+                #   立即截图会截到空白/半渲染画面（用户实测"排序题内容还没出来"）
+                time.sleep(0.8)
                 _shot_dir = os.path.join(
                     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                     "screenshots")

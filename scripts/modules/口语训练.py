@@ -520,10 +520,23 @@ def run_module(d, units=None):
     print(f"\n📋 口语训练 · 单元 {_units[0]}-{_units[-1]} · {len(_units)}个单元")
 
     # ① 先确保在主页（口语训练入口在主页专项突破区，直接可见，不需要滑动）
-    for _ in range(4):
-        if d(text="教材精学").exists(timeout=1) or d(text="专项突破").exists(timeout=1):
-            break
-        d.press("back"); time.sleep(0.6)
+    #   ★ 修复：不能用 back 硬退（练习报告/子页面 back 会退出 App 到桌面）
+    #   → 先检查是否 yyb 前台，非 yyb 冷启动；yyb 内 back 循环回主页
+    try:
+        _pkg = (d.app_current() or {}).get("package", "")
+        if _pkg != "com.dinoenglish.yyb":
+            d.press("home"); time.sleep(0.4)
+            d.app_start("com.dinoenglish.yyb"); time.sleep(3)
+    except Exception:
+        pass
+    for _ in range(6):
+        try:
+            xml = d.dump_hierarchy()
+            if ("教材精学" in xml or "专项突破" in xml or "听课文" in xml):
+                break
+        except Exception:
+            pass
+        d.press("back"); time.sleep(0.5)
 
     # ② 主页直接找口语训练入口（可见，无需滑动；找不到直接失败）
     if d(text="口语训练").exists(timeout=3):
