@@ -286,17 +286,29 @@ def get_adb():
 
 
 
-def _detect_content_dimension():
+def _detect_content_dimension(module: str = ""):
+    """自动补充内容检查（LLM 批量知识性审查）
+
+    ★ 修复：必须按当前模块匹配脚本，否则无脚本模块会拿任意最新脚本错配比对
+      - module 为空 → 不比对（无模块上下文）
+      - 该模块在 docx_map 中无匹配脚本 → 跳过（仅基础完整性）
+      - 有匹配脚本 → 用该模块的脚本比对
+    """
     try:
-        docxs = sorted([f for f in UPLOAD_DIR.glob("*") if f.suffix.lower() in (".docx", ".doc")],
-                       key=os.path.getmtime, reverse=True)
-        if not docxs: return
-        docx_path = str(docxs[0])
+        if not module:
+            return
+        # ★ 该模块的匹配脚本（多模块检测时 docx_map 已构建；单模块/快速检查无映射则跳过）
+        _docx = (_GLOBAL_DOCX_MAP or {}).get(module, "")
+        if not _docx:
+            return
+        docx_path = PROJECT_ROOT / "uploads" / _docx
+        if not docx_path.exists():
+            return
         from src.review_agent import ReviewAgent, ReviewConfig
-        cfg = ReviewConfig(docx_path=docx_path, unit=0, screenshot_dir="", verbose=False)
+        cfg = ReviewConfig(docx_path=str(docx_path), unit=0, screenshot_dir="", verbose=False)
         agent = ReviewAgent(cfg)
         if not agent.script_questions: return
-        log_msg(f"📄 自动补充内容检查 (批量, {docxs[0].name}, {len(agent.script_questions)}题)", "info")
+        log_msg(f"📄 {module} 自动补充内容检查 (批量, {_docx}, {len(agent.script_questions)}题)", "info")
         batch = []; qid_map = {}
         for qid, q in list(_inspection_state.get("questions", {}).items()):
             idx = (q or {}).get("idx", 0)
@@ -360,15 +372,24 @@ def _detect_content_dimension():
                 if not qid or not _inspection_state["questions"].get(qid): continue
                 q_obj = _inspection_state["questions"][qid]
                 v = str(item.get("verdict","REVIEW")).upper()
-                if v == "PASS": vv = "通过"
-                elif v == "REJECT": vv = "不通过"
-                else: vv = "待审"
-                b = (item.get("basis") or "")[:200]
                 ls = item.get("lang") or []
+                # ★ 修复矛盾：ai_content(是否通过) 与 content_reason(解释词) 必须一致
+                #   PASS 但带 lang 语言问题 → 整体判不通过，reason 显示"有语言问题"而非"通过"
+                has_lang = len(ls) > 0
+                passed = (v == "PASS" and not has_lang)
+                if passed:
+                    vv = "通过"
+                elif v == "REJECT":
+                    vv = "不通过"
+                elif v == "PASS":
+                    vv = "通过但有问题"  # PASS 但带语言问题 → 不通过（与 ai_content=False 一致）
+                else:
+                    vv = "待审"
+                b = (item.get("basis") or "")[:200]
                 d = f"{vv}: {b}"
-                for li in (ls or [])[:3]:
+                for li in ls[:3]:
                     d += f"; [{li}]"
-                q_obj["ai_content"] = (v == "PASS" and len(ls) == 0)
+                q_obj["ai_content"] = passed
                 q_obj["content_reason"] = d[:300]
                 count += 1
             log_msg(f"🧪 内容检查已补充: {count}题 ({'通过' if count > 0 else ''})", "success")
@@ -403,7 +424,14 @@ def log_msg(msg: str, level: str = "info", evidence: list = None):
     task_status["log"].append(entry)
 
     if any(k in msg for k in ("完成",)):
-        threading.Thread(target=_detect_content_dimension, daemon=True).start()
+        # ★ 传当前模块：_detect_content_dimension 只在该模块有匹配脚本时比对
+        _cm_cur = ""
+        try:
+            from common.logger import get_current_module as _gcm
+            _cm_cur, _ = _gcm()
+        except Exception:
+            pass
+        threading.Thread(target=_detect_content_dimension, args=(_cm_cur,), daemon=True).start()
     try:
         print(f"[{entry['time']}] [{level}] {msg}")
     except UnicodeEncodeError:
@@ -4272,6 +4300,8 @@ def api_setup():
 # 多模块检测：版本/年级 + 多个模块依次执行
 # ============================================================
 _LAST_MODULES_RESULT = None
+# ★ 当前多模块检测的 模块→脚本 映射（_detect_content_dimension 按模块匹配脚本用）
+_GLOBAL_DOCX_MAP = {}
 
 
 @app.route("/api/modules/stop", methods=["POST"])
@@ -4470,24 +4500,26 @@ def api_modules_run():
 
             # ★ 逐模块分流：有匹配脚本 → 基础自动化 + 追加 LLM 知识性审查；
             #              无脚本 → 仅基础完整性检查
-            results = {}
-            for _mod in module_names:
+            # ★ 一次传全部模块给 run_all（内部统一循环）：只重启 App 一次，
+            #   模块间 _back_to_home 切主页继续下一模块；LLM 审查经 on_module_done 回调
+            global _GLOBAL_DOCX_MAP
+            _GLOBAL_DOCX_MAP = docx_map or {}
+            def _on_module_done(_mod, _res):
                 _docx = (docx_map or {}).get(_mod, "")
-                if _docx:
-                    log_msg(f"📖 {_mod} 有匹配脚本「{_docx}」→ 自动化后追加 LLM 知识性审查", "info")
-                    _r = sched.run_all([_mod], d, version=version, grade=grade, units=units, stop_check=_is_stop_requested)
-                    # ★ run_all 返回 {模块名: {q,t,ok}}，取该模块自己的结果（否则后续 r['q'] 取到嵌套 dict 报 KeyError 'q'）
-                    results[_mod] = _r.get(_mod) or {"q": 0, "t": 0, "ok": False}
-                    try:
-                        _run_llm_script_review(_mod, _docx, version, units.get(_mod, "") or 0)
-                    except Exception as _e:
-                        log_msg(f"❌ {_mod} LLM 知识性审查失败: {_e}", "error")
-                else:
+                if not _docx:
                     log_msg(f"🔍 {_mod} 无匹配脚本 → 仅基础完整性检查", "info")
-                    _r = sched.run_all([_mod], d, version=version, grade=grade, units=units, stop_check=_is_stop_requested)
-                    results[_mod] = _r.get(_mod) or {"q": 0, "t": 0, "ok": False}
-                if _is_stop_requested():
-                    break
+                    return
+                log_msg(f"📖 {_mod} 有匹配脚本「{_docx}」→ 自动化后追加 LLM 知识性审查", "info")
+                try:
+                    _run_llm_script_review(_mod, _docx, version, units.get(_mod, "") or 0)
+                except Exception as _e:
+                    log_msg(f"❌ {_mod} LLM 知识性审查失败: {_e}", "error")
+
+            results = sched.run_all(
+                module_names, d, version=version, grade=grade,
+                units=units, stop_check=_is_stop_requested,
+                on_module_done=_on_module_done,
+            ) or {}
             # 保存结果供前端查询
             global _LAST_MODULES_RESULT
             _LAST_MODULES_RESULT = {

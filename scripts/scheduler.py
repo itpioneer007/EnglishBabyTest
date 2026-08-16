@@ -89,13 +89,14 @@ def _back_to_home(d):
     close_ad(d)
 
 
-def run_all(module_names=None, d=None, version=None, grade=None, units=None, stop_check=None):
+def run_all(module_names=None, d=None, version=None, grade=None, units=None, stop_check=None, on_module_done=None):
     """依次跑指定模块（默认全部），返回 {模块: {q, t, ok}}
 
     version/grade: 目标教材版本+年级，执行前自动切换（已正确则跳过）
     units: 每个模块的单元范围映射，如 {"听力专项": "1-3", "单元自检": "1-5"}
           未指定的模块跑默认全部单元
     stop_check: 可选回调，每次模块循环前调用；返回 True 表示收到停止请求 → 中断
+    on_module_done: 可选回调(name, result)，每模块完成后调用（如 LLM 脚本审查）
     """
     # ★ 全局 u2 操作超时：默认 300s，设备断连时每个操作挂 5 分钟 = 看起来"卡死"
     #   设为 15s，设备异常时快速失败并报错
@@ -227,6 +228,12 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
             elapsed = round(time.time() - t0)
             results[name] = {"q": q, "t": elapsed, "ok": True}
             step_log(f"✅ {name} 完成: {q} 题, 耗时 {elapsed}s", "success")
+            # ★ 模块完成后回调（web_server 用它跑 LLM 脚本审查，不阻塞下一模块）
+            if on_module_done is not None:
+                try:
+                    on_module_done(name, results[name])
+                except Exception as _e:
+                    step_log(f"⚠ {name} 完成后回调异常: {_e}", "warning")
         except Exception as e:
             elapsed = round(time.time() - t0)
             results[name] = {"q": 0, "t": elapsed, "ok": False, "error": str(e)}

@@ -271,6 +271,16 @@ def test_content_check_rules():
     record("朗读题无麦克风（一致性揪出）", True, r_cons3 is not None,
            f"diff={r_cons3.get('diff','')[:40] if r_cons3 else 'N/A'}")
     print(f"  {'❌ 揪出' if r_cons3 else '✅ 没揪出'}: 朗读题无麦克风")
+    # ★ 回归: '选出与录音相符的句子'是选择题(给ABC), 不应被误判为判断题
+    r_cons4 = collect_consistency_evidence('<node text="选出与录音相符的句子"/><node text="A"/><node text="B"/><node text="C"/>')
+    record("相符句子+ABC（回归: 非判断题）", True, r_cons4 is None,
+           f"误判={r_cons4.get('diff','')[:40] if r_cons4 else '无'}")
+    print(f"  {'✅ 正常' if not r_cons4 else '❌ 误判'}: 选出与录音相符的句子")
+    # ★ 回归: 真实判断题(判断对错+TF) 不应误报
+    r_cons5 = collect_consistency_evidence('<node text="听录音，判断句子对错"/><node text="T"/><node text="F"/>')
+    record("判断对错+TF（回归: 判断题正常）", True, r_cons5 is None,
+           f"误报={r_cons5.get('diff','')[:40] if r_cons5 else '无'}")
+    print(f"  {'✅ 正常' if not r_cons5 else '❌ 误报'}: 判断句子对错")
 
 
 # =============================================================
