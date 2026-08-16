@@ -1130,6 +1130,24 @@ function parseOrder(text){
     const _t=String(um[4]||'').replace(/[一二三四五六七八九十两]/g,ch=>_cnNum[ch]||ch)
     units.push({idx:um.index,from:um[1]||_f,to:um[2]||_t})
   }
+  // ★ 相邻U合并: 'u1 u7'/'u1,u7'/'u1、u7'等(空格/逗号/顿号分隔) → 区间'1-7'
+  //   规则: 两个相邻U号, 若后值>前值 → 前项的to=后值, 后项标记删除
+  units.sort((a,b)=>a.idx-b.idx)
+  for(let ui=0; ui<units.length; ui++){
+    const u=units[ui]
+    if(u._rm) continue
+    for(let vj=ui+1; vj<units.length; vj++){
+      const v=units[vj]
+      if(v._rm) continue
+      const gap=String(_normUnitTxt.slice(u.idx+2, v.idx)).replace(/[\s,，、;；]/g,'')
+      const uB=parseInt(u.to||u.from,10)
+      const vA=parseInt(v.from,10)
+      if((u.to||'')==='' && v.to==='' && gap==='' && vA>uB){
+        u.to=String(vA); v._rm=true; break
+      }
+    }
+  }
+  for(let di=units.length-1; di>=0; di--){ if(units[di]._rm) units.splice(di,1) }
   for(const p of pos){
     const m={name:p.name,units:'',testUnits:'',sub:''}
     let nearest=null
