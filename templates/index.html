@@ -1111,9 +1111,25 @@ function parseOrder(text){
   }
   pos.sort((a,b)=>a.idx-b.idx)
   const units=[]
-  const ure=/U(\d+)(?:\s*[-到至]\s*(?:U)?(\d+))?|第\s*(\d+)\s*单元(?:\s*[-到至]\s*(?:第)?\s*(\d+))?/gi
+  // ★ 中文数字单元归一化：第二单元/单元二/二单元/第2单元/单元2/2单元/unit 2/Unit2 → 统一解析
+  const _cnNum={一:1,二:2,两:2,三:3,四:4,五:5,六:6,七:7,八:8,九:9,十:10}
+  const _cnN2={一:1,二:2,两:2,三:3,四:4,五:5,六:6,七:7,八:8,九:9,十:10}
+  // ★ 归一化：只在"单元"上下文转换，绝不误伤年级等普通文本
+  //   ① 英文 unit n（词边界）→ 第n单元
+  //   ② 第X单元 / X单元 / 单元X（X可为中文数字或阿拉伯数字）→ 第N单元
+  const _normUnitTxt=String(text)
+    .replace(/\b(?:unit|Unit|UNIT)\s*(\d+)\b/g,'第$1单元')
+    .replace(/(?:第)?([一二三四五六七八九十两]+)\s*单元/g,function(_m,_a){return '第'+(_cnN2[_a[0]]||_a)+'单元'})
+    .replace(/单元\s*([一二三四五六七八九十两]+)/g,function(_m,_a){return '第'+(_cnN2[_a[0]]||_a)+'单元'})
+    .replace(/(?<![A-Za-z\d第])(\d+)\s*单元/g,'第$1单元')
+    .replace(/单元\s*(?![A-Za-z])(\d+)/g,'第$1单元')
+  const ure=/U(\d+)(?:\s*[-到至]\s*(?:U)?(\d+))?|第\s*([0-9一二三四五六七八九十两]+)\s*单元(?:\s*[-到至]\s*(?:第)?\s*([0-9一二三四五六七八九十两]+))?/gi
   let um
-  while((um=ure.exec(text))!==null){units.push({idx:um.index,from:um[1]||um[3],to:um[2]||um[4]})}
+  while((um=ure.exec(_normUnitTxt))!==null){
+    const _f=String(um[3]||'').replace(/[一二三四五六七八九十两]/g,ch=>_cnNum[ch]||ch)
+    const _t=String(um[4]||'').replace(/[一二三四五六七八九十两]/g,ch=>_cnNum[ch]||ch)
+    units.push({idx:um.index,from:um[1]||_f,to:um[2]||_t})
+  }
   for(const p of pos){
     const m={name:p.name,units:'',testUnits:'',sub:''}
     let nearest=null
