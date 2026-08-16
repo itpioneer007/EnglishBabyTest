@@ -1,6 +1,25 @@
 {
   "current_question_idx": 0,
   "questions": {},
-  "workflow_steps": [],
+  "workflow_steps": [
+    {
+      "step": "1.启动APP",
+      "status": "done",
+      "detail": "",
+      "updated": "2026-08-03T12:14:40.291198"
+    },
+    {
+      "step": "0.回到首页",
+      "status": "done",
+      "detail": "",
+      "updated": "2026-08-03T12:14:33.227094"
+    },
+    {
+      "step": "1.5关闭教程",
+      "status": "running",
+      "detail": "",
+      "updated": "2026-08-03T12:14:40.309613"
+    }
+  ],
   "docx": ""
 }

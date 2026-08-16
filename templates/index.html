@@ -155,8 +155,8 @@ body { font-family:-apple-system,"Microsoft YaHei","PingFang SC",sans-serif; bac
 
 .q-body { padding:14px 16px }
 
-/* 四个维度网格 */
-.q-dims { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:10px }
+/* 六个维度网格 */
+.q-dims { display:grid; grid-template-columns:repeat(6,1fr); gap:8px; margin-bottom:10px }
 .q-dim { text-align:center; padding:10px 4px; border-radius:10px; border:1px solid #eef0f5; background:#fafbfc }
 .q-dim .icon { font-size:22px; margin-bottom:3px }
 .q-dim .label { font-size:13px; font-weight:600; color:#64748b }
@@ -270,7 +270,7 @@ body { font-family:-apple-system,"Microsoft YaHei","PingFang SC",sans-serif; bac
     <!-- 🎮 运行控制 -->
     <div class="card">
       <div class="card-title">🎮 运行控制</div>
-      <div class="card-desc">选择本次巡检的<strong>教材版本、单元编号、题目阶段</strong>，然后点「开始检查」自动跑完全流程。</div>
+      <div class="card-desc">选择本次巡检的<strong>教材版本、单元编号、题目阶段</strong>，然后点「开始检查」自动跑完全流程。若你已经在题目页，可点“快速检查”直接从第六步开始。</div>
 
       <span class="form-label">📖 教材版本</span>
       <span class="form-hint">选择要检查的册别，如"新湘鲁六上"</span>
@@ -303,6 +303,7 @@ body { font-family:-apple-system,"Microsoft YaHei","PingFang SC",sans-serif; bac
 
       <div class="btn-row">
         <button class="btn btn-primary" id="runBtn" onclick="startInsp()">▶ 开始检查</button>
+        <button class="btn btn-secondary" id="quickBtn" onclick="startQuickInsp()">⚡ 快速检查</button>
         <button class="btn btn-danger" id="stopBtn" onclick="stopInsp()">⏹ 停止</button>
       </div>
     </div>
@@ -317,7 +318,7 @@ body { font-family:-apple-system,"Microsoft YaHei","PingFang SC",sans-serif; bac
         <span class="badge" id="qBadge">待启动</span>
       </div>
       <div class="card-desc">
-        每道题展示AI的<strong>四维检查结果</strong>（题干 / 内容 / 配图 / 作答）。
+        每道题展示AI的<strong>六维检查结果</strong>（题干 / 内容 / 配图 / 作答 / 音频 / 答错后）。
         每个维度有✅通过或❌不通过。底部可<strong>人工标注</strong>（✓通过 / ✗不通过），标注结果会自动存入反馈库供审查智能体学习。
       </div>
 
@@ -377,7 +378,7 @@ body { font-family:-apple-system,"Microsoft YaHei","PingFang SC",sans-serif; bac
       <div class="card-title">🤖 审查智能体</div>
       <div class="card-desc">
         选择已上传的脚本文件，指定单元后一键审查。<br>
-        <strong>审查流程</strong>：AI逐题做四维检查 → 结果保存在中栏 → 可人工标注 → 智能体自动学习。
+        <strong>审查流程</strong>：AI逐题做六维检查 → 结果保存在中栏 → 可人工标注 → 智能体自动学习。
       </div>
 
       <span class="form-label">📄 脚本文件</span>
@@ -601,7 +602,7 @@ function addLog(level,msg){
 // ============================================================
 async function startInsp() {
   const v=$('inspectVersion').value,u=$('inspectUnit').value,s=$('inspectStage').value;
-  $('runBtn').disabled=true;
+  $('runBtn').disabled=true; $('quickBtn').disabled=true;
   // 清空旧日志和题目结果
   $('logBox').innerHTML=''; LOG_LAST=0;
   $('questionList').innerHTML='<div style="text-align:center;padding:60px 20px;color:#94a3b8"><div style="font-size:48px;margin-bottom:14px">📋</div><div style="font-size:17px;font-weight:500;color:#64748b">正在启动检查...</div></div>';
@@ -610,9 +611,24 @@ async function startInsp() {
     const r=await(await fetch('/api/inspect/listening-run',{method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({version:v,unit:parseInt(u),stage:s})})).json();
-    if(r.error){alert(r.error);$('runBtn').disabled=false;return;}
+    if(r.error){alert(r.error);$('runBtn').disabled=false;$('quickBtn').disabled=false;return;}
     addLog('success','✅ 任务已启动');STEPS.forEach((_,i)=>updStep(i,'pending',''));
-  }catch(e){alert('失败:'+e);$('runBtn').disabled=false;}
+  }catch(e){alert('失败:'+e);$('runBtn').disabled=false;$('quickBtn').disabled=false;}
+}
+
+async function startQuickInsp() {
+  const v=$('inspectVersion').value,u=$('inspectUnit').value,s=$('inspectStage').value;
+  $('runBtn').disabled=true; $('quickBtn').disabled=true;
+  $('logBox').innerHTML=''; LOG_LAST=0;
+  $('questionList').innerHTML='<div style="text-align:center;padding:60px 20px;color:#94a3b8"><div style="font-size:48px;margin-bottom:14px">⚡</div><div style="font-size:17px;font-weight:500;color:#64748b">快速检查已启动...</div></div>';
+  addLog('info',`快速模式启动: ${v} U${u} ${s}`);
+  try{
+    const r=await(await fetch('/api/inspect/quick-run',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({version:v,unit:parseInt(u),stage:s})})).json();
+    if(r.error){alert(r.error);$('runBtn').disabled=false;$('quickBtn').disabled=false;return;}
+    addLog('success','✅ 快速检查任务已启动');STEPS.forEach((_,i)=>updStep(i,'pending',''));
+  }catch(e){alert('失败:'+e);$('runBtn').disabled=false;$('quickBtn').disabled=false;}
 }
 
 async function stopInsp() {

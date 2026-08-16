@@ -34,6 +34,7 @@ from src.reviewer_common import LLMClient
 from src.parse_yingyubao_docx import parse, YingYuBaoQuestion
 from src.feedback_loop import FeedbackStore, FeedbackSample, ThreeStageTrainer
 from src.knowledge_base import KnowledgeBase
+from src.reviewer_text import TextReviewer
 
 
 # ============================================================
@@ -131,6 +132,9 @@ class ReviewAgent:
         self.kb = KnowledgeBase()
         if self.cfg.knowledge_docx:
             self.kb.add_bulk_from_docx(self.cfg.knowledge_docx)
+
+        # 文字审查器
+        self.text_reviewer = TextReviewer(self.llm, self.script_questions)
 
         # 反馈循环
         self.feedback = FeedbackStore()
@@ -370,25 +374,11 @@ class ReviewAgent:
         """(1) 题干检查: 文字完整清晰 + 与脚本一致"""
         result = CheckResult()
         try:
-            role = self._build_role_prompt(q)
-            prompt = self.trainer.build_enhanced_prompt(
-                role + "\n\n---\n\n"
-                f"【任务: 检查题干文字】\n"
-                f"脚本中的题干: {q.stem}\n"
-                f"题型: {q.type_2}\n\n"
-                f"请看截图, 判断:\n"
-                f"1. 题目文字是否完整、无截断、无模糊?\n"
-                f"2. 是否有错别字或拼写错误?\n"
-                f"3. 文字内容是否与脚本 '{q.stem[:40]}...' 一致?\n"
-                f"4. 题干中的词汇是否在该年级教材范围内?\n\n"
-                f"回答格式: [通过/不通过] | 理由",
-                dim_filter="stem"
-            )
-            answer = self.llm.ask(prompt, image_path=shot)
-            passed = "通过" in answer and "不通过" not in answer
-            result.passed = passed
-            result.score = 1.0 if passed else 0.3
-            result.details.append(answer[:150])
+            item = self.text_reviewer.check_stem(q, shot)
+            result.passed = item.passed
+            result.score = 1.0 if item.passed else 0.3
+            result.details.extend(item.details[:5])
+            result.error = item.error
         except Exception as e:
             result.error = str(e)
         return result
@@ -397,29 +387,11 @@ class ReviewAgent:
         """(2) 内容检查: 选项 vs 脚本 + 知识库双重验证"""
         result = CheckResult()
         try:
-            kb_ctx = self._build_knowledge_context(q)
-            role = self._build_role_prompt(q)
-
-            prompt = self.trainer.build_enhanced_prompt(
-                role + "\n\n---\n\n"
-                f"【任务: 检查题目内容】\n"
-                f"题型: {q.type_2}\n"
-                f"脚本答案: {q.answer}\n"
-                f"脚本选项: {', '.join(q.options) if q.options else '(图片选项)'}\n\n"
-                f"{kb_ctx}\n"
-                f"请看截图, 判断:\n"
-                f"1. 选项内容是否与脚本一致?\n"
-                f"2. 正确答案是否合理? (录音内容是否确实对应正确答案)\n"
-                f"3. 涉及的词汇/句型是否在该年级教材范围内?\n"
-                f"4. 如果有超出教材范围的词汇, 是否合理?(合理扩展可接受)\n\n"
-                f"回答格式: [通过/不通过] | 理由",
-                dim_filter="content"
-            )
-            answer = self.llm.ask(prompt, image_path=shot)
-            passed = "通过" in answer and "不通过" not in answer
-            result.passed = passed
-            result.score = 1.0 if passed else 0.3
-            result.details.append(answer[:150])
+            item = self.text_reviewer.check_content(q, shot)
+            result.passed = item.passed
+            result.score = 1.0 if item.passed else 0.3
+            result.details.extend(item.details[:6])
+            result.error = item.error
         except Exception as e:
             result.error = str(e)
         return result

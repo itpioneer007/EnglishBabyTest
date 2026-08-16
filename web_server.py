@@ -127,12 +127,29 @@ def detect_module_from_filename(filename: str):
 # 工具函数
 # ============================================================
 
+def _find_connected_device_serial(preferred_serial: str | None = None) -> str | None:
+    """查找已连接的 ADB 设备序列号，优先使用首选序列号。"""
+    try:
+        r = sp.run(["adb", "devices"], capture_output=True, text=True, timeout=5,
+                   encoding="utf-8", errors="replace")
+        lines = [line.strip() for line in r.stdout.splitlines() if line.strip() and not line.startswith("List of devices attached")]
+        connected = [line.split()[0] for line in lines if len(line.split()) >= 2 and line.split()[1] == "device"]
+        if preferred_serial and preferred_serial in connected:
+            return preferred_serial
+        if len(connected) == 1:
+            return connected[0]
+    except Exception:
+        pass
+    return None
+
+
 def get_adb():
     """获取 ADBController 实例"""
     config = load_config()
+    actual_serial = _find_connected_device_serial(config.device.serial) or config.device.serial
     out_dir = PROJECT_ROOT / "outputs" / "web"
     out_dir.mkdir(parents=True, exist_ok=True)
-    return ADBController(serial=config.device.serial, screenshot_dir=str(out_dir))
+    return ADBController(serial=actual_serial, screenshot_dir=str(out_dir))
 
 
 def log_msg(msg: str, level: str = "info"):
@@ -890,18 +907,12 @@ def index():
 def api_status():
     """设备状态 + 任务状态"""
     config = load_config()
-    device_ok = False
-    try:
-        r = sp.run(["adb", "-s", config.device.serial, "get-state"],
-                   capture_output=True, text=True, timeout=5,
-                   encoding="utf-8", errors="replace")
-        device_ok = r.returncode == 0 and "device" in r.stdout.lower()
-    except Exception:
-        pass
-
+    actual_serial = _find_connected_device_serial(config.device.serial)
+    device_ok = actual_serial is not None
     return jsonify({
         "device_connected": device_ok,
-        "device_serial": config.device.serial,
+        "device_serial": actual_serial if actual_serial else config.device.serial,
+        "configured_serial": config.device.serial,
         "current_version": _get_current_version_from_config(),
         "task_status": task_status,
     })
@@ -1057,18 +1068,51 @@ def api_inspect_listening_run():
     # 启动线程
     t = threading.Thread(
         target=run_listening_inspect,
-        args=(version_label, unit, stage, docx_file),
+        args=(version_label, unit, stage, docx_file, False),
         daemon=True,
     )
     t.start()
     return jsonify({
         "status": "started",
         "task": "listening_inspect",
-        "params": {"version": version_label, "unit": unit, "stage": stage},
+        "params": {"version": version_label, "unit": unit, "stage": stage, "mode": "full"},
     })
 
 
-def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: str):
+@app.route("/api/inspect/quick-run", methods=["POST"])
+def api_inspect_quick_run():
+    """
+    快速审查模式：直接从第六步逐题巡检开始，适用于已经在题目页的场景。
+    """
+    if task_status["running"]:
+        return jsonify({"error": "已有任务在运行"}), 409
+
+    data = request.get_json() or {}
+    version_label = data.get("version", "新湘鲁六上")
+    unit = data.get("unit", 6)
+    stage = data.get("stage", "基础巩固")
+    docx_file = data.get("docx", "")
+    
+    task_status["log"] = []
+    _inspection_state["questions"] = {}
+    _inspection_state["workflow_steps"] = []
+    _inspection_state["current_question_idx"] = 0
+    _save_inspection_state()
+
+    t = threading.Thread(
+        target=run_listening_inspect,
+        args=(version_label, unit, stage, docx_file, True),
+        daemon=True,
+    )
+    t.start()
+    return jsonify({
+        "status": "started",
+        "task": "listening_inspect_quick",
+        "params": {"version": version_label, "unit": unit, "stage": stage, "mode": "quick"},
+    })
+
+
+def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: str, quick_start: bool = False):
     """
     通用模块巡检主循环
     
@@ -1107,23 +1151,26 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
         config = load_config()
         adb = get_adb()
 
-        log_msg(f"🚀 听力专项巡检: {version_label} Unit{unit} {stage}")
-        record_step("1.启动APP", "running", "")
+        log_msg(f"🚀 听力专项巡检: {version_label} Unit{unit} {stage} {'(快速模式)' if quick_start else ''}")
+        if quick_start:
+            record_step("6.逐题巡检", "running", "快速模式直接开始")
+        else:
+            record_step("1.启动APP", "running", "")
 
-        # 0. 强制返回首页 + 关闭教程页(防止上次停留在教程页)
-        log_msg("强制回到首页")
-        record_step("0.回到首页", "running", "")
-        for _ in range(3):
-            adb.press_back()
-            time.sleep(0.5)
-        time.sleep(1)
-        record_step("0.回到首页", "done", "")
+            # 0. 强制返回首页 + 关闭教程页(防止上次停留在教程页)
+            log_msg("强制回到首页")
+            record_step("0.回到首页", "running", "")
+            for _ in range(3):
+                adb.press_back()
+                time.sleep(0.5)
+            time.sleep(1)
+            record_step("0.回到首页", "done", "")
 
-        # 1. 启动APP + 导航到首页
-        log_msg("启动APP")
-        adb.launch_app(config.app.package)
-        time.sleep(4)
-        record_step("1.启动APP", "done", "")
+            # 1. 启动APP + 导航到首页
+            log_msg("启动APP")
+            adb.launch_app(config.app.package)
+            time.sleep(4)
+            record_step("1.启动APP", "done", "")
 
         # 1.5 检测并关闭教程页(如果有的话)
         log_msg("检查教程页")
@@ -1433,35 +1480,38 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
             # 或者"基础巩固"是默认已选中的
         time.sleep(3)
 
-        # 9. 开始答题 → 轮流尝试 "开始答题"/"去答题"→ 关弹窗 → 等待考题加载
-        log_msg("开始答题")
-        for attempt in range(5):
-            elements = adb.dump_ui()
-            # 先检查是否已经在考题页
-            in_question = any(re.match(r'^\d+/\d+$', (e.text or "").strip()) for e in elements)
-            if in_question:
-                log_msg("  已在考题页!", "success")
-                break
-            # 找"开始答题"/"去答题"按钮
-            found_btn = False
-            for e in elements:
-                t = (e.text or '').strip()
-                if t in ['开始答题', '去答题', '开始', 'Start']:
-                    if e.clickable and e.center[1] < 2000:
-                        adb.tap(e.center[0], e.center[1])
-                        log_msg(f"  点'{t}' at {e.center}")
-                        found_btn = True
-                        break
-            if not found_btn:
-                # 可能已经进入题目但还没加载, 或弹窗挡住了
-                # 尝试点屏幕底部中间 (有些APP的确认在底部)
-                adb.tap(540, 2100)
-                # 关可能存在的弹窗
-                adb.tap(540, 1800)
-            time.sleep(2)
+        if not quick_start:
+            # 9. 开始答题 → 轮流尝试 "开始答题"/"去答题"→ 关弹窗 → 等待考题加载
+            log_msg("开始答题")
+            for attempt in range(5):
+                elements = adb.dump_ui()
+                # 先检查是否已经在考题页
+                in_question = any(re.match(r'^\d+/\d+$', (e.text or "").strip()) for e in elements)
+                if in_question:
+                    log_msg("  已在考题页!", "success")
+                    break
+                # 找"开始答题"/"去答题"按钮
+                found_btn = False
+                for e in elements:
+                    t = (e.text or '').strip()
+                    if t in ['开始答题', '去答题', '开始', 'Start']:
+                        if e.clickable and e.center[1] < 2000:
+                            adb.tap(e.center[0], e.center[1])
+                            log_msg(f"  点'{t}' at {e.center}")
+                            found_btn = True
+                            break
+                if not found_btn:
+                    # 可能已经进入题目但还没加载, 或弹窗挡住了
+                    # 尝试点屏幕底部中间 (有些APP的确认在底部)
+                    adb.tap(540, 2100)
+                    # 关可能存在的弹窗
+                    adb.tap(540, 1800)
+                time.sleep(2)
 
-        # 再多等一会儿, 确保题目渲染完成
-        time.sleep(2)
+            # 再多等一会儿, 确保题目渲染完成
+            time.sleep(2)
+        else:
+            log_msg("快速模式: 直接从第六步开始，不做前置导航")
 
         # 10. 逐题巡检循环
         log_msg(f"逐题巡检开始: 脚本={docx_file or '无'}")
@@ -1547,13 +1597,17 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
                             "content": "✅" if r.content_check.passed else "❌",
                             "image": "✅" if r.image_check.passed else "❌",
                             "answer": "✅" if r.answer_check.passed else "❌",
+                            "audio": "✅" if r.audio_check.passed else "❌",
+                            "post_error": "✅" if r.post_error_check.passed else "❌",
                             "score": r.overall_score,
                             "stem_reason": r.stem_check.details[0] if r.stem_check.details else "",
                             "content_reason": r.content_check.details[0] if r.content_check.details else "",
                             "image_reason": r.image_check.details[0] if r.image_check.details else "",
                             "answer_reason": r.answer_check.details[0] if r.answer_check.details else "",
+                            "audio_reason": r.audio_check.details[0] if r.audio_check.details else "",
+                            "post_error_reason": r.post_error_check.details[0] if r.post_error_check.details else "",
                         }
-                        log_msg(f"  审查: 题干{review_result['stem']} 内容{review_result['content']} 配图{review_result['image']} 作答{review_result['answer']} 得分{review_result['score']:.2f}")
+                        log_msg(f"  审查: 题干{review_result['stem']} 内容{review_result['content']} 配图{review_result['image']} 作答{review_result['answer']} 音频{review_result['audio']} 答错后{review_result['post_error']} 得分{review_result['score']:.2f}")
 
                         # ====== 发送每题结果到后端 ======
                         qid = f"{version_label}-U{unit}-Q{cur:02d}"
@@ -1569,12 +1623,16 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
                             ai_content=r.content_check.passed,
                             ai_image=r.image_check.passed,
                             ai_answer=r.answer_check.passed,
+                            ai_audio=r.audio_check.passed,
+                            ai_post_error=r.post_error_check.passed,
                             overall_passed=r.overall_passed,
                             overall_score=round(r.overall_score, 2),
                             stem_reason=r.stem_check.details[0][:100] if r.stem_check.details else "",
                             content_reason=r.content_check.details[0][:100] if r.content_check.details else "",
                             image_reason=r.image_check.details[0][:100] if r.image_check.details else "",
                             answer_reason=r.answer_check.details[0][:100] if r.answer_check.details else "",
+                            audio_reason=r.audio_check.details[0][:100] if r.audio_check.details else "",
+                            post_error_reason=r.post_error_check.details[0][:100] if r.post_error_check.details else "",
                             ai_reason=r.content_check.details[0][:100] if r.content_check.details else "",
                             screenshot=shot_name,
                             knowledge_check=r.knowledge_check,
