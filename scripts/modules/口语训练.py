@@ -336,6 +336,17 @@ def _answer_big_question(d, big_idx=0):
                 step_log(f"🔊 点小喇叭", "info")
                 time.sleep(0.6)
 
+        # ★ 大题首题（q==0）：必须等"请阅读题目"倒计时结束、第一个麦克风出现！
+        #   ★★ 用户实测根因：首题还在倒计时时找麦克风必然找不到 → 立即下滑 →
+        #   下滑2次找不到 → 误判"大题结束"退出 → 0题。必须等倒计时结束再作答。
+        if q == 0 and not _find_record_btn(d):
+            print(f"    ⏳ 首题等待倒计时结束（等第一个麦克风出现）…")
+            step_log(f"⏳ 首题等待麦克风", "info")
+            _wait_countdown(d, timeout=18)  # 等"点击录音"出现（倒计时通常12s）
+            if not _find_record_btn(d):
+                # 倒计时结束仍无麦克风 → 才下滑找（长页面首题可能在下方）
+                S_swipe(d, 540, 1600, 540, 800, 0.4)
+                time.sleep(0.4)
         # ★ 用户要求：先快速试一次(不等倒计时)；若没找到"点击录音"则立即下滑（不等15s）
         #   之前路径：_speak_question 默认 wait_countdown=True → _wait_countdown 等15s
         #   → 每题白白等 15s，即使录音按钮马上就有
@@ -456,10 +467,12 @@ def _run_unit_questions(d, unit_num):
     """进入单元后的答题循环（多个大题）"""
     total = 0
     for big in range(1, 10):
-        # ★ 大题切换后等待页面稳定：缩短为最多 3s（原来 15s 用户实测太慢）
-        #   找不到录音按钮就交给 _answer_big_question 的"立即下滑"逻辑处理
+        # ★ 大题切换后等待页面稳定：
+        #   第一大题 → 等 18s（"请阅读题目"倒计时结束+第一个麦克风出现，用户实测根因）
+        #   后续大题 → 3s 快速（页面已加载过，切换快）
+        _wait_max = 18 if big == 1 else 3
         t_st = time.time()
-        while time.time() - t_st < 3:
+        while time.time() - t_st < _wait_max:
             if _find_record_btn(d):
                 break
             time.sleep(0.12)
