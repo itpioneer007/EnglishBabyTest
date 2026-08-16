@@ -1130,33 +1130,16 @@ function parseOrder(text){
     const _t=String(um[4]||'').replace(/[一二三四五六七八九十两]/g,ch=>_cnNum[ch]||ch)
     units.push({idx:um.index,from:um[1]||_f,to:um[2]||_t})
   }
-  // ★ 相邻U合并: 'u1 u7'/'u1,u7'/'u1、u7'等(空格/逗号/顿号分隔) → 区间'1-7'
-  //   规则: 两个相邻U号, 若后值>前值 → 前项的to=后值, 后项标记删除
-  units.sort((a,b)=>a.idx-b.idx)
-  for(let ui=0; ui<units.length; ui++){
-    const u=units[ui]
-    if(u._rm) continue
-    for(let vj=ui+1; vj<units.length; vj++){
-      const v=units[vj]
-      if(v._rm) continue
-      const gap=String(_normUnitTxt.slice(u.idx+2, v.idx)).replace(/[\s,，、;；]/g,'')
-      const uB=parseInt(u.to||u.from,10)
-      const vA=parseInt(v.from,10)
-      if((u.to||'')==='' && v.to==='' && gap==='' && vA>uB){
-        u.to=String(vA); v._rm=true; break
-      }
-    }
-  }
-  for(let di=units.length-1; di>=0; di--){ if(units[di]._rm) units.splice(di,1) }
   for(const p of pos){
     const m={name:p.name,units:'',testUnits:'',sub:''}
-    let nearest=null
-    for(const u of units){
-      if(u.idx>p.idx && (!nearest||u.idx<nearest.idx)) nearest=u
-    }
-    if(nearest){m.units=nearest.to?`${nearest.from}-${nearest.to}`:`${nearest.from}`}
+    // ★ 收集本模块与下一模块之间的所有U号(空格分隔=多个独立单元; 连字符/到/至=区间)
     const nextPos=pos.find(q=>q.idx>p.idx)
-    const seg=text.slice(p.idx, nextPos?nextPos.idx:text.length)
+    const segEnd=nextPos?nextPos.idx:text.length
+    const segUnits=units.filter(u=>u.idx>p.idx && u.idx<segEnd).sort((a,b)=>a.idx-b.idx)
+    if(segUnits.length){
+      m.units=segUnits.map(u=>u.to?`${u.from}-${u.to}`:`${u.from}`).join(' ')
+    }
+    const seg=text.slice(p.idx, segEnd)
     if(!m.units){
       for(const kw of ['期中评价','期末评价','期中','期末','AI检测']){
         if(seg.includes(kw)){m.units=kw;break}
