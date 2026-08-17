@@ -1681,6 +1681,16 @@ def _handle_fill_blank(d, config):
             # 收起键盘
             d.press("back")
             time.sleep(0.6)
+            # ★ 修复：back 收键盘时若键盘已收起，back 会退出答题页弹"确定退出"
+            #   → 检测并点"继续答题"恢复（否则填空函数空转到超时，任务卡死）
+            try:
+                _xml_exit = d.dump_hierarchy()
+                if '确定退出' in _xml_exit and '继续答题' in _xml_exit:
+                    d(text="继续答题").click(timeout=1)
+                    time.sleep(0.8)
+                    print("    ↺ 检测到退出弹窗，已点继续答题恢复")
+            except Exception:
+                pass
             # ★ 验证该框是否填上：填上 → streak清零；填不上 → streak+1，
             #   连续3次失败说明 IME 注入失效/框无法聚焦 → 止损退出（避免40轮空转）
             _filled = False
