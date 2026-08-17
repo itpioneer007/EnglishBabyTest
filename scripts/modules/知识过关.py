@@ -43,6 +43,10 @@ APP_PACKAGE = "com.dinoenglish.yyb"
 GRADE_LEVEL = "六年级上册"
 BOOK_VERSION = "湘少版"
 
+# ★ 题目解析收集器（run_module 初始化；知识过关在可生成脚本白名单内）
+_coll = None
+_cur_unit = 0
+
 
 def _env_units():
     """从环境变量读取单元范围 (scheduler 设置); 未设置时默认 Unit 1"""
@@ -170,6 +174,25 @@ def _answer_loop(d, max_q=120):
         texts = ""
         for e in (d.xpath('//*[@text!=""]').all() or []):
             texts += (e.text or "") + " "
+
+        # ★ 题目解析收集：有题干的题收集（含"听"的录音题/无题干自动跳过，
+        #   有答案才收集——单选/判断有选项答案；录音题无文字答案自然跳过）
+        try:
+            if _coll is not None:
+                from common.gen_script import _extract_ui_question
+                _xml_q = d.dump_hierarchy()
+                _qi = _extract_ui_question(_xml_q)
+                _stem_q = (_qi["stem"] or "").strip()
+                if _stem_q and "听" not in _stem_q:
+                    _ans_q = ""
+                    _m_opt = re.search(r'text="([TFABCDE])"', _xml_q)
+                    if _m_opt:
+                        _ans_q = _m_opt.group(1)
+                    if _ans_q:
+                        _coll.add(qno=q+1, stem=_stem_q, options=_qi["options"],
+                                  answer=_ans_q, qtype="知识过关", unit=_cur_unit)
+        except Exception:
+            pass
 
         # 1. 录音题：检测"原音"按钮（跟读单词题）
         if d(text="原音").exists(timeout=0.1):
@@ -634,6 +657,18 @@ def run_module(d, units=None):
     _units = _resolve_units(units, UNITS)
     print(f"\n📋 知识过关 · 单元 {_units[0]}-{_units[-1]} · {len(_units)}个单元")
 
+    # ★ 题目解析收集器（有题干的题收集，单元答完生成脚本 docx）
+    global _coll, _cur_unit
+    _coll = None
+    _cur_unit = 0
+    try:
+        from common.gen_script import QuestionCollector
+        _g_ver = os.environ.get("YYB_VERSION", BOOK_VERSION)
+        _g_grade = os.environ.get("YYB_GRADE", GRADE_LEVEL)
+        _coll = QuestionCollector(module="知识过关", version=_g_ver, grade=_g_grade)
+    except Exception:
+        _coll = None
+
     # 确认在主页（下滑找知识过关）
     for _ in range(5):
         if d(text="知识过关").exists(timeout=1):
@@ -644,6 +679,14 @@ def run_module(d, units=None):
     for ui, unit_num in enumerate(UNITS):
         q = _run_one_unit(d, unit_num)
         total += q
+        # ★ 单元答完：有题干的题汇总生成脚本 docx（无题干/纯听音跳过）
+        try:
+            if _coll is not None:
+                _script_path = _coll.finish_unit(unit=unit_num)
+                if _script_path:
+                    step_log(f"📄 已生成解析脚本: {os.path.basename(_script_path)}（可在「审查脚本」区下载）", "success")
+        except Exception as _e:
+            print(f"  ⚠ 生成脚本失败: {_e}")
         # back 回主页
         for _ in range(5):
             if d(text="知识过关").exists(timeout=1.5):

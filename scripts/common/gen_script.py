@@ -167,6 +167,10 @@ class QuestionCollector:
         self.module = module
         self.version = version or "湘少版"
         self.grade = grade or "五年级上册"
+        # ★ 可生成脚本的模块白名单（用户确认）：只有这些模块的题目有明确题干+
+        #   选项+答案（无录音原文依赖）→ 能生成脚本解析；
+        #   听力专项/口语训练/语音评测 无录音原文 → 不能生成脚本
+        self.gen_allowed = module in ("单元自检", "巧记单词", "知识过关")
         # 保存目录：项目根/gen_scripts（默认，scripts/common/gen_script.py 上三级）；可传 save_root 覆盖
         self.save_root = save_root or os.path.join(
             os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "gen_scripts")
@@ -263,6 +267,10 @@ class QuestionCollector:
         """单元答完：把收集到的题写成脚本 docx（模板格式）。
         返回生成的文件路径；无题可写返回 None。
         """
+        # ★ 模块白名单拦截：听力专项/口语训练/语音评测 无录音原文，不生成脚本
+        if not self.gen_allowed:
+            print(f"  ⏭ {self.module} 不在脚本生成白名单（听力专项/口语训练/语音评测无录音原文），跳过")
+            return None
         if not self.questions:
             print(f"  ⚠ 单元 {unit} 无可生成解析的题目（{self.skipped_no_stem} 题无题干跳过）")
             return None

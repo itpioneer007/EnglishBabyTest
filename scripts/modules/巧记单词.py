@@ -37,6 +37,10 @@ APP_PACKAGE = "com.dinoenglish.yyb"
 GRADE_LEVEL = "五年级上册"
 BOOK_VERSION = "湘少版"
 
+# ★ 题目解析收集器（run_module 初始化；巧记单词在可生成脚本白名单内）
+_coll = None
+_cur_unit = 0
+
 # 每单元关卡数（1~5 + boss = 6 关）
 LEVELS_PER_UNIT = 6
 
@@ -258,6 +262,21 @@ def _answer_loop(d, max_q=20):
             print(f"    ✅ 提交！关卡完成")
             time.sleep(0.8)
             return q
+        # ★ 题目解析收集：有题干的题收集（含"听"录音题/无题干自动跳过）
+        try:
+            if _coll is not None:
+                from common.gen_script import _extract_ui_question
+                _xml_q = d.dump_hierarchy()
+                _qi = _extract_ui_question(_xml_q)
+                _stem_q = (_qi["stem"] or "").strip()
+                if _stem_q and "听" not in _stem_q:
+                    _m_opt = re.search(r'text="([TFABCDE])"', _xml_q)
+                    _ans_q = _m_opt.group(1) if _m_opt else ""
+                    if _ans_q:
+                        _coll.add(qno=q+1, stem=_stem_q, options=_qi["options"],
+                                  answer=_ans_q, qtype="巧记单词", unit=_cur_unit)
+        except Exception:
+            pass
         # 弹窗处理：退出确认弹窗（带"温馨提示"标题才是真弹窗；正常答题页的
         # "退出/继续答题"是页面按钮，不能误点！）
         try:
@@ -487,6 +506,18 @@ def run_module(d, units=None):
     _units = _resolve_units(units, UNITS)
     print(f"\n📋 巧记单词 · 单词同步闯关（单元 {_units[0]}-{_units[-1]} · {len(_units)}个）")
 
+    # ★ 题目解析收集器（有题干的题收集，单元答完生成脚本 docx）
+    global _coll, _cur_unit
+    _coll = None
+    _cur_unit = 0
+    try:
+        from common.gen_script import QuestionCollector
+        _g_ver = os.environ.get("YYB_VERSION", BOOK_VERSION)
+        _g_grade = os.environ.get("YYB_GRADE", GRADE_LEVEL)
+        _coll = QuestionCollector(module="巧记单词", version=_g_ver, grade=_g_grade)
+    except Exception:
+        _coll = None
+
     # 1. 进入巧记单词
     if not _enter_qiaoji(d):
         return 0
@@ -504,6 +535,14 @@ def run_module(d, units=None):
         print(f"\n🏫 Unit {unit_no}（关卡 {start_level}~{start_level+5}）")
         q = _run_one_unit(d, unit_no, start_level)
         total += q
+        # ★ 单元答完：有题干的题汇总生成脚本 docx（无题干/纯听音跳过）
+        try:
+            if _coll is not None:
+                _script_path = _coll.finish_unit(unit=unit_no)
+                if _script_path:
+                    step_log(f"📄 已生成解析脚本: {os.path.basename(_script_path)}（可在「审查脚本」区下载）", "success")
+        except Exception as _e:
+            print(f"  ⚠ 生成脚本失败: {_e}")
 
     print(f"✅ 巧记单词完成: {total} 题, 耗时 {time.time()-t0:.0f}s")
     return total
