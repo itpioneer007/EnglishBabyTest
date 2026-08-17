@@ -84,29 +84,41 @@ def _extract_ui_question(xml, answer="", qtype_hint=""):
                 break
     # ★ 清洗题干里的分值噪音："选择各组中不同类的一项。 (共1分)" → 去掉"(共N分)"
     stem = re.sub(r"[（(]\s*共\d+分\s*[）)]", "", stem).strip()
-    if not stem:
-        # 兜底：长文本（排除噪音）
-        noise = ("下一题", "上一题", "检查", "提交", "查看报告", "练习报告",
-                 "恭喜", "回答正确", "回答错误", "很遗憾", "练习结束还剩", "还剩",
-                 "得分", "用时", "点击录音", "点击结束", "继续答题", "退出训练",
-                 "答题卡", "单元自检", "口语训练", "听力专项", "知识过关",
-                 "巧记单词", "语音评测", "全脑记词", "单词听写", "查看解析",
-                 "正确答案", "错误答案", "本大题", "本小题", "分值", "满分",
-                 "考前突破", "当前版本", "练习记录", "训练规则说明", "好的")
-        for m in re.finditer(r'text="([^"]{4,})"', xml):
-            t = m.group(1).strip()
-            if not t or t in noise or len(t) >= 80:
-                continue
-            if any(n in t for n in noise):
-                continue
-            # ★ 排除选项/字母项（A. bus / B. 图片 / T/ F）——否则纯听音题
-            #   会把"听录音"过滤后剩下的第一个选项误当题干！
-            if re.match(r"^[A-F][.、．]\s*", t) or re.match(r"^[TF]\s*$", t):
-                continue
-            if re.match(r"^\d{1,2}:\d{2}$|^\d+(\.\d+)?%?$|^\d+\s*/\s*\d+$|^\d+分$", t):
-                continue
-            stem = t
+    # ★ 合并完整题干：指令(如"请找出与下面选项不符的一项") + 具体内容(如单词/句子) 都要
+    #   很多题题干有两条文本：大指令 + 内容。只取第一条会丢内容 → 收集全部非噪音长文本
+    _stems = [stem] if stem else []
+    # 按 node 块遍历（提取 text + 检查该 node 的 resource-id，排除选项容器/按钮）
+    noise = ("下一题", "上一题", "检查", "提交", "查看报告", "练习报告",
+             "恭喜", "回答正确", "回答错误", "很遗憾", "练习结束还剩", "还剩",
+             "得分", "用时", "点击录音", "点击结束", "继续答题", "退出训练",
+             "答题卡", "单元自检", "口语训练", "听力专项", "知识过关",
+             "巧记单词", "语音评测", "全脑记词", "单词听写", "查看解析",
+             "正确答案", "错误答案", "本大题", "本小题", "分值", "满分",
+             "考前突破", "当前版本", "练习记录", "训练规则说明", "好的")
+    for _nd in re.finditer(r'<node\b[^>]*>', xml):
+        _block = _nd.group(0)
+        _mt = re.search(r'text="([^"]*)"', _block)
+        if not _mt:
+            continue
+        t = _mt.group(1).strip()
+        if not t or len(t) < 3 or len(t) >= 80:
+            continue
+        # 选项容器/按钮/交互节点 → 跳过
+        if re.search(r'resource-id="[^"]*(?:option_cb|option_iv|radio_btn|check_box|tv_option|btn_|tv_progress)[^"]*"', _block):
+            continue
+        if t in noise or any(n in t for n in noise):
+            continue
+        if re.match(r"^[A-F][.、．]\s*", t) or re.match(r"^[TF]\s*$", t):
+            continue
+        if re.match(r"^\d{1,2}:\d{2}$|^\d+(\.\d+)?%?$|^\d+\s*/\s*\d+$|^\d+分$", t):
+            continue
+        # 已含在已有题干里（如 tv_caption 原始含分值）→ 跳过避免重复
+        if any(t == s or t in s or s in t for s in _stems):
+            continue
+        _stems.append(t)
+        if len(_stems) >= 3:
             break
+    stem = " ".join(_stems).strip()
     # ★ 纯听音指令判定：题干仅为"听录音/听音选X"等指令性文字 → 视为无题干（跳过）
     #   （听力题的实质内容在音频里，脚本里没有可解析的题干文字）
     if stem.strip() and re.fullmatch(
@@ -283,8 +295,10 @@ class QuestionCollector:
         _add_line(f"版本：{self.version}　|　单元：{_u}　|　生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}", size=10, space_after=2)
         _add_line(f"共 {len(self.questions)} 题（无题干/纯听音 {self.skipped_no_stem} 题跳过）", size=10, space_after=10)
         for i, q in enumerate(self.questions, 1):
-            # 题号+题干标题（黑色加粗，不用 Heading 样式）
-            _add_line(f"{i}. {q['stem']}", bold=True, size=13, space_after=4)
+            # 题号（标题，简洁）
+            _add_line(f"第{i}题", bold=True, size=13, space_after=2)
+            # 题干（完整内容：指令+具体内容，如"请找出与下面选项不符的一项"）
+            _add_line(f"题干：{q['stem']}", size=11, space_after=2)
             _add_line(f"位置：{self._loc_str(q)}", size=11, space_after=2)
             _add_line(f"选项：{'　　'.join(q['options']) if q['options'] else '（无文字选项）'}", size=11, space_after=2)
             _add_line(f"正确答案：{q['answer']}", size=11, space_after=2)
