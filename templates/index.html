@@ -1696,6 +1696,46 @@ function matchDocxForModule(mod,docxs,version,grade){
 function curVersionGrade(){
   return {v:$('setupVersion')?$('setupVersion').value:'',g:$('setupGrade')?$('setupGrade').value:''}
 }
+// ★ 从脚本文件名解析单元范围，兼容两种格式：
+//   "U6-U10"（带U）→ {lo:6,hi:10}；"U1-5"（不带U）→ {lo:1,hi:5}
+//   "U6"（单单元）→ {lo:6,hi:6}；无 U 信息 → null
+function scriptUnitsOf(fname){
+  const f=fname||''
+  // ① 范围带U: U6-U10 / U6~U10 / U6至U10
+  let m=/[Uu]\s*(\d{1,2})\s*(?:-|~|至|到)\s*[Uu]\s*(\d{1,2})/.exec(f)
+  if(m){ return {lo:parseInt(m[1]), hi:parseInt(m[2])} }
+  // ② 范围不带U: U1-5 / U1~5
+  m=/[Uu]\s*(\d{1,2})\s*(?:-|~|至|到)\s*(\d{1,2})/.exec(f)
+  if(m){ return {lo:parseInt(m[1]), hi:parseInt(m[2])} }
+  // ③ 单单元: U6
+  const m2=/[Uu]\s*(\d{1,2})\b/.exec(f)
+  if(!m2) return null
+  const lo=parseInt(m2[1])
+  if(!lo||lo<1||lo>20) return null
+  return {lo,hi:lo}
+}
+// 单元是否被脚本覆盖（unit 可能是 "6" / "1-5" / "6,8" / "1,2,3"）
+function unitCoveredBy(unitStr, su){
+  if(!su) return null               // 脚本无单元信息 → 未知
+  if(!unitStr) return true          // 未指定单元 → 视为全部覆盖
+  return String(unitStr).split(/[,，]/).some(p=>{
+    const mm=/^\s*(\d+)\s*(?:-(\d+))?\s*$/.exec(p)
+    if(!mm) return true
+    const lo=parseInt(mm[1]); const hi=mm[2]?parseInt(mm[2]):lo
+    return !(hi<su.lo||lo>su.hi)     // 有交集即覆盖
+  })
+}
+function curModuleUnits(name){
+  const cb=document.querySelector(`.mod-sel[value="${name}"]`)
+  if(!cb) return ''
+  const tag=cb.closest('.mod-tag'); if(!tag) return ''
+  if(name==='听力专项'){
+    const p=tag.querySelector('.unit-val-p'); const t=tag.querySelector('.unit-val-t')
+    return [p&&p.value,t&&t.value].filter(v=>v&&v!=='NONE').join(',')
+  }
+  const v=tag.querySelector('.unit-val')
+  return v?v.value:''
+}
 function updateModuleMatch(){
   const list=$('moduleMatchList'); if(!list) return
   const mods=getSelectedModules()
@@ -1706,31 +1746,66 @@ function updateModuleMatch(){
     $('matchSummary').textContent=''
     return
   }
+  // ★ 运行前单元-脚本匹配预览：所选单元有没有脚本覆盖，一目了然
   list.innerHTML=mods.map(m=>{
     const d=matchDocxForModule(m,docxs,v,g)
-    if(d){
+    if(!d){
+      return `<div class="flex items-center gap-1.5 px-2 py-1 bg-[#fef3c7] border border-[#fde68a] rounded">
+        <span class="text-[#92400e]">—</span>
+        <span class="text-[#92400e] font-semibold">${escHtml(m)}</span>
+        <span class="text-[#9aa5a0]">→</span>
+        <span class="text-[#92400e]">无匹配脚本</span>
+        <span class="ml-auto text-[10px] text-[#92400e]">仅基础</span>
+      </div>`
+    }
+    const su=scriptUnitsOf(d)
+    const u=curModuleUnits(m)
+    const covered=unitCoveredBy(u,su)
+    if(su && covered===false){
+      // ⚠ 有脚本但单元不匹配：脚本审查无题可对，仅基础完整性
+      return `<div class="flex items-center gap-1.5 px-2 py-1 bg-[#fef3c7] border border-[#fde68a] rounded">
+        <span class="text-[#92400e]">⚠</span>
+        <span class="text-[#92400e] font-semibold">${escHtml(m)}</span>
+        <span class="text-[#9aa5a0]">→</span>
+        <span class="text-[#475569] truncate" title="${escHtml(d)}">${escHtml(d)}</span>
+        <span class="text-[10px] text-[#92400e]">脚本U${su.lo}${su.hi>su.lo?'-'+su.hi:''} · 所选${u||'?'}不在内</span>
+        <span class="ml-auto text-[10px] text-[#92400e]">仅基础</span>
+      </div>`
+    }
+    if(su && covered===true){
+      // ✅ 有脚本 + 单元覆盖 → LLM 脚本审查
       return `<div class="flex items-center gap-1.5 px-2 py-1 bg-[#f0f7f4] border border-[#bbf7d0] rounded">
         <span class="text-[#2d6a4f]">✓</span>
         <span class="text-[#2d6a4f] font-semibold">${escHtml(m)}</span>
         <span class="text-[#9aa5a0]">→</span>
         <span class="text-[#475569] truncate" title="${escHtml(d)}">${escHtml(d)}</span>
-        <span class="ml-auto text-[10px] text-[#2d6a4f]">LLM</span>
+        <span class="ml-auto text-[10px] text-[#2d6a4f]">LLM（U${su.lo}${su.hi>su.lo?'-'+su.hi:''}）</span>
       </div>`
     }
-    return `<div class="flex items-center gap-1.5 px-2 py-1 bg-[#fef3c7] border border-[#fde68a] rounded">
-      <span class="text-[#92400e]">—</span>
-      <span class="text-[#92400e] font-semibold">${escHtml(m)}</span>
+    // 脚本无单元信息（无法判断）→ 视为可审查
+    return `<div class="flex items-center gap-1.5 px-2 py-1 bg-[#f0f7f4] border border-[#bbf7d0] rounded">
+      <span class="text-[#2d6a4f]">✓</span>
+      <span class="text-[#2d6a4f] font-semibold">${escHtml(m)}</span>
       <span class="text-[#9aa5a0]">→</span>
-      <span class="text-[#92400e]">无匹配脚本</span>
-      <span class="ml-auto text-[10px] text-[#92400e]">仅基础</span>
+      <span class="text-[#475569] truncate" title="${escHtml(d)}">${escHtml(d)}</span>
+      <span class="ml-auto text-[10px] text-[#2d6a4f]">LLM</span>
     </div>`
   }).join('')
-  const hit=mods.filter(m=>matchDocxForModule(m,docxs,v,g)).length
-  $('matchSummary').textContent=`已匹配 ${hit}/${mods.length} 模块`
+  const hit=mods.filter(m=>{
+    const d=matchDocxForModule(m,docxs,v,g); if(!d) return false
+    const su=scriptUnitsOf(d)
+    return !su || unitCoveredBy(curModuleUnits(m),su)!==false
+  }).length
+  $('matchSummary').textContent=`可审查 ${hit}/${mods.length} 模块`
 }
 // 监听模块勾选变化 → 重新计算匹配
 document.querySelectorAll && setTimeout(()=>{
   document.querySelectorAll('.mod-sel').forEach(c=>c.addEventListener('change',updateModuleMatch))
+  // ★ 单元输入变化 → 也刷新匹配预览（运行前即时看到脚本覆盖状态）
+  document.querySelectorAll('.unit-val,.unit-val-p,.unit-val-t').forEach(c=>{
+    c.addEventListener('change',updateModuleMatch)
+    c.addEventListener('input',updateModuleMatch)
+  })
 },0)
 
 /* ========== 审查动作 ========== */
