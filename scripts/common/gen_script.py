@@ -115,7 +115,7 @@ class QuestionCollector:
 
     # ------------------------------------------------------------
     def add(self, qno, stem="", options=None, answer="", qtype="",
-            unit=0, recording="", knowledge=""):
+            unit=0, recording="", knowledge="", big=None):
         """收集一道题。仅当有题干（非纯听音）才保留，否则跳过。
 
         Args:
@@ -127,6 +127,7 @@ class QuestionCollector:
             unit: 单元号
             recording: 录音原文（听力题可能有）
             knowledge: 知识点（可选，LLM 生成或留空）
+            big: 大题号（口语训练等"第N大题"定位用）
         """
         stem = (stem or "").strip()
         if not stem or stem in ("(无题干文字)", "(无)", "听录音", "听录音，选择正确答案"):
@@ -145,6 +146,7 @@ class QuestionCollector:
             "qtype": qtype or "", "unit": int(unit) if str(unit).isdigit() else unit,
             "recording": (recording or "").strip(),
             "knowledge": (knowledge or "").strip(),
+            "big": big,
             "time": datetime.now().strftime("%H:%M:%S"),
         })
 
@@ -167,41 +169,36 @@ class QuestionCollector:
         doc.add_paragraph(f"版本：{self.version}　|　单元：{_u}　|　生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}")
         doc.add_paragraph(f"共 {len(self.questions)} 题（无题干/纯听音 {self.skipped_no_stem} 题跳过）")
         for i, q in enumerate(self.questions, 1):
+            # ★ 简化格式：位置 / 题干 / 选项 / 答案 / 知识点（用户要求，不搞严谨字段）
             doc.add_heading(f"{i}. {q['stem']}", level=1)
-            if q["options"]:
-                _p = doc.add_paragraph()
-                _p.add_run("　　".join(q["options"]))
-            if q["recording"]:
-                _p = doc.add_paragraph()
-                _p.add_run("录音：").bold = True
-                _p.add_run(q["recording"])
             _p = doc.add_paragraph()
-            _p.add_run("答案：").bold = True
+            _p.add_run("位置：").bold = True
+            _p.add_run(self._loc_str(q))
+            _p = doc.add_paragraph()
+            _p.add_run("选项：").bold = True
+            _p.add_run("　　".join(q["options"]) if q["options"] else "（无文字选项）")
+            _p = doc.add_paragraph()
+            _p.add_run("正确答案：").bold = True
             _p.add_run(q["answer"])
-            _p = doc.add_paragraph()
-            _p.add_run("一级题型：").bold = True
-            _p.add_run(q["qtype"] or "综合")
-            _p = doc.add_paragraph()
-            _p.add_run("二级题型：/")
-            _p = doc.add_paragraph()
-            _p.add_run("难度：基础")
-            _p = doc.add_paragraph()
-            _p.add_run(f"关键词：{self.module}#{self.version}U{unit}#{q['answer']}")
             _p = doc.add_paragraph()
             _p.add_run("知识点：").bold = True
             _p.add_run(q["knowledge"] or self._auto_knowledge(q))
-            _p = doc.add_paragraph()
-            _p.add_run("技能：读-读词汇，写-写词汇")
-            _p = doc.add_paragraph()
-            _p.add_run("认知目标：识记")
-            _p = doc.add_paragraph()
-            _p.add_run(f"适用年级：{self.grade}")
-            _p = doc.add_paragraph()
-            _p.add_run("编写年份：2026年")
             doc.add_paragraph()
         doc.save(path)
         print(f"  ✅ 生成脚本: {path}（{len(self.questions)} 题，跳过无题干 {self.skipped_no_stem}）")
         return path
+
+    # ------------------------------------------------------------
+    def _loc_str(self, q):
+        """App 位置描述：模块 · 单元 · 第N题（含大题时带大题号）"""
+        _parts = [self.module]
+        if q.get("unit"):
+            _parts.append(f"U{q['unit']}")
+        if q.get("big"):
+            _parts.append(f"第{q['big']}大题")
+        if q.get("qno"):
+            _parts.append(f"第{q['qno']}题")
+        return " · ".join(_parts)
 
     # ------------------------------------------------------------
     @staticmethod
