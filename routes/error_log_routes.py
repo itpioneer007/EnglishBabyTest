@@ -12,6 +12,21 @@ from pathlib import Path
 from flask import jsonify, send_file
 
 
+def _find_latest_live_report() -> str:
+    """找最新生成的 report_live.html（服务重启后内存路径丢失时的兜底）"""
+    try:
+        root = Path(__file__).parent.parent / "outputs" / "reports"
+        candidates = []
+        for p in root.rglob("report_live.html"):
+            candidates.append((p.stat().st_mtime, p))
+        if candidates:
+            candidates.sort(reverse=True)
+            return str(candidates[0][1])
+    except Exception:
+        pass
+    return ""
+
+
 def register(app):
     # 延迟引用 web_server 模块，避免循环导入：
     # web_server 在第 56 行调用本 register() 时，_inspection_state 尚未定义；
@@ -22,6 +37,9 @@ def register(app):
     def api_error_live():
         """返回实时错题报告 HTML（供前端 iframe 预览）"""
         path = web_server._inspection_state.get("live_report_path", "")
+        # ★ 服务重启后内存 live_report_path 丢失 → 兜底读最新生成的报告文件
+        if not path or not Path(path).exists():
+            path = _find_latest_live_report()
         if not path or not Path(path).exists():
             return jsonify({
                 "error": "尚无实时报告，请先运行一次审查",
@@ -39,6 +57,17 @@ def register(app):
         """返回实时报告状态（路径 + 错题数），供前端按钮/提示使用"""
         path = web_server._inspection_state.get("live_report_path", "")
         questions = web_server._inspection_state.get("questions", {})
+        # ★ 服务重启后内存空 → 读持久化文件（data/inspection_state.json）
+        if not questions:
+            try:
+                _p = Path(__file__).parent.parent / "data" / "inspection_state.json"
+                if _p.exists():
+                    import json as _json
+                    questions = (_json.loads(_p.read_text(encoding="utf-8")) or {}).get("questions", {})
+            except Exception:
+                questions = {}
+        if not path or not Path(path).exists():
+            path = _find_latest_live_report()
         failed = sum(
             1 for q in questions.values()
             if not q.get("overall_passed", True)

@@ -1498,9 +1498,14 @@ function refreshLiveReport(){
         frame.srcdoc='<div style="font-family:sans-serif;color:#9aa5a0;padding:40px;text-align:center;">报告生成失败</div>';
       });
     }else{
-      $('liveReportMeta').textContent='尚无报告，请先运行一次审查';
+      // ★ 无错题（failed=0）→ 显示"全部通过"，不能空白
+      $('liveReportMeta').textContent=`已审查 ${st.total} 题 · 全部通过`;
       $('liveReportDownload').removeAttribute('href');
-      frame.srcdoc='<div style="font-family:sans-serif;color:#9aa5a0;padding:40px;text-align:center;">暂无错题报告<br>运行一次审查后，这里会实时出现可折叠的错题卡片</div>';
+      frame.srcdoc=`<div style="font-family:sans-serif;padding:40px;text-align:center;">
+        <div style="font-size:48px;margin-bottom:12px;">✅</div>
+        <div style="font-size:16px;color:#2e7d32;font-weight:600;">暂无错题，全部通过</div>
+        <div style="font-size:12px;color:#9aa5a0;margin-top:8px;">已审查 ${st.total} 题 · 没有不通过的题目</div>
+      </div>`;
     }
   }).catch(()=>{
     const frame=$('liveReportFrame');
