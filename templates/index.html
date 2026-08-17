@@ -174,7 +174,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
 .mod-card{border:1.5px solid var(--line);border-radius:12px;padding:10px 14px;background:#fff;transition:border-color .15s,background .15s,box-shadow .15s}
 /* ★ 矮屏(≤900px 高)时压缩模块卡片+配置卡上部：保证选择区不出现滚动条（笔记本1366x768也覆盖）
    ★ !important 防止被后面基础样式覆盖（.mod-sel-label 等定义在 media 之后） */
-@media(max-height:900px){
+@media(max-height:880px){
   .mod-card{padding:6px 10px!important;border-radius:10px!important}
   .mod-sel-label{font-size:13px!important;gap:6px!important}
   .mod-sel-label input{width:14px!important;height:14px!important}
@@ -182,16 +182,17 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
   .unit-val{width:124px!important;padding:2px 8px!important;font-size:11px!important}
   .up-k{min-width:26px!important;height:19px!important;font-size:10px!important}
   .unit-clear{padding:2px 7px!important;font-size:10px!important}
-  #orderInput{min-height:30px!important;padding:2px 8px!important;font-size:11px!important}
-  .sec-note{font-size:10.5px!important;padding:4px 9px!important;margin-bottom:6px!important;line-height:1.5!important}
+  #orderInput{min-height:36px!important;padding:3px 9px!important;font-size:13px!important}
+  .sec-note{font-size:12px!important;padding:5px 10px!important;margin-bottom:7px!important;line-height:1.55!important}
   #tabAside{padding:8px!important}
   #tabAside .grid.gap-3{gap:8px!important}
   #tabAside .bg-white.rounded-xl{padding:10px!important}
   #btnCook{font-size:14px!important;padding:10px 0!important}
 }
-/* ★ 超矮屏(≤768px 高，13寸笔记本)才隐藏提示条——更高屏保留提示条 */
+/* ★ 超矮屏(≤768px 高，13寸笔记本)才隐藏提示条+描述说明行——更高屏保留 */
 @media(max-height:768px){
   #tabAside .sec-note{display:none!important}
+  .order-hint{display:none!important}
 }
 .mod-card:hover{border-color:#c9d8d0;box-shadow:0 1px 4px rgba(45,106,79,.06)}
 .mod-card.on{border-color:var(--green-light);background:#f0f7f3;box-shadow:0 0 0 1px var(--green-light)}
@@ -258,31 +259,30 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
     <!-- 左卡：任务配置 + 一键检测按钮 -->
     <div class="bg-white rounded-xl border border-[#e6dfd4] p-4 shadow-sm flex flex-col min-h-0 overflow-y-auto">
       <h3 class="font-bold text-[15px] text-[#1b4332] mb-2 flex items-center gap-2 shrink-0"><span class="w-6 h-6 rounded-full bg-[#2d6a4f] text-white flex items-center justify-center text-[12px] font-bold">1</span>任务配置 · 一键自动检测</h3>
-      <div class="sec-note shrink-0" style="padding:6px 12px;margin-bottom:9px;font-size:12px">
+      <div class="sec-note shrink-0" style="padding:7px 13px;margin-bottom:10px;font-size:14px;line-height:1.6">
         <b>选好模块、上传脚本，一键全自动：</b>有脚本 → LLM 知识性审查；无脚本 → 基础完整性检查。
       </div>
 
-      <!-- 一句话描述 + 版本/年级（并排，省高度） -->
-      <div class="grid grid-cols-3 gap-2 shrink-0">
-        <div class="col-span-2">
-          <textarea id="orderInput" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();tryParseOrder()}"
-            placeholder="一句话描述，如：湘少版五年级上册 听力专项U1难点突破 口语训练U1&#10;回车自动识别 版本/年级/模块/单元"
-            class="w-full min-h-[42px] border-[1.5px] border-dashed border-[#e6dfd4] rounded-lg p-2 text-[13px] resize-none leading-snug focus:outline-none focus:border-[#40916c] focus:bg-white bg-[#faf7f2]"></textarea>
-          <div class="text-[11.5px] text-[#6b7280] mt-1.5 leading-relaxed">回车自动识别 · 或 <span class="text-[#2d6a4f] underline underline-offset-2 cursor-pointer" onclick="$('fileOrder').click()">上传任务清单</span> · 支持 期中/期末/AI检测</div>
+      <!-- 一句话描述（占满整行，更宽；提示词放大供检查人员阅读） -->
+      <div class="shrink-0">
+        <textarea id="orderInput" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();tryParseOrder()}"
+          placeholder="一句话描述，如：湘少版五年级上册 听力专项U1难点突破 口语训练U1&#10;回车自动识别 版本/年级/模块/单元"
+          class="w-full min-h-[52px] border-[1.5px] border-dashed border-[#e6dfd4] rounded-lg p-2.5 text-[15px] placeholder:text-[13.5px] resize-none leading-relaxed focus:outline-none focus:border-[#40916c] focus:bg-white bg-[#faf7f2]"></textarea>
+        <div class="order-hint text-[12px] text-[#6b7280] mt-1.5 leading-relaxed">回车自动识别 · 或 <span class="text-[#2d6a4f] underline underline-offset-2 cursor-pointer" onclick="$('fileOrder').click()">上传任务清单</span> · 支持 期中/期末/AI检测</div>
+      </div>
+      <!-- 版本/年级（独立一行并排，两个下拉各半宽） -->
+      <div class="grid grid-cols-2 gap-2 shrink-0 mt-2">
+        <div>
+          <label class="block text-[12px] text-[#6b7280] mb-0.5">教材版本 <span class="text-[10px]" id="versionLoading"></span></label>
+          <select id="setupVersion" onchange="renderGrades(this.value)" class="w-full border-[1.5px] border-[#e6dfd4] rounded-lg px-2.5 py-2 text-[13px] bg-white">
+            <option selected>湘少版</option><option>湘少版(2024审定)</option><option>人教版</option><option>人教版(PEP)</option><option>外研版(三起)</option><option>外研版(一起)</option><option>湘鲁版</option><option>冀教版</option><option>教科版</option><option>陕旅版</option><option>新概念青少版</option><option>通用</option>
+          </select>
         </div>
-        <div class="flex flex-col gap-2">
-          <div>
-            <label class="block text-[12px] text-[#6b7280] mb-0.5">教材版本 <span class="text-[10px]" id="versionLoading"></span></label>
-            <select id="setupVersion" onchange="renderGrades(this.value)" class="w-full border-[1.5px] border-[#e6dfd4] rounded-lg px-2.5 py-2 text-[13px] bg-white">
-              <option selected>湘少版</option><option>湘少版(2024审定)</option><option>人教版</option><option>人教版(PEP)</option><option>外研版(三起)</option><option>外研版(一起)</option><option>湘鲁版</option><option>冀教版</option><option>教科版</option><option>陕旅版</option><option>新概念青少版</option><option>通用</option>
-            </select>
-          </div>
-          <div>
-            <label class="block text-[12px] text-[#6b7280] mb-0.5">年级 <span class="text-[10px]" id="gradeLoading"></span></label>
-            <select id="setupGrade" class="w-full border-[1.5px] border-[#e6dfd4] rounded-lg px-2.5 py-2 text-[13px] bg-white">
-              <option selected>五年级上册</option><option>五年级下册</option><option>六年级上册</option><option>六年级下册</option><option>四年级下册</option><option>三年级下册</option>
-            </select>
-          </div>
+        <div>
+          <label class="block text-[12px] text-[#6b7280] mb-0.5">年级 <span class="text-[10px]" id="gradeLoading"></span></label>
+          <select id="setupGrade" class="w-full border-[1.5px] border-[#e6dfd4] rounded-lg px-2.5 py-2 text-[13px] bg-white">
+            <option selected>五年级上册</option><option>五年级下册</option><option>六年级上册</option><option>六年级下册</option><option>四年级下册</option><option>三年级下册</option>
+          </select>
         </div>
       </div>
       <input type="file" id="fileOrder" accept=".txt,.docx,.xlsx,.doc,.xls" onchange="uploadOrder(event)" class="hidden">
