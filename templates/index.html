@@ -517,6 +517,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
               class="ml-auto text-[10.5px] px-2 py-0.5 rounded-md bg-[#bc4742] text-white hover:bg-[#9b2c2c]">📑 查看报告</button>
             <button onclick="downloadDocxReport()" title="导出按模块分组的错题报告 DOCX（含位置/原因/建议/截图）"
               class="text-[10.5px] px-2 py-0.5 rounded-md bg-[#2d6a4f] text-white hover:bg-[#1b4332]">⬇ 导出DOCX</button>
+            <button onclick="genScriptBtn()" title="把有题干的题目汇总生成解析脚本 DOCX（LLM知识点，可下载）"
+              class="text-[10.5px] px-2 py-0.5 rounded-md bg-[#457b9d] text-white hover:bg-[#2a5a7a]">📄 生成脚本</button>
+            <button onclick="listScripts()" title="查看/下载已生成的解析脚本"
+              class="text-[10.5px] px-2 py-0.5 rounded-md bg-[#f4a261] text-white hover:bg-[#e76f51]">🗂 已生成</button>
           </div>
           <div id="wrongList" class="flex-1 overflow-y-auto px-3 py-2 space-y-2">
             <div class="text-center py-6 text-[#9aa5a0] bg-[#faf8f3] rounded-lg text-[11px]">暂无错题</div>
@@ -1437,6 +1441,37 @@ function downloadDocxReport(){
 function closeLiveReport(){
   const mask=$('liveReportMask');
   mask.classList.add('hidden'); mask.classList.remove('flex');
+}
+// ★ 生成题目解析脚本（有题干+答案的题汇总成 docx，LLM 知识点，可下载）
+function genScriptBtn(){
+  const btn=event&&event.currentTarget;
+  if(btn){btn.disabled=true;btn.textContent='生成中…'}
+  fetch('/api/script/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
+    .then(r=>r.json()).then(d=>{
+      if(d.success&&d.url){
+        const a=document.createElement('a');
+        a.href=d.url; a.download=''; document.body.appendChild(a); a.click(); a.remove();
+        alert(`✅ 解析脚本已生成并开始下载\n\n共 ${d.count} 题（跳过 ${d.skipped} 题无题干/纯听音）\n每道题含：位置/题干/选项/正确答案/LLM知识点`);
+      }else{
+        alert('❌ '+(d.error||'生成失败'));
+      }
+    }).catch(e=>alert('❌ 请求失败：'+e))
+    .finally(()=>{if(btn){btn.disabled=false;btn.textContent='📄 生成脚本'}});
+}
+// ★ 列出已生成的解析脚本（可下载）
+function listScripts(){
+  fetch('/api/script/list').then(r=>r.json()).then(d=>{
+    if(!d.success||!d.files.length){
+      alert('还没有已生成的解析脚本。\n\n答题过程中有题干的题目会在单元答完后自动生成到 gen_scripts/，或点「生成脚本」手动生成。');
+      return;
+    }
+    let msg='已生成的解析脚本：\n';
+    d.files.forEach((f,i)=>{msg+=`${i+1}. ${f.name}（${f.size}字节, ${f.mtime}）\n`});
+    msg+='\n点确定后开始下载最近一份？';
+    if(!confirm(msg))return;
+    const a=document.createElement('a');
+    a.href=d.files[0].url; a.download=''; document.body.appendChild(a); a.click(); a.remove();
+  }).catch(e=>alert('❌ 请求失败：'+e));
 }
 function refreshLiveReport(){
   fetch('/api/errors/live-status').then(r=>r.json()).then(st=>{

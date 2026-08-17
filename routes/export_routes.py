@@ -303,14 +303,18 @@ def register(app, state_provider=None):
         """下载导出文件"""
         reports_dir = Path(__file__).parent.parent / "outputs" / "reports"
         file_path = reports_dir / filename
-        
-        # 也检查 save_dir
+
+        # 也检查 save_dir / gen_scripts（生成脚本也走这里下载）
         if not file_path.exists():
             config = _load_export_config()
             save_dir = config.get("save_dir", "")
             if save_dir:
                 file_path = Path(save_dir) / filename
-        
+        if not file_path.exists():
+            _gen = Path(__file__).parent.parent / "gen_scripts"
+            if _gen.exists():
+                file_path = _gen / filename
+
         if file_path.exists():
             return send_file(str(file_path), as_attachment=True)
         return jsonify({"error": "文件不存在"}), 404

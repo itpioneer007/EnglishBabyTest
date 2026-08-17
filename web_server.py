@@ -4683,6 +4683,93 @@ def api_modules_result():
 
 
 # ============================================================
+# 题目解析脚本生成（把收集到的题汇总成脚本 docx，供下载）
+# ============================================================
+@app.route("/api/script/generate", methods=["POST"])
+def api_script_generate():
+    """从当前巡检状态（_inspection_state.questions）生成题目解析脚本 docx。
+
+    只包含有题干+有正确答案（非纯听音）的题：题干+位置+选项+正确答案+LLM知识点。
+    POST Body: { module?: "单元自检", unit?: 6 }
+    → 返回 { success, path, url, count, skipped }
+    """
+    global _inspection_state
+    data = request.get_json() or {}
+    _mod = (data.get("module") or "").strip() or _inspection_state.get("module", "") or "题目解析"
+    _unit = data.get("unit") or _inspection_state.get("unit") or 0
+    try:
+        sys.path.insert(0, str(Path(__file__).parent / "scripts"))
+        from common.gen_script import QuestionCollector
+
+        # 保存到 outputs/reports（复用 /api/export/download 下载）
+        _reports_dir = PROJECT_ROOT / "outputs" / "reports"
+        _reports_dir.mkdir(parents=True, exist_ok=True)
+        coll = QuestionCollector(
+            module=_mod,
+            version=_inspection_state.get("version", "湘少版"),
+            grade=_inspection_state.get("grade", "五年级上册"),
+            save_root=str(_reports_dir),
+        )
+        qs = _inspection_state.get("questions", {}) or {}
+        _n_skipped = 0
+        for _k, _q in qs.items():
+            _stem = (_q.get("stem") or "").strip()
+            # 只收有题干的（纯听音/占位符跳过）
+            if not _stem or _stem.startswith("第") and "题（" in _stem:
+                _n_skipped += 1
+                continue
+            _ans = _q.get("script_answer") or ""
+            if not _ans:
+                # 界面题无标准答案 → 跳过（只有明确答案来源的题才可靠）
+                _n_skipped += 1
+                continue
+            coll.add(
+                qno=_q.get("module_qno") or _q.get("idx") or 0,
+                stem=_stem,
+                options=[],
+                answer=_ans,
+                qtype=_q.get("question_type", ""),
+                unit=int(_unit) if str(_unit).isdigit() else 0,
+                big=_q.get("big"),
+            )
+        if not coll.questions:
+            return jsonify({"success": False,
+                            "error": f"当前没有可生成解析的题目（有题干+答案的题）"
+                                     f"（{_n_skipped} 题无题干/无答案跳过）"
+                                     f"。注意：答题过程中已自动生成脚本的可点下方'已生成脚本'下载。"}), 400
+        path = coll.finish_unit(unit=int(_unit) if str(_unit).isdigit() else 0)
+        if not path:
+            return jsonify({"success": False, "error": "脚本生成失败"}), 500
+        return jsonify({
+            "success": True,
+            "path": str(path),
+            "url": f"/api/export/download/{Path(path).name}",
+            "count": len(coll.questions),
+            "skipped": coll.skipped_no_stem + _n_skipped,
+        })
+    except Exception as e:
+        log_msg(f"❌ 生成脚本失败: {e}", "error")
+        return jsonify({"success": False, "error": f"生成脚本失败: {e}"}), 500
+
+
+@app.route("/api/script/list", methods=["GET"])
+def api_script_list():
+    """列出已生成的题目解析脚本（gen_scripts/ + outputs/reports/ 下的 *生成脚本*.docx）"""
+    files = []
+    for _d in (PROJECT_ROOT / "gen_scripts", PROJECT_ROOT / "outputs" / "reports"):
+        if _d.exists():
+            for f in sorted(_d.glob("*生成脚本*.docx"), reverse=True):
+                files.append({
+                    "name": f.name,
+                    "path": str(f),
+                    "size": f.stat().st_size,
+                    "mtime": datetime.fromtimestamp(f.stat().st_mtime).strftime("%Y-%m-%d %H:%M"),
+                    "url": f"/api/export/download/{f.name}",
+                })
+    return jsonify({"success": True, "files": files})
+
+
+# ============================================================
 # 启动
 # ============================================================
 

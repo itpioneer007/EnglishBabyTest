@@ -39,6 +39,26 @@ _KNOWLEDGE_KWS = ("语法", "句型", "词汇", "单词", "固定搭配", "时�
                   "am/is/are", "can", "like", "want", "what", "where", "who",
                   "When", "How", "Do ", "Does ", "Is ", "Are ")
 
+# ★★★ 固定解析提示词模板（用户要求：规范解析方式与准度，不能乱讲，符合年级要求）
+#   解析必须满足：考点准确 + 理由对应正确答案 + 年级适配 + 精简有说服力
+#   任何解析生成（前端/后端/批量）都走这个模板，保证一致性。
+KNOWLEDGE_PROMPT_TEMPLATE = (
+    "你是{g_grade}（{g_version}）英语老师，正在给学生讲解一道错题的考点。\n"
+    "题目：{g_stem}\n"
+    "选项：{g_options}\n"
+    "正确答案：{g_answer}\n\n"
+    "请给出本题的知识点解析，必须遵守以下规范：\n"
+    "1. 【准确】考点必须是该题真正的语法/词汇/句型点，结合选项和正确答案分析，"
+    "不得臆造考点，不得泛泛而谈。\n"
+    "2. 【年级适配】解释方式必须符合{g_grade}学生的认知水平"
+    "（如be动词、一般现在时、名词复数这类该年级正在学的知识），"
+    "不能讲超纲概念（如虚拟语气、定语从句）。\n"
+    "3. 【对应答案】必须明确说明为什么{g_answer}是对的，其他选项为什么错/不同类。\n"
+    "4. 【精简】30-70字，直接说结论，不要铺垫、不要'首先/其次'。\n"
+    "5. 【格式】用中文解释，英文单词保留原文；只输出解析本身，不要标题、编号、前缀。\n"
+    "6. 【禁止】禁止'涉及XX相关知识点''本题考查XX'这类模糊套话，禁止编造教材没有的内容。"
+)
+
 
 def _extract_ui_question(xml, answer="", qtype_hint=""):
     """从答题页 XML 提取一道题的（题干/选项/题型），供脚本生成收集。
@@ -178,23 +198,34 @@ class QuestionCollector:
             from src.reviewer_common import LLMClient
             llm = LLMClient.from_config()
             opt_str = " ".join(q["options"]) if q["options"] else "（无文字选项）"
-            prompt = (
-                f"你是{self.grade}（{self.version}）英语老师，给学生讲一道错题的考点。\n"
-                f"题目：{q['stem']}\n"
-                f"选项：{opt_str}\n"
-                f"正确答案：{q['answer']}\n\n"
-                f"请用该年级学生能懂的话，给出本题的知识点解析。要求：\n"
-                f"1. 精简（30-60字），直接点出考点和为什么选这个答案\n"
-                f"2. 要具体有说服力，符合{self.grade}英语课标，不要模糊的'涉及XX相关知识点'\n"
-                f"3. 用中文解释，英文单词保留原文\n"
-                f"只输出知识点解析本身，不要标题不要编号。"
-            )
-            ans = (llm.ask(prompt) or "").strip()
-            if ans and len(ans) > 5 and "LLM 调用失败" not in ans:
+            # ★ 固定模板（KNOWLEDGE_PROMPT_TEMPLATE），保证解析规范一致
+            prompt = KNOWLEDGE_PROMPT_TEMPLATE.format(
+                g_grade=self.grade, g_version=self.version,
+                g_stem=q["stem"], g_options=opt_str, g_answer=q["answer"])
+            ans = ""
+            for _try in range(2):  # 不合格重试一次
+                ans = (llm.ask(prompt) or "").strip()
+                if ans and len(ans) > 5 and "LLM 调用失败" not in ans and self._check_knowledge_ok(ans):
+                    break
+                ans = ""  # 不合格 → 重试
+            if ans:
                 return ans[:120]
         except Exception as _e:
             print(f"  ⚠ 知识点 LLM 生成失败: {_e}")
         return self._auto_knowledge(q)
+
+    # ------------------------------------------------------------
+    @staticmethod
+    def _check_knowledge_ok(ans):
+        """解析质量校验：模糊套话/超纲词 → 不合格（防'乱讲'）"""
+        fuzzy = ("涉及", "相关知识点", "本题考查", "本道题考查", "一般考查", "基础知识点")
+        if any(f in ans for f in fuzzy):
+            return False
+        # 超纲概念（五年级不应出现）
+        over = ("虚拟语气", "定语从句", "现在完成时", "过去完成时", "被动语态", "非谓语")
+        if any(o in ans for o in over):
+            return False
+        return True
 
     # ------------------------------------------------------------
     def finish_unit(self, unit):
