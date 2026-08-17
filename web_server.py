@@ -4754,11 +4754,14 @@ def api_script_generate():
 
 @app.route("/api/script/list", methods=["GET"])
 def api_script_list():
-    """列出已生成的题目解析脚本（gen_scripts/ + outputs/reports/ 下的 *生成脚本*.docx）"""
+    """列出已生成的题目解析脚本（gen_scripts/ + outputs/reports/ 下的脚本 docx）"""
     files = []
     for _d in (PROJECT_ROOT / "gen_scripts", PROJECT_ROOT / "outputs" / "reports"):
         if _d.exists():
-            for f in sorted(_d.glob("*生成脚本*.docx"), reverse=True):
+            for f in sorted(_d.glob("*.docx"), reverse=True):
+                # 只收解析脚本（新规范名：日期+版本+年级+模块；旧名含"生成脚本"）
+                if "生成脚本" not in f.name and not re.match(r"^\d{6}.{0,20}(单元自检|听力专项|口语训练|知识过关|巧记单词|语音评测)", f.name):
+                    continue
                 files.append({
                     "name": f.name,
                     "path": str(f),

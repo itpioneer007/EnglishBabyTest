@@ -244,7 +244,9 @@ class QuestionCollector:
             if not q.get("knowledge"):
                 q["knowledge"] = self._llm_knowledge(q)
         _u = f"U{unit}"
-        fname = f"{datetime.now().strftime('%y%m%d')}_{self.module}_{self.grade.replace('年级', '')}{_u}_生成脚本.docx"
+        # ★ 规范文件名：日期+版本缩写+年级缩写+模块[+单元]，如
+        #   "260817湘少五上单元自检U6.docx"（参考官方脚本"260714新湘鲁六上听力专项"格式）
+        fname = f"{datetime.now().strftime('%y%m%d')}{self._short_version()}{self._short_grade()}{self.module}{_u}.docx"
         path = os.path.join(self.save_root, fname)
         doc = Document()
         doc.add_heading(f"{self.module} · {self.grade} {_u} · 题目解析脚本", level=0)
@@ -281,6 +283,25 @@ class QuestionCollector:
         if q.get("qno"):
             _parts.append(f"第{q['qno']}题")
         return " · ".join(_parts)
+
+    # ------------------------------------------------------------
+    def _short_version(self):
+        """版本缩写：湘少版→湘少；新湘鲁版→新湘鲁；其余原样（去'版'字）"""
+        v = (self.version or "").strip()
+        v = v.replace("（", "").replace("）", "").replace("(", "").replace(")", "")
+        for k in ("新湘鲁", "湘鲁", "湘少", "人教", "外研", "译林"):
+            if k in v:
+                return k
+        return v.replace("版", "") or "通用"
+
+    def _short_grade(self):
+        """年级缩写：五年级上册→五上；六年级下册→六下；其余压缩"""
+        g = (self.grade or "").strip()
+        m = re.match(r"([一二三四五六七八九])\s*年级\s*(上|下)\s*册", g)
+        if m:
+            return f"{m.group(1)}{m.group(2)}"
+        # 兜底：去掉"年级/册"字
+        return g.replace("年级", "").replace("册", "") or ""
 
     # ------------------------------------------------------------
     @staticmethod
