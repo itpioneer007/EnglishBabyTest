@@ -704,9 +704,12 @@ def run_module(d, units=None):
         total += q
         print(f"  ✅ U{unit_num} 完成: {q} 题")
         # ★ 单元答完：有题干的题汇总生成脚本 docx（无题干/纯听音跳过）
+        #   LLM 知识点在此生成一次（finish_unit 内部），前端只下载不重复生成
         try:
             if _coll is not None:
-                _coll.finish_unit(unit=unit_num)
+                _script_path = _coll.finish_unit(unit=unit_num)
+                if _script_path:
+                    step_log(f"📄 已生成解析脚本: {os.path.basename(_script_path)}（可在「审查脚本」区下载）", "success")
         except Exception as _e:
             print(f"  ⚠ 生成脚本失败: {_e}")
         # back 回单元自检列表
