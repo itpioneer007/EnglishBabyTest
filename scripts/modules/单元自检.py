@@ -255,6 +255,7 @@ def _answer_loop(d, max_q=200):
       填空(EditText) → 阅读多小题(多组字母) → 单选/判断(字母)
       → 匹配(人物配对) → 排序(图片/句子) → 其他
     """
+    global _coll, _cur_unit  # ★ 题目解析收集器（run_module 初始化）
     q = 0
     unknown_cnt = 0  # 连续未知题型计数（防空转）
     # 进入时读当前题号 X/Y 初始化 q（中途接管时计数不错位）
@@ -384,6 +385,15 @@ def _answer_loop(d, max_q=200):
             opt = _m_opt.group(1)
         if opt:
             q += 1
+            # ★ 题目解析收集：有题干的题收集（题干+选项+答案），单元答完汇总写脚本
+            try:
+                from common.gen_script import _extract_ui_question
+                _qinfo = _extract_ui_question(xml0, opt)
+                if _coll is not None:
+                    _coll.add(qno=q, stem=_qinfo["stem"], options=_qinfo["options"],
+                              answer=opt, qtype=_qinfo["qtype"], unit=_cur_unit)
+            except Exception:
+                pass
             # ★ 修复 StaleObjectException：页面切换/加载中元素会过期。
             #   点击前重新 dump 验证 opt 仍在，且点击用坐标（避免 d(text=).click() 查两次）
             _clicked = False
@@ -599,6 +609,19 @@ def run_module(d, units=None):
 
     units: 单元范围，如 [1,2] 或 '1-2'；None=默认全部
     """
+    # ★ 题目解析收集器（模块级，_answer_loop 里 add，单元答完 finish_unit 写脚本）
+    global _coll, _cur_unit
+    _coll = None
+    _cur_unit = 0
+    try:
+        from common.gen_script import QuestionCollector
+        _coll = QuestionCollector(
+            module="单元自检",
+            version=BOOK_VERSION if 'BOOK_VERSION' in globals() else "湘少版",
+            grade=GRADE_LEVEL if 'GRADE_LEVEL' in globals() else "五年级上册",
+        )
+    except Exception as _e:
+        print(f"  ⚠ 脚本生成器初始化失败（不影响答题）: {_e}")
     t0 = time.time()
     total = 0
     _units = _resolve_units(units, UNITS)
@@ -676,9 +699,16 @@ def run_module(d, units=None):
         print(f"\n  🎯 单元自检 Unit {unit_num} [{ui+1}/{len(UNITS)}]")
         if not _enter_unit(d, unit_num):
             continue
+        _cur_unit = unit_num  # ★ 供收集器标注单元
         q = _answer_loop(d)
         total += q
         print(f"  ✅ U{unit_num} 完成: {q} 题")
+        # ★ 单元答完：有题干的题汇总生成脚本 docx（无题干/纯听音跳过）
+        try:
+            if _coll is not None:
+                _coll.finish_unit(unit=unit_num)
+        except Exception as _e:
+            print(f"  ⚠ 生成脚本失败: {_e}")
         # back 回单元自检列表
         for _ in range(4):
             if d(text="去答题").exists(timeout=1.5):
