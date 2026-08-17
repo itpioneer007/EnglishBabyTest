@@ -194,8 +194,16 @@ class QuestionCollector:
         if not stem or stem in ("(无题干文字)", "(无)", "听录音", "听录音，选择正确答案"):
             self.skipped_no_stem += 1
             return
-        # 过滤纯听音指令类题干（"听录音，选出你听到的单词" 无实际内容 → 跳）
-        if re.fullmatch(r"(听录音|听音|听一听|Listen)[，,。. ]*(选择|选出|判断|勾选|选出你听到的).*", stem, re.IGNORECASE):
+        # ★ 听音题判定（用户明确要求）：题干含"听"字即跳过——
+        #   "听词汇/听句子/听对话/听录音" 全是听力题，题目实质在音频里，
+        #   脚本里没有可解析的题干文字，跳过不做脚本审查
+        #   （保留含"听"的非听音词：如"听说读写"等极少数情况由下方白名单保护）
+        _LISTEN_WHITELIST = ("听说读写", "听力理解能力", "听说")
+        if "听" in stem and not any(w in stem for w in _LISTEN_WHITELIST):
+            self.skipped_no_stem += 1
+            return
+        # 兜底：英语 Listen/listen 开头（"Listen and choose"等）
+        if re.match(r"^\s*(Listen|listen|Listening)\b", stem):
             self.skipped_no_stem += 1
             return
         opts = [str(o).strip() for o in (options or []) if str(o).strip()]

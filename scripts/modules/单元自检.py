@@ -267,21 +267,26 @@ def _answer_loop(d, max_q=200):
                 return
             from common.gen_script import _extract_ui_question
             _qi = _extract_ui_question(_xml_src)
+            # ★ 听音题直接跳过（题干含"听"字：听词汇/听句子/听对话/听录音），
+            #   不调 LLM 判定答案（避免无用功），add() 内部也会二次过滤
+            _stem0 = (_qi["stem"] or "").strip()
+            if not _stem0 or "听" in _stem0:
+                return
             _ans = _opt or ""
             # 若未提供答案（填空/排序等），用 LLM 判定（题目内容可见时可靠）
-            if not _ans and _qi["stem"]:
+            if not _ans and _stem0:
                 try:
                     from src.reviewer_common import LLMClient
                     _opt_str = " ".join(_qi["options"]) if _qi["options"] else "（无选项）"
                     _llm_ans = (LLMClient.from_config().ask(
-                        f"五年级英语题，题干：{_qi['stem']}，选项：{_opt_str}。"
+                        f"五年级英语题，题干：{_stem0}，选项：{_opt_str}。"
                         f"请直接回答正确答案是哪个选项（只输出选项内容，不要解释）") or "").strip()
                     if _llm_ans and len(_llm_ans) < 40:
                         _ans = _llm_ans
                 except Exception:
                     pass
-            if _qi["stem"] and _ans:
-                _coll.add(qno=q, stem=_qi["stem"], options=_qi["options"],
+            if _stem0 and _ans:
+                _coll.add(qno=q, stem=_stem0, options=_qi["options"],
                           answer=_ans, qtype=_qi["qtype"] or "单元自检", unit=_cur_unit)
         except Exception:
             pass
