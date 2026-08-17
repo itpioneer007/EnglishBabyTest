@@ -1559,6 +1559,196 @@ _KEYBOARD_LETTERS = {
 }
 
 
+def _handle_word_fill(d, config):
+    """★ 选词填空专用（用户确认流程）：点击空位 → 激活选词栏 → 点选单词 → 检查。
+
+    与打字填空(_handle_fill_blank)不同：选词填空不是输入文本，
+    而是【点击空位弹出选词栏，再点选栏中单词】。
+    ★ 用户关键要求：每次点击后要等选词栏/单词状态【稳定不变化】再点下一步。
+
+    页面结构（实测）：
+      - 空位: LinearLayout(clickable=true) 容器 + 内部 tv_sort(显示序号1,2,3...)
+      - 选词栏: 点击空位后弹出的 CheckBox 列表（如 green T-shirt / yellow T-shirt）
+      - 选中后: 空位 tv_sort 序号变为所选单词文本
+    """
+    import random
+    print(f"    选词填空题，处理中...")
+    step_log("📝 选词填空：点击空位→选词→检查", "step")
+
+    # 空位定义：短文区的 CheckBox（text='' 是空位；checked=false=未填，true=已填）
+    #   ★ 短文可滚动 → 不能固定 y 范围，排除顶部(状态栏<200)和底部导航(>2250)即可
+    def _find_slots():
+        xml = d.dump_hierarchy()
+        slots = []
+        for m in re.finditer(r'<node[^>]*CheckBox[^>]*>', xml):
+            b = m.group(0)
+            bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', b)
+            if not bm:
+                continue
+            x1, y1, x2, y2 = int(bm.group(1)), int(bm.group(2)), int(bm.group(3)), int(bm.group(4))
+            if y1 < 200 or y2 > 2250:   # 排除顶部状态栏/底部导航
+                continue
+            # 空位 CheckBox 的 text 为空（无单词）；已填的显示单词
+            tm = re.search(r'text="([^"]*)"', b)
+            txt = (tm.group(1).strip() if tm else '')
+            checked = 'checked="true"' in b
+            # 未填 = checked=false 且 text 空（或有 tv_sort 序号）
+            slots.append(((x1+x2)//2, (y1+y2)//2, checked, txt))
+        # 未填优先，按 y 排序
+        slots.sort(key=lambda s: (s[2], s[1]))
+        return slots
+
+    # 选词栏单词：点击空位后弹出的英文单词（排除短文正文 question_title_tv + 空位 select_tv）
+    #   ★ 短文可滚动 → y 范围放宽（150-2250），靠"非question_title_tv + 非短文词"区分
+    def _find_word_panel(exclude_texts):
+        xml = d.dump_hierarchy()
+        words = []
+        for m in re.finditer(r'<node[^>]*>', xml):
+            b = m.group(0)
+            tm = re.search(r'text="([^"]{2,30})"', b)
+            if not tm:
+                continue
+            txt = tm.group(1).strip()
+            if not re.search(r'[A-Za-z]', txt):   # 必须含英文
+                continue
+            if txt in exclude_texts:              # 排除短文已有词
+                continue
+            if 'question_title_tv' in b:          # 排除短文正文
+                continue
+            if 'select_tv' in b:                  # 排除空位本身（已填单词的空位）
+                continue
+            bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', b)
+            if not bm:
+                continue
+            x1, y1, x2, y2 = int(bm.group(1)), int(bm.group(2)), int(bm.group(3)), int(bm.group(4))
+            if y1 < 150 or y2 > 2250:             # 排除顶部/底部导航
+                continue
+            if len(txt) > 25:
+                continue
+            checked = 'checked="true"' in b
+            words.append((txt, checked, (x1+x2)//2, (y1+y2)//2, y1))
+        words.sort(key=lambda w: w[4])
+        return words
+
+    def _wait_stable(timeout=3.0, interval=0.3):
+        """等待页面稳定（连续两次 dump 一致），用户要求'点击到不会变化再继续'"""
+        try:
+            _a = d.dump_hierarchy()
+            time.sleep(interval)
+            _b = d.dump_hierarchy()
+            return _a == _b
+        except Exception:
+            return True
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            try:
+                _x1 = d.dump_hierarchy()
+                time.sleep(interval)
+                _x2 = d.dump_hierarchy()
+                if _x1 == _x2:
+                    return True
+            except Exception:
+                pass
+        return False
+
+    # ── 循环填所有空位 ──
+    # ★ 收集短文正文已有词（question_title_tv 中），选词栏单词排除这些（防误点正文）
+    def _collect_short_texts():
+        try:
+            _xml = d.dump_hierarchy()
+            return set(re.findall(r'question_title_tv[^>]*text="([^"]{1,25})"', _xml)
+                       + re.findall(r'text="([^"]{1,25})"[^>]*question_title_tv', _xml))
+        except Exception:
+            return set()
+    _short_words = _collect_short_texts()
+    _max_rounds = 20
+    for _round in range(_max_rounds):
+        slots = _find_slots()
+        # ★ 未填 = checked=false 且 text 空（填过的空位 checked=false 但 text=单词，如 fifty）
+        empty = [s for s in slots if not s[2] and not s[3]]
+        if not empty:
+            break   # 全部填完
+        cx, cy = empty[0][0], empty[0][1]
+        # ① 点击空位激活选词栏
+        try:
+            d.click(cx, cy)
+        except Exception:
+            pass
+        # ★ 等选词栏出现（用户关键：点击到稳定不变化再继续）——轮询等新单词出现
+        time.sleep(1.2)
+        for _w in range(4):
+            _xml_w = d.dump_hierarchy()
+            _panel = _find_word_panel(_short_words)
+            if _panel:
+                break
+            time.sleep(0.8)
+        _wait_stable()
+        # ② 找选词栏单词并点一个（优先未选的）
+        words = _panel if '_panel' in dir() else _find_word_panel(_short_words)
+        if not words:
+            print(f"    ⚠ 空位({cx},{cy})点击后无选词栏出现，可能是已填/布局变化")
+            break
+        target = None
+        for w in words:
+            if not w[1]:   # 未选中优先
+                target = w
+                break
+        if target is None and words:
+            target = words[0]
+        try:
+            d.click(target[2], target[3])
+        except Exception:
+            pass
+        # ③ 等单词选中/空位更新稳定（用户关键要求：不变化再继续）
+        time.sleep(1.2)
+        _wait_stable()
+        print(f"    空位{_round+1} → 选词 {target[0]}")
+        step_log(f"  ✏ 选词: {target[0]}", "info")
+    else:
+        print(f"    ⚠ 选词填空 {_max_rounds} 轮未填完，可能选词栏异常")
+    _wait_stable()
+
+    # ── 点"检查" ──
+    _checked = False
+    for _ in range(6):
+        try:
+            if d(text="检查").exists(timeout=1.2):
+                d(text="检查").click()
+                print(f"    选词填空完成，点击检查")
+                step_log("✅ 选词填空全部完成", "success")
+                time.sleep(0.8)
+                _checked = True
+                break
+        except Exception:
+            pass
+        try:
+            d.swipe(540, 1800, 540, 1000, duration=0.4)
+        except Exception:
+            pass
+        time.sleep(0.6)
+    # 等检查按钮消失（提交成功）
+    if _checked:
+        for _ in range(8):
+            try:
+                _xml_chk = d.dump_hierarchy()
+                if 'text="检查"' not in _xml_chk:
+                    break
+            except Exception:
+                pass
+            time.sleep(0.5)
+    # 下一题（答对自动跳/答错出现下一题）
+    try:
+        if d(text="下一题").exists(timeout=2):
+            d(text="下一题").click()
+            print(f"    点击下一题")
+            step_log("➡ 选词填空答完，进入下一题", "info")
+            time.sleep(0.8)
+            return True
+    except Exception:
+        pass
+    return _checked
+
+
 def _handle_fill_blank(d, config):
     """处理填空题（方案一：FastInputIME 输入法注入，用户确认最稳定）：
     1. 循环找空 EditText（text='' 即未填；不能用坐标去重——填一个框后布局会变化）

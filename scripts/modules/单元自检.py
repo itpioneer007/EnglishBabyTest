@@ -358,6 +358,17 @@ def _answer_loop(d, max_q=200):
         _has_letter = bool(re.search(r'text="[TFABCDE]"', xml0))
         _fill_hint = any(kw in xml0 for kw in
                          ('填空', '补全', '每空', '填写', '填词', '完成小短文'))
+        # ★ 选词填空优先：题干含"选词"且页面有 tv_sort 空位结构 → 用选词专用处理
+        #   （选词填空不是打字输入，是点空位→选词栏→点单词；用户确认流程）
+        _word_fill_hint = ('选词' in xml0) and ('tv_sort' in xml0) and not _has_edittext
+        if _word_fill_hint:
+            from engine import _handle_word_fill
+            if _handle_word_fill(d, {}):
+                q += 1
+                print(f"      → 第{q}题(选词填空)")
+                step_log(f"  第{q}题 选词填空完成", "info")
+                _collect_q(xml0)   # ★ 选词填空也收集
+                continue
         if _has_edittext or (_fill_hint and not _has_letter):
             from engine import _handle_fill_blank
             if _handle_fill_blank(d, {}):
