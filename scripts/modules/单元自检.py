@@ -258,6 +258,34 @@ def _answer_loop(d, max_q=200):
     global _coll, _cur_unit  # ★ 题目解析收集器（run_module 初始化）
     q = 0
     unknown_cnt = 0  # 连续未知题型计数（防空转）
+
+    # ★ 统一题目收集：所有题型分支共用（单选/填空/匹配/排序/阅读/自评）
+    #   有题干+有答案才收集（听音/无题干自动跳过，收集器内部处理）
+    def _collect_q(_xml_src, _opt=""):
+        try:
+            if _coll is None:
+                return
+            from common.gen_script import _extract_ui_question
+            _qi = _extract_ui_question(_xml_src)
+            _ans = _opt or ""
+            # 若未提供答案（填空/排序等），用 LLM 判定（题目内容可见时可靠）
+            if not _ans and _qi["stem"]:
+                try:
+                    from src.reviewer_common import LLMClient
+                    _opt_str = " ".join(_qi["options"]) if _qi["options"] else "（无选项）"
+                    _llm_ans = (LLMClient.from_config().ask(
+                        f"五年级英语题，题干：{_qi['stem']}，选项：{_opt_str}。"
+                        f"请直接回答正确答案是哪个选项（只输出选项内容，不要解释）") or "").strip()
+                    if _llm_ans and len(_llm_ans) < 40:
+                        _ans = _llm_ans
+                except Exception:
+                    pass
+            if _qi["stem"] and _ans:
+                _coll.add(qno=q, stem=_qi["stem"], options=_qi["options"],
+                          answer=_ans, qtype=_qi["qtype"] or "单元自检", unit=_cur_unit)
+        except Exception:
+            pass
+
     # 进入时读当前题号 X/Y 初始化 q（中途接管时计数不错位）
     for _ in range(3):
         try:
@@ -336,6 +364,7 @@ def _answer_loop(d, max_q=200):
                 q += 1
                 print(f"      → 第{q}题(填空)")
                 step_log(f"  第{q}题 填空完成", "info")
+                _collect_q(xml0)   # ★ 填空也收集（有题干时）
                 continue
         # ── 5. 阅读多小题检测（多组字母选项）──
         # ★ 速度优化：传入已 dump 的 xml0，避免函数内重复 dump
@@ -343,6 +372,7 @@ def _answer_loop(d, max_q=200):
             q += 1
             print(f"      → 第{q}题(阅读多小题)")
             step_log(f"  第{q}题 阅读多小题完成", "info")
+            _collect_q(xml0)   # ★ 阅读多小题也收集
             continue
         # ── 5.5 自评题（"阅读与写作"等：不支持在线作答，页面有"我答对了/我答错了"）──
         #   ★ 必须放在单选检测之前！自评题页面可能含标题字母（如"A"），
@@ -355,6 +385,7 @@ def _answer_loop(d, max_q=200):
             q += 1
             print(f"      → 第{q}题(自评题)")
             step_log(f"  第{q}题 自评完成", "info")
+            _collect_q(xml0, "自评")   # ★ 自评题收集题干（答案标"自评"）
             time.sleep(3.0)   # 等交卷/报告/跳转
             # 交卷后去向处理：有题号→继续循环；有查看报告→点击→back；
             # 回主页（有"单元自检"入口）→ 点进列表；否则直接返回
@@ -386,14 +417,7 @@ def _answer_loop(d, max_q=200):
         if opt:
             q += 1
             # ★ 题目解析收集：有题干的题收集（题干+选项+答案），单元答完汇总写脚本
-            try:
-                from common.gen_script import _extract_ui_question
-                _qinfo = _extract_ui_question(xml0, opt)
-                if _coll is not None:
-                    _coll.add(qno=q, stem=_qinfo["stem"], options=_qinfo["options"],
-                              answer=opt, qtype=_qinfo["qtype"], unit=_cur_unit)
-            except Exception:
-                pass
+            _collect_q(xml0, opt)
             # ★ 修复 StaleObjectException：页面切换/加载中元素会过期。
             #   点击前重新 dump 验证 opt 仍在，且点击用坐标（避免 d(text=).click() 查两次）
             _clicked = False
@@ -444,6 +468,7 @@ def _answer_loop(d, max_q=200):
         if any(kw in texts for kw in ("匹配", "配对", "为人物选择", "选择正确的描述")):
             if _handle_match_question(d, {}):
                 q += 1
+            _collect_q(xml0)   # ★ 匹配题收集题干
             continue
         # ── 8. 排序题（圆圈/图片/方框）──
         if any(kw in texts for kw in ("排序", "给图片排序", "给句子排序", "按顺序")):
@@ -468,6 +493,7 @@ def _answer_loop(d, max_q=200):
                 _ok = _handle_sort_question(d, {})
             if _ok:
                 q += 1
+            _collect_q(xml0)   # ★ 排序题收集题干
             continue
         # ── 9. 未知题型 → 提示，连续多次退出防空转 ──
         # ★ 速度优化：基于已 dump 的 xml0 正则提取文本
@@ -721,11 +747,17 @@ def run_module(d, units=None):
                     step_log(f"📄 已生成解析脚本: {os.path.basename(_script_path)}（可在「审查脚本」区下载）", "success")
         except Exception as _e:
             print(f"  ⚠ 生成脚本失败: {_e}")
-        # back 回单元自检列表
-        for _ in range(4):
-            if d(text="去答题").exists(timeout=1.5):
-                break
-            d.press("back"); time.sleep(0.6)
+        # ★ 安全回退到单元自检列表（目标"去答题"，保底主页——主页命中即停，
+        #   不会 back 过头退到桌面；非 yyb 自动冷启动）
+        try:
+            from common.tools import safe_back_to_home
+            safe_back_to_home(d, max_backs=4,
+                              extra_hit=lambda x: 'text="去答题"' in x or 'text="重新答题"' in x)
+        except Exception:
+            for _ in range(4):
+                if d(text="去答题").exists(timeout=1.5):
+                    break
+                d.press("back"); time.sleep(0.6)
 
     print(f"✅ 单元自检完成: {total} 题, 耗时 {time.time()-t0:.0f}s")
     return total

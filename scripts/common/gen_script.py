@@ -63,67 +63,77 @@ KNOWLEDGE_PROMPT_TEMPLATE = (
 
 def _extract_ui_question(xml, answer="", qtype_hint=""):
     """从答题页 XML 提取一道题的（题干/选项/题型），供脚本生成收集。
-    - 题干：优先 question_title_tv 节点；兜底长文本（排除按钮/进度/计时器噪音）
-    - 选项：字母开头项（A. xx / B. xx）或纯字母项（T/F/A-E 判断题无文字选项）
+    - 题干：分级提取——题干节点(question_title_tv/tv_caption/tv_title/tv_stem等)优先，
+      兜底长文本（排除按钮/进度/计时器/选项噪音）；多段题干合并（指令+内容）
+    - 选项：字母开头项（A. xx）或选项容器（option_cb 等）或纯字母（T/F）
     - 纯听音无题干（题干为空/仅"听录音"指令）→ stem 返回空，上层跳过
     """
     if not xml:
         return {"stem": "", "options": [], "qtype": qtype_hint}
-    # ① 题干：question_title_tv 优先，其次 tv_caption（单元自检等用 tv_caption）
-    #   ★ XML 属性顺序不固定（text 可能在 resource-id 前）→ 用非贪婪匹配任一顺序
-    stem = ""
-    for _rid in ("question_title_tv", "tv_caption"):
-        if stem:
-            break
-        for m in re.finditer(
-                rf'<node[^>]*resource-id="[^"]*{_rid}[^"]*"[^>]*text="([^"]+)"|'
-                rf'<node[^>]*text="([^"]+)"[^>]*resource-id="[^"]*{_rid}[^"]*"', xml):
-            t = (m.group(1) or m.group(2) or "").strip()
-            if t and len(t) < 80:
-                stem = t
-                break
-    # ★ 清洗题干里的分值噪音："选择各组中不同类的一项。 (共1分)" → 去掉"(共N分)"
-    stem = re.sub(r"[（(]\s*共\d+分\s*[）)]", "", stem).strip()
-    # ★ 合并完整题干：指令(如"请找出与下面选项不符的一项") + 具体内容(如单词/句子) 都要
-    #   很多题题干有两条文本：大指令 + 内容。只取第一条会丢内容 → 收集全部非噪音长文本
-    _stems = [stem] if stem else []
-    # 按 node 块遍历（提取 text + 检查该 node 的 resource-id，排除选项容器/按钮）
+
     noise = ("下一题", "上一题", "检查", "提交", "查看报告", "练习报告",
              "恭喜", "回答正确", "回答错误", "很遗憾", "练习结束还剩", "还剩",
              "得分", "用时", "点击录音", "点击结束", "继续答题", "退出训练",
              "答题卡", "单元自检", "口语训练", "听力专项", "知识过关",
              "巧记单词", "语音评测", "全脑记词", "单词听写", "查看解析",
              "正确答案", "错误答案", "本大题", "本小题", "分值", "满分",
-             "考前突破", "当前版本", "练习记录", "训练规则说明", "好的")
+             "考前突破", "当前版本", "练习记录", "训练规则说明", "好的",
+             "播放", "暂停", "重听", "上一页", "下一页")
+
+    def _is_noise(t):
+        if t in noise or any(n in t for n in noise):
+            return True
+        if re.match(r"^\d{1,2}:\d{2}$|^\d+(\.\d+)?%?$|^\d+\s*/\s*\d+$|^\d+分$", t):
+            return True
+        if re.match(r"^[A-F][.、．]\s*", t) or re.match(r"^[TF]\s*$", t):
+            return True
+        return False
+
+    def _node_parts(_block):
+        """从 node 块提取 (text, resource_id)"""
+        _mt = re.search(r'text="([^"]*)"', _block)
+        _mr = re.search(r'resource-id="([^"]*)"', _block)
+        return (_mt.group(1).strip() if _mt else "",
+                _mr.group(1) if _mr else "")
+
+    # ① 题干：优先题干节点（resource-id 含题干语义）——这些一定是题干文字
+    stem_nodes = []
     for _nd in re.finditer(r'<node\b[^>]*>', xml):
         _block = _nd.group(0)
-        _mt = re.search(r'text="([^"]*)"', _block)
-        if not _mt:
+        t, rid = _node_parts(_block)
+        if not t or len(t) < 2 or len(t) >= 100:
             continue
-        t = _mt.group(1).strip()
-        if not t or len(t) < 3 or len(t) >= 80:
+        if rid and re.search(r'(question_title|tv_caption|tv_title|tv_stem|tv_question|question_content|title_tv)', rid):
+            stem_nodes.append(t)
+    # ② 兜底：非选项/非噪音长文本（含短题干 ≥2 字符）
+    if not stem_nodes:
+        for _nd in re.finditer(r'<node\b[^>]*>', xml):
+            _block = _nd.group(0)
+            t, rid = _node_parts(_block)
+            if not t or len(t) < 2 or len(t) >= 100:
+                continue
+            # 排除选项容器/按钮/交互节点
+            if rid and re.search(r'(option_cb|option_iv|radio_btn|check_box|tv_option|btn_|tv_progress|tv_time|tv_index|iv_|img_)', rid):
+                continue
+            if _is_noise(t):
+                continue
+            stem_nodes.append(t)
+    # ③ 合并：去重 + 去包含（保留完整），最多 3 段
+    _merged = []
+    for t in stem_nodes:
+        t = re.sub(r"[（(]\s*共\d+分\s*[）)]", "", t).strip()  # 清洗分值
+        if not t:
             continue
-        # 选项容器/按钮/交互节点 → 跳过
-        if re.search(r'resource-id="[^"]*(?:option_cb|option_iv|radio_btn|check_box|tv_option|btn_|tv_progress)[^"]*"', _block):
+        if any(t == s or t in s or s in t for s in _merged):
             continue
-        if t in noise or any(n in t for n in noise):
-            continue
-        if re.match(r"^[A-F][.、．]\s*", t) or re.match(r"^[TF]\s*$", t):
-            continue
-        if re.match(r"^\d{1,2}:\d{2}$|^\d+(\.\d+)?%?$|^\d+\s*/\s*\d+$|^\d+分$", t):
-            continue
-        # 已含在已有题干里（如 tv_caption 原始含分值）→ 跳过避免重复
-        if any(t == s or t in s or s in t for s in _stems):
-            continue
-        _stems.append(t)
-        if len(_stems) >= 3:
+        _merged.append(t)
+        if len(_merged) >= 3:
             break
-    stem = " ".join(_stems).strip()
+    stem = " ".join(_merged).strip()
     # ★ 纯听音指令判定：题干仅为"听录音/听音选X"等指令性文字 → 视为无题干（跳过）
-    #   （听力题的实质内容在音频里，脚本里没有可解析的题干文字）
     if stem.strip() and re.fullmatch(
         r"(听录音|听音|听一听|Listen|听录音[，,。 ]?[选判勾][出择].*|"
-        r"听对话|听短文|听句子|听单词|听材料|听问题).*",
+        r"听对话|听短文|听句子|听单词|听材料|听问题|请听).*",
         stem.strip(), re.IGNORECASE):
         stem = ""
     # ② 选项：字母开头项（A. xx）优先

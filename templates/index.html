@@ -549,7 +549,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
       <button class="bg-white/20 hover:bg-white/35 rounded-lg px-3 py-1 text-[12px] transition" onclick="closeGuide()">关闭</button>
     </div>
     <div class="guide-body">
-      <div class="g-tip"><b>总览：</b>左边选「测什么」，右边三个 Tab：①任务配置 ②运行日志+手机画面 ③审查结果+错题日志。自动化点击和逐题审查在同一条日志里按时间排。</div>
+      <div class="g-tip"><b>总览：</b>左边选「测什么」，右边三个 Tab：①任务配置 ②运行日志+手机画面 ③审查结果+错题日志。自动化点击和逐题审查在同一条日志里按时间排；检测完成自动生成题目解析脚本（有题干+答案的题，LLM知识点），可在「审查脚本」卡底部下载。</div>
 
       <!-- 横向 4 步流程 -->
       <div class="g-flow">
@@ -574,7 +574,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
         <div class="g-step">
           <div class="g-sno">4</div>
           <div class="g-stitle">看结果</div>
-          <div class="g-sdesc">日志看过程，错题日志看问题，可导出DOCX</div>
+          <div class="g-sdesc">日志看过程，错题日志看问题，可导出DOCX；脚本自动生成可下载</div>
         </div>
       </div>
 
@@ -589,13 +589,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
 
       <!-- 常用按钮速查 -->
       <div class="g-sec">
-        <div class="g-sec-h"><span class="g-no">✓</span>四个入口怎么用<span class="g-pos">按需使用</span></div>
+        <div class="g-sec-h"><span class="g-no">✓</span>几个入口怎么用<span class="g-pos">按需使用</span></div>
         <div class="g-sec-b">
           <p><b>解析并开始检测</b> ＝ 选模块/版本/年级后一键跑（自动答题 + 逐题审查）</p>
-          <p><b>快速检查</b> ＝ 手机切到题目页再点，从当前题逐题截图审查</p>
           <p><b>停止</b> ＝ 随时中断任务</p>
-          <p><b>📑 查看报告</b> ＝ 弹层内看「实时错题报告」（按模块分组，含位置/原因/建议）</p>
-          <p><b>⬇ 导出DOCX</b> ＝ 把全部错题导出为 Word 文件，给检查人员传阅</p>
+          <p><b>⬇ 导出DOCX</b> ＝ 把全部错题导出为 Word 文件，给检查人员传阅（错题日志右上角）</p>
+          <p><b>已生成解析脚本</b> ＝ 检测中把有题干的题目（非纯听音）自动汇总成脚本 docx，含 LLM 知识点解析；在「审查脚本」卡底部统一下载（点文件名右侧「下载」）</p>
         </div>
       </div>
 
@@ -605,6 +604,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
         <div class="g-sec-b">
           <p><b>审查结果 Tab</b> ＝ 每题六维卡片（题干/内容/配图/作答/音频/答错后），绿=通过 / 红=不通过 / 灰=未检，点「通过/不通过」可人工标注</p>
           <p><b>错题日志</b> ＝ 按「模块 · 子模块」分组，显示位置、出错理由、改进建议、错题截图</p>
+          <p><b>脚本下载</b> ＝ 每个单元检测完成后日志会提示「已生成解析脚本: xxx」，文件在左侧「审查脚本」卡底部「已生成解析脚本」列表里</p>
         </div>
       </div>
 

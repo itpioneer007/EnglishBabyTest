@@ -305,6 +305,67 @@ def click_then_wait(d, click_text, expect_text, timeout=2.5, click_timeout=2):
         time.sleep(0.4)  # 兜底：给慢加载一次额外机会
     return ok
 
+# ★ 主页特征（英语宝主页判定，供模块间回退/保底使用）
+HOME_XML_FEATURES = ('switch_textbook_tv', '教材精学', '专项突破',
+                     '听课文', '全脑记词', '单词听写')
+APP_PACKAGE = "com.dinoenglish.yyb"
+
+
+def is_home_xml(xml: str) -> bool:
+    """判定 XML 是否英语宝主页（特征见 HOME_XML_FEATURES）"""
+    return bool(xml) and any(f in xml for f in HOME_XML_FEATURES)
+
+
+def safe_back_to_home(d, max_backs=6, extra_hit=None):
+    """★ 模块间安全回退到主页：back 循环但【检测到主页立即停】。
+
+    解决用户实测"back 过多退到手机桌面"：
+      - 模块内部/模块间的 back 循环只认目标特征（如"去答题"），特征变化时
+        back 会一路退到桌面 → 这里统一加"主页特征命中即停"保底
+      - 非 yyb 前台（退过头到桌面）→ 冷启动回主页
+      - 每次 back 前检查主页；命中主页立即返回（不继续 back）
+    Args:
+        d: 设备
+        max_backs: 最多 back 次数（默认6，超过说明回不到主页→冷启动）
+        extra_hit: 额外停止条件 callable(xml)->bool（如"去答题"列表页特征）
+    Returns:
+        True=已回到主页/目标页；False=冷启动兜底
+    """
+    try:
+        _cur = d.app_current()
+        _is_yyb = (_cur or {}).get("package") == APP_PACKAGE
+    except Exception:
+        _is_yyb = False
+    if not _is_yyb:
+        # 退过头到桌面 → 冷启动
+        try:
+            d.press("home"); time.sleep(0.4)
+            d.app_start(APP_PACKAGE); time.sleep(3)
+        except Exception:
+            pass
+        return False
+    for _ in range(max_backs):
+        try:
+            xml = d.dump_hierarchy()
+        except Exception:
+            xml = ""
+        if is_home_xml(xml):
+            return True
+        if extra_hit and extra_hit(xml):
+            return True
+        try:
+            d.press("back"); time.sleep(0.5)
+        except Exception:
+            break
+    # 兜底：回不到主页 → 冷启动
+    try:
+        d.press("home"); time.sleep(0.4)
+        d.app_start(APP_PACKAGE); time.sleep(3)
+    except Exception:
+        pass
+    return False
+
+
 def dismiss_global_popups(d):
     """关闭全局弹窗（★ 优化：一次 dump + 字符串匹配，避免逐词 UI 查询）"""
     try:

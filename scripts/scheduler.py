@@ -50,47 +50,46 @@ def _switch_if_needed(d, version, grade):
 
 
 def _back_to_home(d):
-    """★ 模块间回主页（修复切换卡顿）：back 循环直到主页特征出现。
+    """★ 模块间回主页（修复切换卡顿 + back 过头退桌面）：统一走 common.tools.safe_back_to_home。
 
     之前只是 sleep 0.8s 打日志没有实际动作 → 下一模块从模块内部页开始
     → 找不到入口 → 卡很久 → 最后重启 App（用户实测"切模块不丝滑"）。
-    主页特征：switch_textbook_tv / 教材精学 / 专项突破。
-    ★ 速度优化：dump 加短超时（WebView 大页面 dump 可能 1-2s）、
-      back 间隔 0.4s、最多 8 次；仍回不到主页就冷启动（比空转快）。
+    ★ 用户实测"back 过多退到手机页面"：模块内部 back 循环只认目标特征，
+      特征变化时一路退到桌面 → safe_back_to_home 增加"主页特征命中即停"保底，
+      非 yyb 前台自动冷启动。
     """
-    def _is_home_xml(_xml):
-        # ★ 主页特征收紧：不能含'口语训练/小学'等宽泛词（练习报告页/单元列表页
-        #   也含这些词 → 误判已回主页 → 实际还在子页面 → 下一模块入口找不到
-        #   → run_module 用 back 硬退 → 退出 App 到桌面！）
-        return ('switch_textbook_tv' in _xml or '教材精学' in _xml
-                or '专项突破' in _xml or '听课文' in _xml
-                or '全脑记词' in _xml or '单词听写' in _xml)
-    import re as _re
     try:
-        _cur = d.app_current()
-        _is_yyb = (_cur or {}).get("package") == APP_PACKAGE
+        from common.tools import safe_back_to_home, is_home_xml
     except Exception:
-        _is_yyb = False
-    if not _is_yyb:
-        # 退过头到桌面 → 冷启动回主页
+        safe_back_to_home, is_home_xml = None, None
+    if safe_back_to_home:
+        safe_back_to_home(d, max_backs=8)
+    else:
+        # 兜底：旧逻辑
+        import re as _re
         try:
-            d.press("home"); time.sleep(0.4)
-            d.app_start(APP_PACKAGE); time.sleep(3)
+            _cur = d.app_current()
+            _is_yyb = (_cur or {}).get("package") == APP_PACKAGE
         except Exception:
-            pass
-        return
-    # back 循环回主页（最多 8 次，避免死循环；每次检查 + 快速 back）
-    for _ in range(8):
-        try:
-            xml = d.dump_hierarchy(timeout=2) if hasattr(d, "dump_hierarchy") else d.dump_hierarchy()
-        except Exception:
-            xml = ""
-        if xml and _is_home_xml(xml):
-            break
-        try:
-            d.press("back"); time.sleep(0.4)
-        except Exception:
-            break
+            _is_yyb = False
+        if not _is_yyb:
+            try:
+                d.press("home"); time.sleep(0.4)
+                d.app_start(APP_PACKAGE); time.sleep(3)
+            except Exception:
+                pass
+            return
+        for _ in range(8):
+            try:
+                xml = d.dump_hierarchy(timeout=2)
+            except Exception:
+                xml = ""
+            if is_home_xml and is_home_xml(xml):
+                break
+            try:
+                d.press("back"); time.sleep(0.4)
+            except Exception:
+                break
     # 兜底：确认主页，必要时清广告
     for _ in range(2):
         dismiss_global_popups(d)
