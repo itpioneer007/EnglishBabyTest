@@ -30,7 +30,8 @@ from datetime import datetime
 
 try:
     from docx import Document
-    from docx.shared import Pt
+    from docx.shared import Pt, RGBColor
+    from docx.oxml.ns import qn
     _HAS_DOCX = True
 except Exception:
     _HAS_DOCX = False
@@ -249,25 +250,45 @@ class QuestionCollector:
         fname = f"{datetime.now().strftime('%y%m%d')}{self._short_version()}{self._short_grade()}{self.module}{_u}.docx"
         path = os.path.join(self.save_root, fname)
         doc = Document()
-        doc.add_heading(f"{self.module} · {self.grade} {_u} · 题目解析脚本", level=0)
-        doc.add_paragraph(f"版本：{self.version}　|　单元：{_u}　|　生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}")
-        doc.add_paragraph(f"共 {len(self.questions)} 题（无题干/纯听音 {self.skipped_no_stem} 题跳过）")
+        # ★ 统一字体：不用内置 Heading/Title 样式（会随主题变蓝色Calibri→
+        #   与正文字体颜色/大小/粗细不一致，用户反馈"同一个标题里不一致"）
+        #   全部用 Normal + 手动设置：中文黑体、英文Arial、黑色、固定大小
+        _normal = doc.styles["Normal"]
+        _normal.font.name = "Arial"
+        _normal.font.size = Pt(11)
+        _normal.font.color.rgb = RGBColor(0x33, 0x33, 0x33)
+        _normal.font.bold = False
+        try:
+            _normal.element.rPr.rFonts.set(qn("w:eastAsia"), "黑体")
+        except Exception:
+            pass
+
+        def _add_line(text="", bold=False, size=11, space_after=4):
+            """统一行：Normal 样式 + 指定加粗/字号（全文档一致，黑体Arial）"""
+            _p = doc.add_paragraph()
+            _p.paragraph_format.space_after = Pt(space_after)
+            _r = _p.add_run(text)
+            _r.font.name = "Arial"
+            try:
+                _r.element.rPr.rFonts.set(qn("w:eastAsia"), "黑体")
+            except Exception:
+                pass
+            _r.font.size = Pt(size)
+            _r.font.bold = bold
+            _r.font.color.rgb = RGBColor(0x33, 0x33, 0x33)
+            return _p
+
+        # 文档标题（大号黑色加粗，不用 Title 样式）
+        _add_line(f"{self.module} · {self.grade} {_u} · 题目解析脚本", bold=True, size=16, space_after=6)
+        _add_line(f"版本：{self.version}　|　单元：{_u}　|　生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}", size=10, space_after=2)
+        _add_line(f"共 {len(self.questions)} 题（无题干/纯听音 {self.skipped_no_stem} 题跳过）", size=10, space_after=10)
         for i, q in enumerate(self.questions, 1):
-            # ★ 简化格式：位置 / 题干 / 选项 / 答案 / 知识点（用户要求，不搞严谨字段）
-            doc.add_heading(f"{i}. {q['stem']}", level=1)
-            _p = doc.add_paragraph()
-            _p.add_run("位置：").bold = True
-            _p.add_run(self._loc_str(q))
-            _p = doc.add_paragraph()
-            _p.add_run("选项：").bold = True
-            _p.add_run("　　".join(q["options"]) if q["options"] else "（无文字选项）")
-            _p = doc.add_paragraph()
-            _p.add_run("正确答案：").bold = True
-            _p.add_run(q["answer"])
-            _p = doc.add_paragraph()
-            _p.add_run("知识点：").bold = True
-            _p.add_run(q["knowledge"] or self._auto_knowledge(q))
-            doc.add_paragraph()
+            # 题号+题干标题（黑色加粗，不用 Heading 样式）
+            _add_line(f"{i}. {q['stem']}", bold=True, size=13, space_after=4)
+            _add_line(f"位置：{self._loc_str(q)}", size=11, space_after=2)
+            _add_line(f"选项：{'　　'.join(q['options']) if q['options'] else '（无文字选项）'}", size=11, space_after=2)
+            _add_line(f"正确答案：{q['answer']}", size=11, space_after=2)
+            _add_line(f"知识点：{q['knowledge'] or self._auto_knowledge(q)}", size=11, space_after=10)
         doc.save(path)
         print(f"  ✅ 生成脚本: {path}（{len(self.questions)} 题，跳过无题干 {self.skipped_no_stem}）")
         return path
