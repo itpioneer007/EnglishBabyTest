@@ -4571,6 +4571,10 @@ def api_modules_run():
             # ★ 记录版本/单元到巡检状态（实时错题报告标题/路径需要）
             _inspection_state["version"] = version
             _inspection_state["grade"] = grade
+            # ★ 环境变量同步（模块代码读 YYB_VERSION/YYB_GRADE 用于脚本命名等，
+            #   避免 sys.modules 不可靠）
+            os.environ["YYB_VERSION"] = str(version)
+            os.environ["YYB_GRADE"] = str(grade)
             if units:
                 _first_unit = str(next(iter(units.values()), "?"))
                 _inspection_state["unit"] = _first_unit

@@ -615,17 +615,15 @@ def run_module(d, units=None):
     _cur_unit = 0
     try:
         from common.gen_script import QuestionCollector
-        # ★ 实际版本/年级：优先读 web_server 的 _inspection_state（调度时设置的真实值），
+        # ★ 实际版本/年级：优先读环境变量（web_server 调度时设置 YYB_VERSION/YYB_GRADE），
         #   避免用模块内硬编码默认（GRADE_LEVEL 六上 vs 实际跑五年级）
         _g_ver, _g_grade = BOOK_VERSION, GRADE_LEVEL
-        try:
-            import sys as _sys
-            _ws = _sys.modules.get("web_server")
-            if _ws is not None:
-                _g_ver = _ws._inspection_state.get("version", _g_ver)
-                _g_grade = _ws._inspection_state.get("grade", _g_grade)
-        except Exception:
-            pass
+        _env_ver = os.environ.get("YYB_VERSION", "")
+        _env_grade = os.environ.get("YYB_GRADE", "")
+        if _env_ver:
+            _g_ver = _env_ver
+        if _env_grade:
+            _g_grade = _env_grade
         _coll = QuestionCollector(
             module="单元自检",
             version=_g_ver,
