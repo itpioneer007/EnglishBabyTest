@@ -24,6 +24,7 @@
 """
 import os
 import re
+import sys
 import time
 from datetime import datetime
 
@@ -47,13 +48,21 @@ def _extract_ui_question(xml, answer="", qtype_hint=""):
     """
     if not xml:
         return {"stem": "", "options": [], "qtype": qtype_hint}
-    # ① 题干：question_title_tv 优先
+    # ① 题干：question_title_tv 优先，其次 tv_caption（单元自检等用 tv_caption）
+    #   ★ XML 属性顺序不固定（text 可能在 resource-id 前）→ 用非贪婪匹配任一顺序
     stem = ""
-    for m in re.finditer(r'resource-id="[^"]*question_title_tv[^"]*"[^>]*text="([^"]+)"', xml):
-        t = m.group(1).strip()
-        if t and len(t) < 80:
-            stem = t
+    for _rid in ("question_title_tv", "tv_caption"):
+        if stem:
             break
+        for m in re.finditer(
+                rf'<node[^>]*resource-id="[^"]*{_rid}[^"]*"[^>]*text="([^"]+)"|'
+                rf'<node[^>]*text="([^"]+)"[^>]*resource-id="[^"]*{_rid}[^"]*"', xml):
+            t = (m.group(1) or m.group(2) or "").strip()
+            if t and len(t) < 80:
+                stem = t
+                break
+    # ★ 清洗题干里的分值噪音："选择各组中不同类的一项。 (共1分)" → 去掉"(共N分)"
+    stem = re.sub(r"[（(]\s*共\d+分\s*[）)]", "", stem).strip()
     if not stem:
         # 兜底：长文本（排除噪音）
         noise = ("下一题", "上一题", "检查", "提交", "查看报告", "练习报告",
@@ -84,12 +93,21 @@ def _extract_ui_question(xml, answer="", qtype_hint=""):
         r"听对话|听短文|听句子|听单词|听材料|听问题).*",
         stem.strip(), re.IGNORECASE):
         stem = ""
-    # ② 选项：字母开头项（A. xx）
+    # ② 选项：字母开头项（A. xx）优先
     opts = []
     for m in re.finditer(r'text="([A-E][.、．]\s*[^"]{1,60})"', xml):
         t = m.group(1).strip()
         if t and t not in opts:
             opts.append(t)
+    if not opts:
+        # ★ 选项是 CheckBox/RadioButton（option_cb 等，文本无字母前缀，如 parrot/notebook）
+        #   按出现顺序收集（单元自检等模块的选项就是这种独立单词）
+        for m in re.finditer(
+                r'<node[^>]*resource-id="[^"]*(?:option_cb|option_iv|radio_btn|check_box)[^"]*"[^>]*text="([^"]{1,40})"|'
+                r'<node[^>]*text="([^"]{1,40})"[^>]*resource-id="[^"]*(?:option_cb|option_iv|radio_btn|check_box)[^"]*"', xml):
+            t = (m.group(1) or m.group(2) or "").strip()
+            if t and t not in opts:
+                opts.append(t)
     if not opts:
         # 纯字母（T/F/A-E 判断题）
         for m in re.finditer(r'text="([TFABCDE])"', xml):
@@ -151,6 +169,34 @@ class QuestionCollector:
         })
 
     # ------------------------------------------------------------
+    def _llm_knowledge(self, q):
+        """用大模型生成知识点解析：符合该版本年级的知识水平，精简有说服力。
+        像"为什么1+1=2"要用小学方法解释——不模糊、直接给出该年级该懂的结论。
+        """
+        try:
+            sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+            from src.reviewer_common import LLMClient
+            llm = LLMClient.from_config()
+            opt_str = " ".join(q["options"]) if q["options"] else "（无文字选项）"
+            prompt = (
+                f"你是{self.grade}（{self.version}）英语老师，给学生讲一道错题的考点。\n"
+                f"题目：{q['stem']}\n"
+                f"选项：{opt_str}\n"
+                f"正确答案：{q['answer']}\n\n"
+                f"请用该年级学生能懂的话，给出本题的知识点解析。要求：\n"
+                f"1. 精简（30-60字），直接点出考点和为什么选这个答案\n"
+                f"2. 要具体有说服力，符合{self.grade}英语课标，不要模糊的'涉及XX相关知识点'\n"
+                f"3. 用中文解释，英文单词保留原文\n"
+                f"只输出知识点解析本身，不要标题不要编号。"
+            )
+            ans = (llm.ask(prompt) or "").strip()
+            if ans and len(ans) > 5 and "LLM 调用失败" not in ans:
+                return ans[:120]
+        except Exception as _e:
+            print(f"  ⚠ 知识点 LLM 生成失败: {_e}")
+        return self._auto_knowledge(q)
+
+    # ------------------------------------------------------------
     def finish_unit(self, unit):
         """单元答完：把收集到的题写成脚本 docx（模板格式）。
         返回生成的文件路径；无题可写返回 None。
@@ -161,6 +207,11 @@ class QuestionCollector:
         if not _HAS_DOCX:
             print("  ❌ python-docx 不可用，无法生成脚本")
             return None
+        # ★ 知识点用大模型生成（每题一次调用，串行；该年级知识点有说服力）
+        print(f"  🧠 正在为 {len(self.questions)} 题生成知识点解析（LLM）…")
+        for q in self.questions:
+            if not q.get("knowledge"):
+                q["knowledge"] = self._llm_knowledge(q)
         _u = f"U{unit}"
         fname = f"{datetime.now().strftime('%y%m%d')}_{self.module}_{self.grade.replace('年级', '')}{_u}_生成脚本.docx"
         path = os.path.join(self.save_root, fname)
