@@ -1656,6 +1656,7 @@ def _handle_fill_blank(d, config):
     no_new_swipes = 0  # 连续下滑无新空框次数
 
     # 阶段1：填所有空框（当前可见的填完 → 下滑找新的）
+    _fill_fail_streak = 0   # ★ 连续填不上次数（IME失效止损）
     for round_i in range(40):
         inputs = _find_empty_inputs()
         empty = [i for i in inputs if i[2] == '']  # text='' 即未填
@@ -1680,7 +1681,24 @@ def _handle_fill_blank(d, config):
             # 收起键盘
             d.press("back")
             time.sleep(0.6)
-            print(f"    填一空 ({cx},{cy}) 字={word}")
+            # ★ 验证该框是否填上：填上 → streak清零；填不上 → streak+1，
+            #   连续3次失败说明 IME 注入失效/框无法聚焦 → 止损退出（避免40轮空转）
+            _filled = False
+            try:
+                _xml_v = d.dump_hierarchy()
+                _inputs_v = _find_empty_inputs()
+                _filled = all(not (abs(v[1]-cy) < 200 and abs(v[0]-cx) < 200 and v[2] == '')
+                              for v in _inputs_v if v[1] == cy and abs(v[0]-cx) < 300)
+            except Exception:
+                pass
+            if _filled:
+                _fill_fail_streak = 0
+            else:
+                _fill_fail_streak += 1
+                if _fill_fail_streak >= 3:
+                    print("    ⚠ 连续填框失败（IME可能失效），止损退出填空处理")
+                    break
+            print(f"    填一空 ({cx},{cy}) 字={word} {'✓' if _filled else '✗'}")
             step_log(f"  ✏ 输入: {word}", "info")
             no_new_swipes = 0
             continue
@@ -1694,7 +1712,8 @@ def _handle_fill_blank(d, config):
 
     # 阶段2：下滑找"检查"按钮并点击（检查按钮在短文最底部，需下滑才能看到）
     #   兼容两种按钮文字：单元自检用"检查"，知识过关用"检测"
-    for _ in range(6):
+    _checked = False
+    for _ in range(8):
         btn = None
         if d(text="检查").exists(timeout=1.2):
             btn = "检查"
@@ -1705,9 +1724,23 @@ def _handle_fill_blank(d, config):
             print(f"    填空完成，点击{btn}")
             step_log("✅ 填空全部完成", "success")
             time.sleep(0.8)
+            _checked = True
             break
         S_swipe(d, 540, 1800, 540, 600, 0.4)
         time.sleep(0.6)
+
+    # ★ 修复：点"检查"后必须确认页面跳转（检查按钮消失/下一题出现/新题加载），
+    #   否则说明这轮填空没提交成功 → 返回 False（上层走其他分支/跳过），
+    #   避免上层循环反复识别同一填空页 → 无限重入"逐框输入"（日志出现多次）
+    if _checked:
+        for _ in range(8):
+            try:
+                _xml_chk = d.dump_hierarchy()
+                if 'text="检查"' not in _xml_chk and 'text="检测"' not in _xml_chk:
+                    break  # 检查按钮消失 = 已提交跳转
+            except Exception:
+                pass
+            time.sleep(0.5)
 
     # 阶段3：点"下一题"（答对自动跳转，答错出现"下一题"按钮）
     if d(text="下一题").exists(timeout=2):
@@ -1715,7 +1748,9 @@ def _handle_fill_blank(d, config):
         print(f"    点击下一题")
         step_log("➡ 填空答完，进入下一题", "info")
         time.sleep(0.8)
-    return True
+        return True
+    # 没点成"检查"或提交后无跳转 → 未成功消费本题
+    return _checked
 
 
 

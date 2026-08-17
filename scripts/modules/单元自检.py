@@ -615,10 +615,21 @@ def run_module(d, units=None):
     _cur_unit = 0
     try:
         from common.gen_script import QuestionCollector
+        # ★ 实际版本/年级：优先读 web_server 的 _inspection_state（调度时设置的真实值），
+        #   避免用模块内硬编码默认（GRADE_LEVEL 六上 vs 实际跑五年级）
+        _g_ver, _g_grade = BOOK_VERSION, GRADE_LEVEL
+        try:
+            import sys as _sys
+            _ws = _sys.modules.get("web_server")
+            if _ws is not None:
+                _g_ver = _ws._inspection_state.get("version", _g_ver)
+                _g_grade = _ws._inspection_state.get("grade", _g_grade)
+        except Exception:
+            pass
         _coll = QuestionCollector(
             module="单元自检",
-            version=BOOK_VERSION if 'BOOK_VERSION' in globals() else "湘少版",
-            grade=GRADE_LEVEL if 'GRADE_LEVEL' in globals() else "五年级上册",
+            version=_g_ver,
+            grade=_g_grade,
         )
     except Exception as _e:
         print(f"  ⚠ 脚本生成器初始化失败（不影响答题）: {_e}")

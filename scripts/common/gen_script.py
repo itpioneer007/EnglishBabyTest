@@ -157,9 +157,9 @@ class QuestionCollector:
         self.module = module
         self.version = version or "湘少版"
         self.grade = grade or "五年级上册"
-        # 保存目录：项目根/gen_scripts（默认）；可传 save_root 覆盖
+        # 保存目录：项目根/gen_scripts（默认，scripts/common/gen_script.py 上三级）；可传 save_root 覆盖
         self.save_root = save_root or os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "gen_scripts")
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "gen_scripts")
         os.makedirs(self.save_root, exist_ok=True)
         self.questions = []       # 当前单元收集的题（含题干可解析的）
         self.skipped_no_stem = 0  # 无题干跳过的题数（纯听音等）
