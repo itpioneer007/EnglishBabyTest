@@ -151,9 +151,11 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
                  # ★ 口语训练进度（"口语训练湘少六上U1"是顶部标题，含 U 编号的也排除）
                  "口语训练湘少")
         # 计时器/倒计时（如 "19:58"、"还剩：19:58"）+ 得分/进度（77.0、3/40、100%）
+        #   + 分值标记 "2分" / "(2分)" / "（2分）" 排除（口语训练小题"him." 旁边常带"（2分）"）
         _timer_pat = re.compile(
             r"^\d{1,2}:\d{2}$|^还剩[：:]\s*\d{1,2}:\d{2}$|"
-            r"^\d+(\.\d+)?%?$|^\d+\s*/\s*\d+$|^\d+分$"
+            r"^\d+(\.\d+)?%?$|^\d+\s*/\s*\d+$|^\d+分$|"
+            r"^[（(]\s*\d+\s*分\s*[）)]$"
         )
         # ★ 优先 question_title_tv（App 真题干节点）
         for m in re.finditer(r'resource-id="[^"]*question_title_tv[^"]*"[^>]*text="([^"]+)"', xml):
@@ -178,6 +180,50 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
             stems.append(t)
             if len(stems) >= 3:
                 break
+        # ★★★ 口语/朗读题型特殊路径：用户实测大题题干（如 "him."）在"请阅读题目"和
+        #   "练习结束还剩"之间。question_title_tv 兜底都拿不到时，按"区间提取"拿到真题干。
+        #   区间：y 坐标在 "请阅读题目"/"请朗读题目" 节点之后、"练习结束"节点之前
+        if not stems and is_speaking:
+            _zone_texts = []
+            _low, _high = 0, 99999
+            for m in re.finditer(r'<node[^>]*>', xml):
+                b = m.group(0)
+                tm = re.search(r'text="([^"]+)"', b)
+                bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', b)
+                if not (tm and bm):
+                    continue
+                txt = tm.group(1).strip()
+                if "请阅读题目" in txt or "请朗读题目" in txt or "练习结束" in txt:
+                    y1 = int(bm.group(2)); y2 = int(bm.group(4))
+                    if "请阅读" in txt or "请朗读" in txt:
+                        _low = max(_low, y2)  # 题目在"请阅读"之后
+                    if "练习结束" in txt:
+                        _high = min(_high, y1)  # 题目在"练习结束"之前
+            for m in re.finditer(r'<node[^>]*>', xml):
+                b = m.group(0)
+                tm = re.search(r'text="([^"]+)"', b)
+                bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', b)
+                if not (tm and bm):
+                    continue
+                y1 = int(bm.group(2))
+                t = tm.group(1).strip()
+                if y1 < _low or y1 > _high:   # 不在题目区间
+                    continue
+                if t in noise or any(n in t for n in noise):
+                    continue
+                if t in seen or len(t) < 2 or len(t) > 30:
+                    continue
+                if _timer_pat.match(t):
+                    continue
+                # ★ 排除"小题标题/序号"：1./2./3. 或 "1"/"1 " 这种纯序号
+                if re.match(r"^\d+[\.、\s]*$", t):
+                    continue
+                _zone_texts.append(t)
+                seen.add(t)
+                if len(_zone_texts) >= 3:
+                    break
+            if _zone_texts:
+                stems = _zone_texts
         stem_txt = " / ".join(stems[:2]) if stems else "(无题干文字)"
         ev.append({"field": "题干", "type": "text_ok" if stems else "text_mismatch",
                    "expected": "文字完整可见", "actual": stem_txt,
@@ -289,6 +335,8 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
         #   - 文字按钮：检查/检测/完成/提交/下一题/录音/点击结束/继续
         #   - 输入类：EditText/输入框
         #   - 选择类：A-E/T/F 字母选项、CheckBox、可点击大图（图片选项/排序/匹配）
+        #   - 口语题：麦克风（点录音）= 核心作答入口（麦克风是 ImageView 无文本，
+        #     但 resource-id 必含 record/mic；_find_control 已检测 mic_found/mic_clickable）
         _act_signals = (
             "检查" in xml or "检测" in xml or "完成" in xml or "提交" in xml
             or "录音" in xml or "点击结束" in xml or "点击录音" in xml or "回放" in xml
@@ -297,6 +345,11 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
             or "CheckBox" in xml
             or "朗读" in xml or "跟读" in xml   # ★ 口语题必有"朗读"/"跟读"题型文本
         )
+        # ★ 口语/朗读题型：④ 已单独检查麦克风 clickable → 作答入口存在 = 作答通过
+        #   解决"作答元素: 检查/录音/输入元素未识别"误报（用户实测：麦克风是 ImageView 无文本，
+        #   XML dump 时若"点击录音"刚切换到"点击结束"瞬间，_act_signals 字符串都抓不到）
+        if is_speaking and mic_found and mic_clickable:
+            _act_signals = True
         # ★ 可点击大图（图片选项/排序/匹配题的作答入口）
         if not _act_signals:
             _big_click = re.search(
