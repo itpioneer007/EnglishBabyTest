@@ -145,7 +145,7 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
                  "开始测试", "开始考试", "开始练习", "考试结束", "本次考试结束",
                  "耗时", "时长", "总时长", "用时", "提交答卷", "重新作答", "查看解析",
                  "答案", "正确答案", "错误答案", "本次得分", "本大题", "本小题",
-                 "分值", "共", "满分", "本组",
+                 "分值", "满分", "本组",
                  # ★ 口语训练列表页/答题页顶部栏（用户实测"考前突破/当前版本/练习记录"被误当题干）
                  "考前突破", "当前版本", "练习记录", "退出训练",
                  # ★ 口语训练进度（"口语训练湘少六上U1"是顶部标题，含 U 编号的也排除）
@@ -157,9 +157,12 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
             r"^\d+(\.\d+)?%?$|^\d+\s*/\s*\d+$|^\d+分$|"
             r"^[（(]\s*\d+\s*分\s*[）)]$"
         )
+        # ★ 分值后缀清洗："听单词...。 (共2分)" → 去掉" (共N分)" 保留题干
+        def _strip_score(t: str) -> str:
+            return re.sub(r"[（(]\s*共\s*\d+\s*分\s*[）)]", "", t).strip()
         # ★ 优先 question_title_tv（App 真题干节点）
         for m in re.finditer(r'resource-id="[^"]*question_title_tv[^"]*"[^>]*text="([^"]+)"', xml):
-            t = m.group(1).strip()
+            t = _strip_score(m.group(1).strip())  # ★ 清洗尾缀"(共N分)"
             if t and t not in seen and len(t) < 60:
                 seen.add(t)
                 stems.append(t)
@@ -167,8 +170,11 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
                 break
         # ★ 兜底：其他长文本（缩短到 ≥4 字符，抓到"听录音选图"等短题干）
         for m in re.finditer(r'text="([^"]{4,})"', xml):
-            t = m.group(1).strip()
+            t = _strip_score(m.group(1).strip())  # ★ 清洗尾缀"(共N分)"
             if not t or t in seen or t in noise or len(t) >= 60:
+                continue
+            # ★ 排除选项文本："A. fast" / "B. food"（字母+句点+内容）
+            if re.match(r"^[TFABCDE][\.、．]\s*\S", t):
                 continue
             if any(n in t for n in noise):
                 continue
@@ -230,8 +236,13 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
                    "diff": f"提取到{len(stems)}条文字" if stems else "未提取到题干文字"})
 
         # ③ 选项存在性（字母选项 A/B/C/D/T/F 或 图片选项 CheckBox/大图）
+        #   ★ 兼容 "A. fast" / "B. food" 带句点选项（普通听力/选择题目常见）
         opts_found = [o for o in ("A", "B", "C", "D", "T", "F")
                       if f'text="{o}"' in xml]
+        if not opts_found:
+            # "A. xxx" 带句点选项 → 也识别为字母选项
+            opts_found = [m.group(1) for m in re.finditer(
+                r'text="([TFABCDE])[\.、．]\s*[^"]{1,40}"', xml)][:6]
         has_edit = "EditText" in xml
         # ★ 图片选项检测：CheckBox（图片题常见）或大尺寸可点击 ImageView
         image_opt_count = _detect_image_options(xml) if not opts_found else 0
@@ -274,6 +285,29 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
         is_listening = is_listening or any(kw in xml for kw in LISTEN_KWS)
         is_speaking = is_speaking or any(kw in xml for kw in SPEAK_KWS)
 
+        # ★ 图片/大图题（题干带"看图片/图片"或页面主体是大 ImageView）：
+        #   听力图片题音频自动播放（无需手动点扬声器），口语图片题直接朗读，
+        #   → 音频维度 skip，避免"听单词/看图选词"误报"未检测到播放控件"
+        _has_big_image = False
+        for _mi in re.finditer(r'<node[^>]*class="android\.widget\.ImageView"[^>]*>', xml):
+            _bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', _mi.group(0))
+            if _bm:
+                _x1, _y1, _x2, _y2 = map(int, _bm.groups())
+                if (_x2 - _x1) > 500 and (_y2 - _y1) > 300 and 300 < _y1 < 1600:
+                    _has_big_image = True
+                    break
+        _is_image_q = _has_big_image or ("图片" in xml and ("看图片" in xml or "看图" in xml or "观察图片" in xml))
+        if _is_image_q:
+            # 图片题：题干/图片可见即可，音频（自动播放/无独立播放控件）不单独检查
+            ev.append({"field": "音频", "type": "skip",
+                       "expected": "图片题（音频自动播放/无独立播放控件）",
+                       "actual": "图片作答",
+                       "diff": "图片/大图题，听力音频通常自动播放，无需手动点扬声器"})
+            # ★ 注意：直接结束④，不再走下方听力/口语的音频检查
+            _audio_skipped = True
+        else:
+            _audio_skipped = False
+
         # 播放/扬声器控件检测：找含关键词的节点，并判断是否可点击
         PLAY_KWS = ("播放", "喇叭", "扬声器", "ic_play", "btn_play",
                     "play_btn", "audio", "sound", "▶", "原音")
@@ -284,7 +318,9 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
         play_found, play_clickable = _find_control(xml, PLAY_KWS)
         mic_found, mic_clickable = _find_control(xml, MIC_KWS)
 
-        if is_listening:
+        if _audio_skipped:
+            pass  # 图片题已发 skip，不再走听力/口语音频检查
+        elif is_listening:
             if play_found:
                 ev.append({"field": "音频", "type": "text_ok" if play_clickable else "text_mismatch",
                            "expected": "听力题须有可点击的扬声器",
@@ -342,6 +378,7 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
             or "录音" in xml or "点击结束" in xml or "点击录音" in xml or "回放" in xml
             or "EditText" in xml or "麦克风" in xml or "record" in xml.lower()
             or bool(re.search(r'text="[TFABCDE]"', xml))
+            or bool(re.search(r'text="[TFABCDE][\.、．]\s*\S', xml))  # ★ "A. fast" 带句点选项
             or "CheckBox" in xml
             or "朗读" in xml or "跟读" in xml   # ★ 口语题必有"朗读"/"跟读"题型文本
         )

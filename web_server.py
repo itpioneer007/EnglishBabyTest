@@ -314,7 +314,19 @@ def _detect_content_dimension(module: str = ""):
         if not agent.script_questions: return
         log_msg(f"📄 {module} 自动补充内容检查 (批量, {_docx}, 单元{_unit_cur or '全部'}, {len(agent.script_questions)}题)", "info")
         batch = []; qid_map = {}
+        # ★ 听力专项多子模块：只审查当前 stage 的题（用户反馈：错题日志错误记录
+        #   练习/测试的题——之前不过滤，练习的题也拿测试脚本去比对→脚本错配）
+        _cur_mod, _cur_stage = "", ""
+        try:
+            from common.logger import get_current_module
+            _cur_mod, _cur_stage = get_current_module()
+        except Exception:
+            pass
         for qid, q in list(_inspection_state.get("questions", {}).items()):
+            # ★ stage 过滤：仅审查当前回调对应的 stage 题目
+            _q_stage = (q or {}).get("stage", "") or ""
+            if _cur_stage and _q_stage and _q_stage != _cur_stage:
+                continue
             idx = (q or {}).get("idx", 0)
             if not idx: continue
             sqs = [s for s in agent.script_questions if s.global_idx == idx]
@@ -4449,15 +4461,29 @@ def _qreview_to_state(module: str, docx: str, unit, r, stage: str = "") -> dict:
     }
 
 
-def _run_llm_script_review(module: str, docx: str, version: str, unit):
+def _run_llm_script_review(module: str, docx: str, version: str, unit, stage: str = ""):
     """用 ReviewAgent 对照脚本做 LLM 知识性审查（文字核对 + 有截图时图片识别），
-    结果写入 _inspection_state["questions"]（前端六维面板实时展示）。"""
+    结果写入 _inspection_state["questions"]（前端六维面板实时展示）。
+
+    ★ stage 参数：听力专项区分"练习/测试"，避免脚本错配
+      - stage="练习" → 只审查 stage=练习 的题
+      - stage="测试" → 只审查 stage=测试 的题
+      - stage=""     → 不区分（其他模块）
+    """
     global _inspection_state
     docx_path = PROJECT_ROOT / "uploads" / docx
     if not docx_path.exists():
         log_msg(f"❌ 脚本文件不存在: {docx}（请在页面上传脚本）", "error")
         return
-    log_msg(f"🧠 {module} 正在用脚本「{docx}」做 LLM 知识性审查…（逐题核对题干/选项/答案，耗时较长）", "info")
+    _stage_label = f"·{stage}" if stage else ""
+    log_msg(f"🧠 {module}{_stage_label} 正在用脚本「{docx}」做 LLM 知识性审查…（逐题核对题干/选项/答案，耗时较长）", "info")
+    # ★ 听力专项多子模块：临时切换 set_current_module 上下文，确保 questions 用对的 stage 标记
+    if stage:
+        try:
+            from common.logger import set_current_module
+            set_current_module(module, stage)
+        except Exception:
+            pass
     try:
         sys.path.insert(0, str(PROJECT_ROOT))
         from src.review_agent import ReviewAgent, ReviewConfig
@@ -4606,14 +4632,25 @@ def api_modules_run():
                 if not _docx:
                     log_msg(f"🔍 {_mod} 无匹配脚本 → 仅基础完整性检查", "info")
                     return
-                log_msg(f"📖 {_mod} 有匹配脚本「{_docx}」→ 自动化后追加 LLM 知识性审查", "info")
+                _stage = (_res or {}).get("stage", "")
+                log_msg(f"📖 {_mod}{'·' + _stage if _stage else ''} 有匹配脚本「{_docx}」→ 自动化后追加 LLM 知识性审查", "info")
                 # ★ 修复模块间卡顿：LLM 审查改异步线程，不阻塞 run_all 的模块循环
                 #   （原同步调用：听力专项完成后在主页面卡几分钟等逐题 LLM 审查，
                 #     审查完才继续口语训练 → 用户实测"主页卡好久"）
+                # ★ unit 解析：听力专项·测试单元在 units["听力专项_测试"]；练习单元在 units["听力专项"]
+                _u = 0
+                if _stage == "测试":
+                    _u_raw = units.get("听力专项_测试", "") or units.get(_mod, "")
+                else:
+                    _u_raw = units.get(_mod, "") or 0
+                try:
+                    _u = int(str(_u_raw).split("-")[0])
+                except Exception:
+                    _u = 0
                 try:
                     _t = threading.Thread(
                         target=_run_llm_script_review,
-                        args=(_mod, _docx, version, units.get(_mod, "") or 0),
+                        args=(_mod, _docx, version, _u, _stage),
                         daemon=True,
                     )
                     _t.start()

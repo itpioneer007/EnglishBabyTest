@@ -175,15 +175,9 @@ def _test_answer_loop(d, max_q=45):
                 return q
             continue
 
-        # ★ 每题界面级完整性检查证据（题型/题干/选项/音频/作答）→ 前端证据卡
+        # ★ evidence 收集移到"反馈消失后"块（见下方）—— 防止 dump 到反馈页导致题干误提取
         if q != _ev_q:
-            try:
-                from common.evidence import collect_ui_evidence
-                step_log(f"  第{q+1}题 完整性检查", "info",
-                         collect_ui_evidence(xml_now, qtype="听力专项测试"))
-                _ev_q = q
-            except Exception:
-                pass
+            pass  # 占位：evidence 在反馈等待循环之后收集
         # 中途弹窗"继续答题（0S）" → 点击（textContains 语义 → 子串匹配）
         if '继续答题' in xml_now:
             d(textContains="继续答题").click()
@@ -264,12 +258,37 @@ def _test_answer_loop(d, max_q=45):
         # ★ 回答后的反馈浮层（恭喜你 回答正确 / 很遗憾 回答错误）→ 原地等待其消失并
         #   重新 dump。★ 关键：不这样做的话反馈页会被当成"无选项"空转一轮，每题多耗
         #   一次 for 迭代额度，17题×2轮可能超出 max_q 导致提前静默返回（实测踩过坑）。
-        for _fb in range(4):
-            if '恭喜你' in xml_now or '回答正确' in xml_now or '回答错误' in xml_now:
+        for _fb in range(6):  # ★ 延长到6轮(2.4s)，确保答错反馈页完全消失
+            if '恭喜你' in xml_now or '回答正确' in xml_now or '回答错误' in xml_now or '很遗憾' in xml_now:
                 time.sleep(0.4)
                 xml_now = d.dump_hierarchy() if d else ""
             else:
                 break
+        # ★ 反馈浮层消失后再发 evidence（用户实测：旧逻辑循环开头 dump，可能 dump 到
+        #   反馈页"恭喜你，答对了"，题干就提取不到题目而是反馈文字 → 证据卡"未提取到题干文字"）
+        if q != _ev_q:
+            try:
+                from common.evidence import collect_ui_evidence
+                # ★ 过滤反馈残留：若 xml_now 仍含"恭喜你/回答正确/回答错误/很遗憾"，
+                #   再等 0.5s 重 dump（防止答错后立即转新题时新题题干还没渲染完）
+                for _ed in range(3):
+                    if '恭喜你' not in xml_now and '回答正确' not in xml_now \
+                            and '回答错误' not in xml_now and '很遗憾' not in xml_now:
+                        break
+                    time.sleep(0.5)
+                    xml_now = d.dump_hierarchy() if d else ""
+                # ★ 稳定等待：dump 后固定等 0.8s 再重新 dump 作为 evidence 源，
+                #   确保题干渲染完成（首题更长 2s：试卷说明→答题页）
+                if q == 0:
+                    time.sleep(2.0)
+                else:
+                    time.sleep(0.8)
+                xml_now = d.dump_hierarchy() if d else ""
+                step_log(f"  第{q+1}题 完整性检查", "info",
+                         collect_ui_evidence(xml_now, qtype="听力专项测试"))
+                _ev_q = q
+            except Exception:
+                pass
         # 新题：找选项（复用上面的 xml_now）
         # ⚠ 关键修复：上一版正则 `text="X"[^>]*clickable="true"` 要求「同一节点」同时有
         #   字母 text 和 clickable。但真实 App 选项字母在【不可点击的子 TextView】上，

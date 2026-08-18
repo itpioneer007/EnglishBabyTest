@@ -198,32 +198,45 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
                 test_units = units.get("听力专项_测试")
                 _p_on = practice_units is not None and practice_units != "NONE"
                 _t_on = test_units is not None and test_units != "NONE"
+                # ★ 辅助：分别记录"练习/测试"的题数和回调状态，用于拆 on_module_done
+                _p_res = None
+                _t_res = None
                 if _p_on and _t_on:
                     step_log(f"📌 听力专项: 练习单元{practice_units} + 测试单元{test_units} 分开检测", "step")
                     set_current_module("听力专项", "练习")
-                    q1 = mod.run_module(d, units=practice_units) if _p_on else 0
-                    step_log(f"✅ 听力专项·练习 完成: {q1} 题", "success")
+                    _p_q = mod.run_module(d, units=practice_units) if _p_on else 0
+                    step_log(f"✅ 听力专项·练习 完成: {_p_q} 题", "success")
+                    _p_res = {"q": _p_q, "t": 0, "ok": True, "stage": "练习"}
                     set_current_module("听力专项", "测试")
-                    q2 = mod.run_test_module(d, test_units=test_units) if _t_on else 0
-                    step_log(f"✅ 听力专项·测试 完成: {q2} 题", "success")
-                    q = q1 + q2
+                    _t_q = mod.run_test_module(d, test_units=test_units) if _t_on else 0
+                    step_log(f"✅ 听力专项·测试 完成: {_t_q} 题", "success")
+                    _t_res = {"q": _t_q, "t": 0, "ok": True, "stage": "测试"}
+                    q = _p_q + _t_q
                 elif _p_on:
                     set_current_module("听力专项", "练习")
-                    q = mod.run_module(d, units=practice_units)
-                    step_log(f"📌 听力专项: 仅练习（测试未勾选）完成 {q} 题", "info")
+                    _p_q = mod.run_module(d, units=practice_units)
+                    step_log(f"📌 听力专项: 仅练习（测试未勾选）完成 {_p_q} 题", "info")
+                    _p_res = {"q": _p_q, "t": 0, "ok": True, "stage": "练习"}
+                    q = _p_q
                 elif _t_on:
                     set_current_module("听力专项", "测试")
-                    q = mod.run_test_module(d, test_units=test_units)
-                    step_log(f"📌 听力专项: 仅测试（练习未勾选）完成 {q} 题", "info")
+                    _t_q = mod.run_test_module(d, test_units=test_units)
+                    step_log(f"📌 听力专项: 仅测试（练习未勾选）完成 {_t_q} 题", "info")
+                    _t_res = {"q": _t_q, "t": 0, "ok": True, "stage": "测试"}
+                    q = _t_q
                 elif practice_units == "NONE" and test_units == "NONE":
                     # 前端明确"练/测 都不勾选" → 跳过听力专项（不跑）
                     step_log(f"📌 听力专项: 练/测均未勾选，跳过", "warning")
                     q = 0
                 else:
                     # 都未指定（旧调用，无 units 传参）→ 都跑，兼容
-                    q = mod.run_module(d, units=module_units) if module_units else mod.run_module(d)
-                    q2 = mod.run_test_module(d, test_units=module_units) if module_units else mod.run_test_module(d)
-                    q = q + q2
+                    set_current_module("听力专项", "练习")
+                    _p_q = mod.run_module(d, units=module_units) if module_units else mod.run_module(d)
+                    _p_res = {"q": _p_q, "t": 0, "ok": True, "stage": "练习"}
+                    set_current_module("听力专项", "测试")
+                    _t_q = mod.run_test_module(d, test_units=module_units) if module_units else mod.run_test_module(d)
+                    _t_res = {"q": _t_q, "t": 0, "ok": True, "stage": "测试"}
+                    q = _p_q + _t_q
                     step_log(f"📌 听力专项: 练习+测试 全部完成（{q} 题）", "info")
             else:
                 # ★ 其他模块：设置模块上下文（模块名 + 子模块从模块内部 step_log 更新）
@@ -237,10 +250,23 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
             step_log(f"✅ {name} 完成: {q} 题, 耗时 {elapsed}s", "success")
             # ★ 模块完成后回调（web_server 用它跑 LLM 脚本审查，不阻塞下一模块）
             if on_module_done is not None:
-                try:
-                    on_module_done(name, results[name])
-                except Exception as _e:
-                    step_log(f"⚠ {name} 完成后回调异常: {_e}", "warning")
+                # ★ 听力专项：练习/测试分别完成后回调（stage 区分，避免脚本错配比对）
+                if name == "听力专项" and (_p_res or _t_res):
+                    if _p_res and on_module_done is not None:
+                        try:
+                            on_module_done(name, _p_res)
+                        except Exception as _e:
+                            step_log(f"⚠ 听力专项·练习 完成后回调异常: {_e}", "warning")
+                    if _t_res and on_module_done is not None:
+                        try:
+                            on_module_done(name, _t_res)
+                        except Exception as _e:
+                            step_log(f"⚠ 听力专项·测试 完成后回调异常: {_e}", "warning")
+                elif on_module_done is not None:
+                    try:
+                        on_module_done(name, results[name])
+                    except Exception as _e:
+                        step_log(f"⚠ {name} 完成后回调异常: {_e}", "warning")
         except Exception as e:
             elapsed = round(time.time() - t0)
             results[name] = {"q": 0, "t": elapsed, "ok": False, "error": str(e)}
