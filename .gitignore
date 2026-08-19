@@ -70,3 +70,11 @@ outputs/reports/latest/report_live.html
 data/inspection_state.json
 outputs/reports/latest/
 outputs/web/live.png
+
+# 生成报告（合并后新增的产物目录）
+outputs/reports/湘少版/U*/ 
+outputs/reports/湘少版/UNONE_*/
+outputs/reports/湘少版/U全部_*/
+
+# 空壳 gitlink（无 .gitmodules 映射，勿追踪）
+EnglishBabyTest/
