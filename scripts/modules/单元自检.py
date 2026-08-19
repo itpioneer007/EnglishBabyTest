@@ -556,15 +556,17 @@ def _enter_unit(d, unit_num):
         return False
 
     # 方式1：按 Unit N 标题文字匹配（可靠，不受列表顺序/滚动影响）
+    #   ★ 容错：Unit3(无空格)/"U3单元评价"简写 都匹配（用户实测严格正则漏匹配→误下滑）
     import re as _re
-    target_title = _re.compile(rf"Unit\s*{unit_num}\s*单元评价")
+    target_title = _re.compile(rf"Unit\s*{_re.escape(str(unit_num))}", _re.IGNORECASE)
+    target_title_u = _re.compile(rf"U\s*{_re.escape(str(unit_num))}\s*单元评价", _re.IGNORECASE)
     for _ in range(8):
         elements = (d.xpath('//*[@text!=""]').all() or [])
         # 找目标单元标题
         row = None
         for e in elements:
             t = (e.text or "").strip()
-            if target_title.search(t):
+            if target_title.search(t) or target_title_u.search(t):
                 row = e
                 break
         if row:
@@ -573,11 +575,13 @@ def _enter_unit(d, unit_num):
             # ★ 用户确认：默认先测前面的单元（Unit1 就在最顶部），找到同行按钮
             #   就**直接点击**，绝不下滑！（之前 y<350 遮挡区过滤 → 下滑反而把
             #   Unit1 滚出屏幕 → 永远找不到 → 死循环）
+            # ★ 修复（用户实测）：标题行和按钮行距可能 >300（如标题在行首、按钮
+            #   在行尾），dy<300 不命中 → 下滑 → 目标滚出屏幕。放宽到 500。
             for e in elements:
                 t = (e.text or "").strip()
                 if t in ("去答题", "重新答题", "继续答题"):
                     dy = abs(e.bounds[1] - row_y)
-                    if dy < 300:  # 同行 → 直接点击（顶部版本条只是视觉覆盖，可点中）
+                    if dy < 500:  # 同行/近行 → 直接点击（顶部版本条只是视觉覆盖，可点中）
                         try:
                             e.click()
                         except Exception:

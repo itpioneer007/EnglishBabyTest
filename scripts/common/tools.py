@@ -543,13 +543,24 @@ def smart_find_unit_row(d, target, click_text="去答题", max_pages=8, prefer_r
         if is_keyword:
             return s in t          # 标题包含关键词（如"AI检测 测试题目选题"）
         # 数字/区间：Unit N 或 Unit N单元评价（忽略"湘少X上"前缀）
-        if _re.search(rf"Unit\s*{s}(?:\s*单元评价|\s|$)", t):
+        #   ★ 容错：Unit3(无空格) / "Unit 3·单元评价" / "Unit 3 单元评价" 都匹配
+        #     —— 之前严格 `(?:\s*单元评价|\s|$)` 在"Unit3单元评价"(无空格)时
+        #     可能漏匹配 → 误下滑（用户实测：目标在首屏却下滑找不到）
+        if _re.search(rf"U\s*n\s*i\s*t\s*{_re.escape(s)}", t, _re.IGNORECASE):
             return True
         if _re.fullmatch(r"\d+", s):
-            return _re.search(rf"U{_re.escape(s)}(?:\s|$)", t) is not None
+            # U3 / U3单元 / U 3（单元自检新列表可能用 U3 简写）
+            if _re.search(rf"U\s*{_re.escape(s)}(?:\s*单元评价|\s*·|\s|$)", t, _re.IGNORECASE):
+                return True
         return False
 
     # ③ 逐屏查找：标题行 → 点同行 click_text 按钮
+    #   ★ 修复（用户实测）：目标单元明明在首屏却下滑 → 找不到。
+    #     根因：U3 中途退出显示"继续答题"，prefer_restart=True 不接受 →
+    #     匹配不到 → 下滑 → U3 滚出屏幕 → 永远找不到。
+    #     修复：首屏先"无下滑"完整找一遍（含降级接受"继续答题"），
+    #           下滑只在确认首屏没有目标时才发生。
+    _fallback_accept = False  # 是否已降级接受"继续答题"
     for _ in range(max_pages):
         try:
             elements = (d.xpath('//*[@text!=""]').all() or [])
@@ -562,8 +573,9 @@ def smart_find_unit_row(d, target, click_text="去答题", max_pages=8, prefer_r
                 break
         if row:
             row_y = row.bounds[1]
-            # ★ prefer_restart：同行只接受"去答题/重新答题"（排除"继续答题"）
-            _accept = ("去答题", "重新答题") if prefer_restart else ("去答题", "重新答题", "继续答题")
+            # ★ prefer_restart：优先"去答题/重新答题"；首屏找不到时降级接受"继续答题"
+            _accept = ("去答题", "重新答题") if (prefer_restart and not _fallback_accept) \
+                else ("去答题", "重新答题", "继续答题")
             for e in elements:
                 t = (e.text or "").strip()
                 # ★ 按钮文字多状态匹配（用户确认）：
@@ -574,19 +586,24 @@ def smart_find_unit_row(d, target, click_text="去答题", max_pages=8, prefer_r
                 _btn_hit = (t == click_text or t in _accept
                             or (click_text in _accept and t in _accept))
                 if _btn_hit:
-                    # ★ 同行判断（行距放宽）：
+                    # ★ 同行判断（行距放宽到 500：标题行与按钮可能隔一个元素，
+                    #   如标题在行首、按钮在行尾——dy<300 会漏 → 误下滑滚出屏幕）
                     #   ★ 用户确认：默认先测前面的单元（如 Unit1 就在列表最顶部），
                     #     找到同行按钮就**直接点击**，绝不下滑！
                     #   ❌ 之前"y<350 判为遮挡区→下滑重试"是错的：Unit1 在最顶部，
                     #     下滑反而把它滚出屏幕 → 永远找不到 → 死循环！
                     #     （顶部版本条只是视觉覆盖，按钮仍可点击命中）
-                    if abs(e.bounds[1] - row_y) < 300:
+                    if abs(e.bounds[1] - row_y) < 500:
                         try:
                             e.click()
                         except Exception:
                             d.click((e.bounds[0]+e.bounds[2])//2, (e.bounds[1]+e.bounds[3])//2)
                         return True
-        # 未找到目标行/同行按钮 → 下滑翻页（只有找不到目标单元才下滑）
+        # 首屏（第 1 轮）未命中且 prefer_restart → 降级接受"继续答题"再找一遍（不下滑！）
+        if _ == 0 and prefer_restart and not _fallback_accept:
+            _fallback_accept = True
+            continue
+        # 未找到目标行/同行按钮 → 下滑翻页（只有确认首屏没有目标才下滑）
         try:
             S_swipe(d, 540, 1800, 540, 600, 0.3)
             time.sleep(0.4)
