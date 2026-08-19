@@ -307,7 +307,11 @@ def _detect_content_dimension(module: str = ""):
             return
         # ★ 按当前模块单元过滤脚本（用户要求：脚本含多单元，只比对所选单元）
         #   从 _inspection_state 读当前单元（多模块检测启动时记录）
-        _unit_cur = int(_inspection_state.get("unit", 0) or 0)
+        # ★ 从 _inspection_state 读当前单元（多模块检测启动时记录）——防御"NONE"/非数字
+        try:
+            _unit_cur = int(str(_inspection_state.get("unit", 0) or 0).split("-")[0])
+        except Exception:
+            _unit_cur = 0
         from src.review_agent import ReviewAgent, ReviewConfig
         cfg = ReviewConfig(docx_path=str(docx_path), unit=_unit_cur, screenshot_dir="", verbose=False)
         agent = ReviewAgent(cfg)
@@ -4662,13 +4666,18 @@ def api_modules_run():
                 #   （原同步调用：听力专项完成后在主页面卡几分钟等逐题 LLM 审查，
                 #     审查完才继续口语训练 → 用户实测"主页卡好久"）
                 # ★ unit 解析：听力专项·测试单元在 units["听力专项_测试"]；练习单元在 units["听力专项"]
+                #   ★ 防御："NONE"哨兵（前端未勾选）→ 不是数字，忽略
                 _u = 0
                 if _stage == "测试":
                     _u_raw = units.get("听力专项_测试", "") or units.get(_mod, "")
                 else:
                     _u_raw = units.get(_mod, "") or 0
                 try:
-                    _u = int(str(_u_raw).split("-")[0])
+                    _u_str = str(_u_raw).strip()
+                    if _u_str and _u_str.upper() != "NONE" and _u_str[0].isdigit():
+                        _u = int(_u_str.split("-")[0])
+                    else:
+                        _u = 0
                 except Exception:
                     _u = 0
                 try:

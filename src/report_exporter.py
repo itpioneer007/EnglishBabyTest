@@ -142,8 +142,12 @@ class ReportExporter:
             r"|\d+\s*/\s*\d+"               # 3/40
             r"|\d+\.\d+"                    # 77.0
             r"|\d+"                         # 100
+            r"|第\d+题"                     # ★ 第25题（题号占位，非题干）
             r")\s*$"
         )
+        # ★ 题号占位题干："第4题（听音选择词汇）" → 去掉"第N题（"前缀保留题型
+        s = re.sub(r"^第\d+题[（(]", "", s)
+        s = re.sub(r"[）)]$", "", s) if not re.match(r"^第\d+题", s) else s
         # 按 engine 连接符拆（" / " 及兼容的 |｜·），中文逗号属于题干本身不拆
         parts = [p.strip() for p in re.split(r"\s*(?:/|｜|\|)\s*", s)]
         clean = [p for p in parts if p and not _noise.match(p)]
@@ -659,23 +663,18 @@ class ReportExporter:
                 #   用户实测原版 reasons.append(f"{dim_name}：{r}") 把"内容"维度的同一条
                 #   错误重复 push 多条，且改进建议全 fallback 到"人工复核"
                 #   → 改为：每个失败维度只取最关键一条，最终拼成 1-2 条简洁理由
-                #   ★ "待审/需人工复核/未检"不是不通过（LLM 无法判定）→ 不列入出错理由
+                #   ★ 仅 ai_field=False 的维度才算失败（REVIEW/待审/未检=None 不入错题）
                 dim_failures = []
                 for dim_name, reason_field, ai_field in self._LIVE_DIMS:
-                    r = (q.get(reason_field, "") or "").strip()
                     ai_fail = q.get(ai_field) is False
-                    if not r and not ai_fail:
-                        continue
-                    if ai_fail and not r:
-                        r = "未通过"  # 失败但无 reason
-                    # ★ 仅明确失败才列入：不通过/⚠ 失败信号；"待审/需人工复核/无法解析"跳过
-                    _is_pending = any(k in r for k in ("待审", "需人工复核", "无法解析", "未检"))
-                    if _is_pending and not ai_fail:
-                        continue
-                    if "不通过" in r or "⚠" in r or "失败" in r:
-                        # ★ 截短 reason（避免整段 LLM 大段文字塞进报告）
-                        r_short = re.sub(r"\s+", " ", r)[:120]
-                        dim_failures.append(f"{dim_name}：{r_short}")
+                    if not ai_fail:
+                        continue  # ★ 只收明确不通过的维度
+                    r = (q.get(reason_field, "") or "").strip()
+                    if not r:
+                        r = "未通过"
+                    # ★ 截短 reason（避免整段 LLM 大段文字塞进报告）
+                    r_short = re.sub(r"\s+", " ", r)[:120]
+                    dim_failures.append(f"{dim_name}：{r_short}")
                 if not dim_failures:
                     # 兜底
                     if q.get("question_type") == "错题截图":
