@@ -78,3 +78,4 @@ outputs/reports/湘少版/U全部_*/
 
 # 空壳 gitlink（无 .gitmodules 映射，勿追踪）
 EnglishBabyTest/
+_state.json
