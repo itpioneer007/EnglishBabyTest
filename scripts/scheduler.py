@@ -151,8 +151,14 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
     except Exception as e:
         step_log(f"⚠ App 重启异常: {e}", "error")
 
-    # 0.5 关广告（与单模块 main() 一致：先清全局弹窗 + 关广告，再操作界面，
-    #     否则重启 App 后主页广告/弹窗未关，后续点坐标会点到广告上！）
+    # 1. 前提：切换版本+年级（全部模块共用一次）
+    #   ★ 修复：日志顺序与操作顺序一致——先切版本年级再关广告
+    #   （切完版本/年级后页面会重载，可能产生新广告，必须在操作前关掉）
+    step_log(f"🔧 切换版本/年级: {version} {grade}", "step")
+    _switch_if_needed(d, version, grade)
+
+    # 1.5 关广告（与单模块 main() 一致：先清全局弹窗 + 关广告，再操作界面，
+    #     否则切完版本/年级后主页新广告/弹窗未关，后续点坐标会点到广告上！）
     step_log("🧹 清理广告弹窗...", "step")
     try:
         # ★ 广告延迟加载（冷重启后 4-6s 甚至更晚才出现）+ 可能弹多个：
@@ -161,10 +167,6 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
         settle_ads(d, wait_total=12)
     except Exception as e:
         print(f"  ⚠ 关广告异常: {e}")
-
-    # 1. 前提：切换版本+年级（全部模块共用一次）
-    step_log(f"🔧 切换版本/年级: {version} {grade}", "step")
-    _switch_if_needed(d, version, grade)
 
     results = {}
     for i, name in enumerate(module_names):

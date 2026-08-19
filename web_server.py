@@ -382,25 +382,43 @@ def _detect_content_dimension(module: str = ""):
             if data is None:
                 raise ValueError(f"LLM 返回内容无法解析为 JSON: {raw[:80]!r}…")
             count = 0
+            # ★ 查重：idx+stage 已存在时复用 qid（避免 LLM 审查与 engine.py 重复记录同一题）
             for item in data:
                 qi = item.get("idx", 0)
                 qid = qid_map.get(qi)
-                if not qid or not _inspection_state["questions"].get(qid): continue
+                if not qid or not _inspection_state["questions"].get(qid):
+                    # 兜底：按 stage+idx 找已有 qid（避免 LLM qid 失效时丢失写入）
+                    _existing_qid = None
+                    for _k, _v in list(_inspection_state["questions"].items()):
+                        if (_v.get("idx") == qi
+                                and (_v.get("stage") or "") == (stage or "")):
+                            _existing_qid = _k
+                            break
+                    if _existing_qid:
+                        qid = _existing_qid
+                    else:
+                        continue
                 q_obj = _inspection_state["questions"][qid]
                 v = str(item.get("verdict","REVIEW")).upper()
                 ls = item.get("lang") or []
                 # ★ 修复矛盾：ai_content(是否通过) 与 content_reason(解释词) 必须一致
                 #   PASS 但带 lang 语言问题 → 整体判不通过，reason 显示"有语言问题"而非"通过"
                 has_lang = len(ls) > 0
-                passed = (v == "PASS" and not has_lang)
-                if passed:
-                    vv = "通过"
-                elif v == "REJECT":
-                    vv = "不通过"
-                elif v == "PASS":
-                    vv = "通过但有问题"  # PASS 但带语言问题 → 不通过（与 ai_content=False 一致）
-                else:
+                # ★ REVIEW=待审（信息不足无法判断，如选项内容为空）→ 计未检(None)而非不通过
+                #   用户实测：待审被当不通过 → 明明其他维度过却综合判定不通过
+                if v == "REVIEW":
+                    passed = None
                     vv = "待审"
+                else:
+                    passed = (v == "PASS" and not has_lang)
+                    if passed:
+                        vv = "通过"
+                    elif v == "REJECT":
+                        vv = "不通过"
+                    elif v == "PASS":
+                        vv = "通过但有问题"  # PASS 但带语言问题 → 不通过（与 ai_content=False 一致）
+                    else:
+                        vv = "待审"
                 b = (item.get("basis") or "")[:200]
                 d = f"{vv}: {b}"
                 for li in ls[:3]:
@@ -4420,6 +4438,10 @@ def _qreview_to_state(module: str, docx: str, unit, r, stage: str = "") -> dict:
         # ★ skip = 该维度无法核对（听音/图片题无截图），计为「未检」而非「不通过」
         if getattr(chk, "method", "") == "skip":
             return None, det[:300], "skip"
+        # ★ uncertain = LLM 无法解析判定（待审/需人工复核）→ 也计「未检」而非「不通过」
+        #   用户实测："待审"被当成不通过 → 明明几维过却综合判定不通过
+        if getattr(chk, "method", "") == "uncertain":
+            return None, det[:300], "uncertain"
         return chk.passed, det[:300], chk.method or ""
     dims = {
         "stem": _cr(r.stem_check), "content": _cr(r.content_check),
@@ -4438,11 +4460,13 @@ def _qreview_to_state(module: str, docx: str, unit, r, stage: str = "") -> dict:
         elif all(v is True for v in checked):
             overall = True
         # 部分检查（无 False 但未全过，如仅 1 维）→ 保持 None（未定），不误报不通过
+    # ★ module_qno：脚本 idx（后续由 report_exporter 按 stage 分组重置显示）
     return {
         "idx": r.idx, "total": 0,
         "question_type": r.question_type or "脚本题",
         "module": module,            # ★ 模块（分组展示用）
         "stage": stage or "",        # ★ 子模块阶段（基础巩固/综合进阶/难点突破）
+        "module_qno": r.idx,        # 写脚本 idx；report_exporter 按 stage 重新排号
         "screenshot": "",
         "progress": f"Q{r.idx:02d}",
         "ai_stem": dims["stem"][0], "ai_content": dims["content"][0],

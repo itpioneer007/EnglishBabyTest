@@ -580,40 +580,68 @@ class ReportExporter:
         # 标题
         title = doc.add_heading(f"英语宝错题报告", level=0)
         title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        # ★ 美化：大标题深绿色加粗 + 微软雅黑
+        for run in title.runs:
+            run.font.color.rgb = RGBColor(0x1B, 0x43, 0x32)  # 深绿
+            run.font.name = "微软雅黑"
+            run.font.bold = True
         p = doc.add_paragraph()
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
         run = p.add_run(f"版本：{version}　|　生成时间：{date_str}")
-        run.font.size = Pt(11)
+        run.font.size = Pt(10.5)
         run.font.color.rgb = RGBColor(0x88, 0x88, 0x88)
+        run.font.name = "微软雅黑"
 
         # 总览
-        doc.add_heading("总览", level=1)
+        h_summary = doc.add_heading("总览", level=1)
+        for run in h_summary.runs:
+            run.font.color.rgb = RGBColor(0x2D, 0x6A, 0x4F)  # 中绿
+            run.font.name = "微软雅黑"
+            run.font.bold = True
+            run.font.size = Pt(15)
         summary = doc.add_paragraph()
         total_err = len(errors)
         total_q = len(questions)
-        summary.add_run(
+        sum_run = summary.add_run(
             f"共检测 {total_q} 题，其中错题/需复核 {total_err} 题，涉及 {len(groups)} 个模块板块。"
         )
+        sum_run.font.name = "微软雅黑"
+        sum_run.font.size = Pt(11)
 
         # 每个模块板块
         for ki, key in enumerate(order, 1):
             g = groups[key]
-            doc.add_heading(f"{ki}. {g['name']}（错题 {len(g['items'])} 题）", level=1)
+            h_grp = doc.add_heading(f"{ki}. {g['name']}（错题 {len(g['items'])} 题）", level=1)
+            # ★ 美化：模块分组标题中绿色（#2d6a4f）+ 微软雅黑
+            for run in h_grp.runs:
+                run.font.color.rgb = RGBColor(0x2D, 0x6A, 0x4F)
+                run.font.name = "微软雅黑"
+                run.font.bold = True
+                run.font.size = Pt(14)
 
-            for qi, q in enumerate(g["items"], 1):
+            # ★ 组内按 idx 升序排，并重新分配 module_qno（按 stage 从 1 开始计）
+            #   解决"第 25 题"问题：脚本 idx 是全局号（基础巩固 1-14 / 综合进阶 15-24 /
+            #   难点突破 25-31），但显示应按 stage 内子题号
+            sorted_items = sorted(g["items"], key=lambda x: x.get("idx", 0))
+            for qi, q in enumerate(sorted_items, 1):
                 qid = q.get("qid", "")
                 qtype = q.get("question_type", "未知题型")
                 qno = q.get("progress", "") or qid
-                # ★ 位置题号：优先模块内题号 module_qno（该子模块第几题），否则用 idx
-                idx = q.get("module_qno") or q.get("idx", "?")
-                if isinstance(idx, float):
-                    idx = int(idx) if idx == int(idx) else idx
+                # ★ 子模块内题号：qi 已是 stage 内顺序（1起）
+                #   但原 module_qno 字段是脚本全局 idx 1-31，必须用 qi
+                idx = qi
 
                 # 位置说明（★ 已在分组大标题下展示模块，题内只写第几题）
                 loc_str = f"第{idx}题"
 
                 # 题型标题
                 h = doc.add_heading(f"{qi}. 第{idx}题　[{qtype}]", level=2)
+                # ★ 美化：每题标题深灰色
+                for run in h.runs:
+                    run.font.color.rgb = RGBColor(0x1A, 0x20, 0x2C)  # 近黑
+                    run.font.name = "微软雅黑"
+                    run.font.bold = True
+                    run.font.size = Pt(12.5)
 
                 # 位置（★ 显示"模块 · 子模块 · 第N题"完整路径，检查人员一目了然）
                 p = doc.add_paragraph()
@@ -627,27 +655,58 @@ class ReportExporter:
                     p.add_run("▸ 题干：").bold = True
                     p.add_run(_stem_clean)
 
-                reasons = []
+                # ★ 6 维度 reason 合并：按"维度:原因"形式拼成一条综合理由（避免重复）
+                #   用户实测原版 reasons.append(f"{dim_name}：{r}") 把"内容"维度的同一条
+                #   错误重复 push 多条，且改进建议全 fallback 到"人工复核"
+                #   → 改为：每个失败维度只取最关键一条，最终拼成 1-2 条简洁理由
+                #   ★ "待审/需人工复核/未检"不是不通过（LLM 无法判定）→ 不列入出错理由
+                dim_failures = []
                 for dim_name, reason_field, ai_field in self._LIVE_DIMS:
-                    r = q.get(reason_field, "")
-                    if r and ("不通过" in r or "⚠" in r or "未" in r or "失败" in r
-                              or q.get(ai_field) is False):
-                        reasons.append(f"{dim_name}：{r}")
-                if not reasons:
-                    # 兜底：从 overall 说明
+                    r = (q.get(reason_field, "") or "").strip()
+                    ai_fail = q.get(ai_field) is False
+                    if not r and not ai_fail:
+                        continue
+                    if ai_fail and not r:
+                        r = "未通过"  # 失败但无 reason
+                    # ★ 仅明确失败才列入：不通过/⚠ 失败信号；"待审/需人工复核/无法解析"跳过
+                    _is_pending = any(k in r for k in ("待审", "需人工复核", "无法解析", "未检"))
+                    if _is_pending and not ai_fail:
+                        continue
+                    if "不通过" in r or "⚠" in r or "失败" in r:
+                        # ★ 截短 reason（避免整段 LLM 大段文字塞进报告）
+                        r_short = re.sub(r"\s+", " ", r)[:120]
+                        dim_failures.append(f"{dim_name}：{r_short}")
+                if not dim_failures:
+                    # 兜底
                     if q.get("question_type") == "错题截图":
-                        reasons.append("答题答错（已截图）")
+                        dim_failures = ["答题答错（已截图核对）"]
                     else:
-                        reasons.append("界面检查未通过（存在不通过维度或缺失必要元素）")
+                        dim_failures = ["界面检查未通过"]
+                # ★ 合并：维度去重（同一维度不重复），最终取前 2 条避免冗长
+                seen_dim = set()
+                compact_reasons = []
+                for r in dim_failures:
+                    dim = r.split("：")[0]
+                    if dim in seen_dim:
+                        continue
+                    seen_dim.add(dim)
+                    compact_reasons.append(r)
+                compact_reasons = compact_reasons[:2]  # 最多 2 条
 
                 p = doc.add_paragraph()
-                p.add_run("▸ 出错理由：").bold = True
-                p.add_run("\n".join(f"  · {r}" for r in reasons) if reasons else "  （无）")
+                _r = p.add_run("▸ 出错理由：")
+                _r.bold = True
+                _r.font.color.rgb = RGBColor(0xC0, 0x39, 0x2B)  # 红色
+                p.add_run("\n".join(f"  · {r}" for r in compact_reasons))
 
-                # 改进建议（AI 启发式：根据原因生成）
-                sugg = self._build_suggestion(q, reasons)
+                # 改进建议（按失败原因生成针对性建议）
+                sugg = self._build_suggestion(q, compact_reasons)
+                # ★ 建议去重 + 最多 2 条（避免冗长）
+                sugg = sugg[:2]
                 p = doc.add_paragraph()
-                p.add_run("▸ 改进建议：").bold = True
+                _s = p.add_run("▸ 改进建议：")
+                _s.bold = True
+                _s.font.color.rgb = RGBColor(0x1B, 0x43, 0x32)  # 深绿色
                 p.add_run("\n".join(f"  · {s}" for s in sugg) if sugg else "  （请人工核对）")
 
                 # 截图
@@ -752,6 +811,18 @@ class ReportExporter:
                 sugg.append(
                     "选项与题干语义不匹配：请核对选项内容，确保各选项均围绕题干要求设置"
                     "（正确项唯一、干扰项相关），避免学生因选项无关而困惑。"
+                )
+                continue
+            # ⓹ ★ 脚本选项内容为空（"选项内容为空"/"选项文字为空"/"仅有占位符"）
+            #   真实原因：图片题脚本只写"A. / B."没描述图片内容，比对 agent 无法判内容
+            #   → 提示用户在脚本中补全选项描述（或脚本写作规范）
+            if ("选项" in body and ("内容为空" in body or "文字为空" in body
+                                    or "未提供" in body or "占位符" in body
+                                    or "A.; B." in body or "缺失" in body)):
+                sugg.append(
+                    "脚本选项描述缺失：图片/听力题的脚本选项若只有字母标号无具体内容描述，"
+                    "审查 agent 无法判断内容是否正确。请在脚本中补全每个选项的实际描述"
+                    "（如 \"A. 图片：男孩在弹钢琴\"）便于自动审核。"
                 )
                 continue
             # ⑥ 题干未提取到/缺失
