@@ -180,7 +180,7 @@ class QuestionCollector:
 
     # ------------------------------------------------------------
     def add(self, qno, stem="", options=None, answer="", qtype="",
-            unit=0, recording="", knowledge="", big=None):
+            unit=0, recording="", knowledge="", big=None, image_path=""):
         """收集一道题。仅当有题干（非纯听音）才保留，否则跳过。
 
         Args:
@@ -193,9 +193,23 @@ class QuestionCollector:
             recording: 录音原文（听力题可能有）
             knowledge: 知识点（可选，LLM 生成或留空）
             big: 大题号（口语训练等"第N大题"定位用）
+            image_path: 图片题截图路径（★ 选项为空但有截图时，finish_unit 用视觉模型识别补全）
         """
         stem = (stem or "").strip()
-        if not stem or stem in ("(无题干文字)", "(无)", "听录音", "听录音，选择正确答案"):
+        # ★ 图片题（选项为图片）可能无题干文字但截图可见题目要求 →
+        #   有截图时不完全跳过，记录到 img_questions 单独处理
+        if (not stem or stem in ("(无题干文字)", "(无)", "听录音", "听录音，选择正确答案")):
+            if image_path and os.path.exists(image_path):
+                self.questions.append({
+                    "qno": int(qno) if str(qno).isdigit() else qno,
+                    "stem": stem, "options": [], "answer": str(answer).strip(),
+                    "qtype": qtype or "", "unit": int(unit) if str(unit).isdigit() else unit,
+                    "recording": (recording or "").strip(),
+                    "knowledge": "", "big": big,
+                    "image_path": image_path,
+                    "time": datetime.now().strftime("%H:%M:%S"),
+                })
+                return
             self.skipped_no_stem += 1
             return
         # ★ 听音题判定（用户明确要求）：题干含"听"字即跳过——
@@ -282,6 +296,37 @@ class QuestionCollector:
         for q in self.questions:
             if not q.get("knowledge"):
                 q["knowledge"] = self._llm_knowledge(q)
+        # ★ 图片题识别补全：选项为空但有截图 → 视觉模型识别图片内容 → 补全选项/答案
+        #   （用户需求：图片题脚本只有"A./B."占位无法核对 → 识别截图填内容）
+        _img_qs = [q for q in self.questions
+                   if q.get("image_path") and (not q.get("options") or len(q.get("options", [])) < 2)]
+        if _img_qs:
+            print(f"  🖼 正在识别 {len(_img_qs)} 道图片题的截图（视觉模型）…")
+            for q in _img_qs:
+                try:
+                    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                    from common.vision_fill import recognize_image_question
+                    res = recognize_image_question(
+                        q.get("image_path", ""),
+                        question_hint=q.get("qtype", ""),
+                        known_options=q.get("options") or None,
+                        answer_hint=q.get("answer", ""),
+                    )
+                    if res.get("ok"):
+                        if res.get("options"):
+                            q["options"] = res["options"]
+                        if res.get("answer"):
+                            q["answer"] = res["answer"]
+                        if not q.get("stem") and res.get("stem"):
+                            q["stem"] = res["stem"]
+                        if res.get("description"):
+                            q["knowledge"] = (q.get("knowledge") or "") + (
+                                f" 题目图片: {res['description']}" if not q.get("knowledge") else "")
+                        print(f"    ✅ Q{q.get('qno')} 图片识别完成: {res.get('description', '')[:30]}")
+                    else:
+                        print(f"    ⚠ Q{q.get('qno')} 图片识别失败: {res.get('error', '')[:60]}")
+                except Exception as e:
+                    print(f"    ⚠ Q{q.get('qno')} 图片识别异常: {e}")
         _u = f"U{unit}"
         # ★ 规范文件名：日期+版本缩写+年级缩写+模块[+单元]，如
         #   "260817湘少五上单元自检U6.docx"（参考官方脚本"260714新湘鲁六上听力专项"格式）

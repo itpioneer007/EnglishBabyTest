@@ -402,6 +402,25 @@ def _test_answer_loop(d, max_q=45):
                 _img_xy = ((x1 + x2) // 2, (y1 + y2) // 2)
                 break
         if _img_xy:
+            # ★ 图片题截图：供脚本生成时视觉识别补全选项内容/答案
+            #   （脚本图片题选项只有"A./B."占位 → 识别截图填内容，审查可核对）
+            try:
+                _img_dir = os.path.join(
+                    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                    "screenshots", "script_imgs")
+                os.makedirs(_img_dir, exist_ok=True)
+                _img_f = f"listen_q{q+1:02d}.png"
+                for _ir in range(3):
+                    try:
+                        d.screenshot(os.path.join(_img_dir, _img_f))
+                        break
+                    except OSError:
+                        if _ir >= 2:
+                            raise
+                        time.sleep(0.4)
+                print(f"      → 图片题截图: script_imgs/{_img_f}")
+            except Exception:
+                pass
             d.click(*_img_xy)
             opt = "图片选项"
             q += 1
