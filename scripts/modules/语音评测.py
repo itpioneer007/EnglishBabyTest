@@ -35,6 +35,7 @@ from common.tools import (
     close_ad, dismiss_global_popups, ensure_grade, scroll_and_find,
     smart_find_unit_row, applock_blocked,
 )
+from common.logger import step_log
 
 APP_PACKAGE = "com.dinoenglish.yyb"
 
@@ -375,6 +376,15 @@ def _answer_one_part(d, part_text):
         _scroll_to_current(d, i, total)
         # 2. 确认当前是 N/M 题（页面上 "i/total"）
         time.sleep(0.4)
+        # ★ 每题界面级完整性检查（六维：题型/题干/选项/音频/作答，前端证据卡）
+        #   复用 collect_ui_evidence（口语题识别：跟读/原音/点击录音 关键词命中）
+        try:
+            _xml_ev = d.dump_hierarchy()
+            from common.evidence import collect_ui_evidence
+            step_log(f"  第{i}题 完整性检查", "info",
+                     collect_ui_evidence(_xml_ev, qtype="语音评测"))
+        except Exception:
+            pass
         # 3. 流程（★ 用户确认：切题时 App 会自动播放原音，无需点"原音"按钮）
         #   切题后等自动原音播放完（约 2s），再点录音（学生听完才好跟读）
         time.sleep(2.0)   # 等自动原音播放

@@ -339,7 +339,8 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
             #   否则 → 播放控件 skip（该小题就是直接朗读，无需小喇叭）
             _need_play = any(k in xml for k in
                              ("小喇叭", "播放问题", "点击播放", "先听", "听一听再",
-                              "点小喇叭", "播放录音", "听音跟读", "听录音跟读", "播放"))
+                              "点小喇叭", "播放录音", "听音跟读", "听录音跟读", "播放",
+                              "原音"))  # ★ 语音评测"原音"按钮 = 播放控件，须可点
             if _need_play:
                 ev.append({"field": "音频", "type": "text_ok" if play_clickable else "text_mismatch",
                            "expected": "口语题须有可点击的播放控件(小喇叭/导读音频)",
