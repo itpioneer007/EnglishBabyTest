@@ -61,10 +61,16 @@ USER_READ_TIMEOUT = 15
 
 
 # ============================================================
-# 入口：主页 → 语音评测（内部切版本/年级）
+# 入口：主页 → 语音评测（继承主页版本，必要时内部切版本/年级）
 # ============================================================
-def _enter_voice_eval(d):
-    """主页 → 教材精学 → 语音评测图片卡 → 内部切到指定版本/年级"""
+def _enter_voice_eval(d, expected_grade="", expected_version=""):
+    """主页 → 语音评测（文字+图片标签，点击文字/图片均可进入）
+    ★ 新版（2026-08-23）：语音评测从主页继承当前版本/年级——
+      主页是二年级上册，进入语音评测直接就是二年级上册目录，无需内部切换。
+      内部切换（_switch_version_grade）保留为兜底：仅当进入后发现版本不匹配时调用。
+    """
+    expected_grade = expected_grade or GRADE_LEVEL
+    expected_version = expected_version or BOOK_VERSION
     # 1. 确保在主页
     for _ in range(5):
         try:
@@ -74,8 +80,27 @@ def _enter_voice_eval(d):
         except Exception:
             pass
         d.press('back'); time.sleep(0.6)
-    # 2. 点语音评测图片卡
-    d.click(*VOICE_CARD)
+    # 2. 点语音评测（优先按文字 name_tv 定位；找不到再按卡片坐标）
+    _clicked = False
+    for _ in range(3):
+        try:
+            xml = d.dump_hierarchy()
+            m = re.search(r'text="语音评测"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml)
+            if m:
+                x = (int(m.group(1)) + int(m.group(3))) // 2
+                y = (int(m.group(2)) + int(m.group(4))) // 2
+                print(f"  → 点语音评测文字 ({x},{y})")
+                d.click(x, y)
+                _clicked = True
+                break
+        except Exception:
+            pass
+        time.sleep(0.5)
+    if not _clicked:
+        # 兜底：老版本图片卡坐标
+        print("  → 未找到语音评测文字，尝试图片卡坐标")
+        d.click(*VOICE_CARD)
+        _clicked = True
     time.sleep(2.5)
     # 应用锁拦截（点语音评测偶发触发 OPPO 应用锁）
     if applock_blocked(d):
@@ -89,16 +114,31 @@ def _enter_voice_eval(d):
             print("    ❌ 应用锁未消失，请手动解锁后重试")
             return False
     # 3. 验证进入语音评测（顶部有版本栏 + 简介/目录 tab）
+    _entered = False
     for _ in range(6):
         try:
             xml = d.dump_hierarchy()
             if '学习进度' in xml and ('简介' in xml or '目录' in xml):
+                _entered = True
                 break
         except Exception:
             pass
         time.sleep(0.5)
-    # 4. 内部切版本/年级：点顶部版本栏 → 左栏选版本 → 右栏选年级
-    return _switch_version_grade(d, BOOK_VERSION, GRADE_LEVEL)
+    if not _entered:
+        print("  ❌ 未进入语音评测页")
+        return False
+    # 4. 版本匹配检查：进入后若版本/年级不符 → 内部切换（兜底）
+    try:
+        xml = d.dump_hierarchy()
+        _ver_ok = expected_version in xml
+        _grade_ok = expected_grade in xml
+        if _ver_ok and _grade_ok:
+            print(f"  → 版本已匹配（{expected_version} {expected_grade}），无需切换")
+            return True
+        print(f"  → 版本不匹配（期望 {expected_version} {expected_grade}），内部切换")
+        return _switch_version_grade(d, expected_version, expected_grade)
+    except Exception:
+        return True
 
 
 def _switch_version_grade(d, target_version, target_grade):
@@ -404,13 +444,14 @@ def _next_section(d):
 # ============================================================
 # 总入口
 # ============================================================
-def run_module(d, units=None):
+def run_module(d, units=None, expected_grade="", expected_version=""):
     """语音评测自动化入口（半自动：每条题目需用户对麦克风朗读）
     units: list[int]，如 [1, 2] 跑 Unit 1-2；None = 全部 Unit
+    expected_grade/expected_version: 期望的年级/版本（从主页继承，内部切换兜底用）
     """
     t0 = time.time()
     print(f"\n📋 语音评测 · 半自动混合模式")
-    if not _enter_voice_eval(d):
+    if not _enter_voice_eval(d, expected_grade, expected_version):
         return 0
     time.sleep(1.0)
     # 列出所有 Unit
@@ -420,7 +461,26 @@ def run_module(d, units=None):
         return 0
     print(f"  📚 找到 {len(all_units)} 个 Unit")
     # 选要跑的 Unit
-    targets = all_units if units is None else [u for u in all_units if u[0] in units]
+    # ★ 兼容 units 格式：list[int] / "1-3"区间 / "1,3,5"枚举 / None全部
+    _u_targets = None
+    if units is not None:
+        if isinstance(units, str):
+            units = str(units).strip()
+            if '-' in units:
+                a, b = units.split('-', 1)
+                _u_targets = list(range(int(a), int(b) + 1))
+            elif ',' in units:
+                _u_targets = [int(x) for x in units.split(',') if x.strip().isdigit()]
+            elif units.isdigit():
+                _u_targets = [int(units)]
+            else:
+                _u_targets = None
+        else:
+            try:
+                _u_targets = [int(x) for x in units]
+            except Exception:
+                _u_targets = None
+    targets = all_units if _u_targets is None else [u for u in all_units if u[0] in _u_targets]
     if not targets:
         print(f"  ❌ 没有匹配的 Unit: {units}")
         return 0

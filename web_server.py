@@ -4267,19 +4267,28 @@ _VOICE_RUNNER = None  # 后台线程
 
 @app.route("/api/voice/run", methods=["POST"])
 def api_voice_run():
-    """启动语音评测模块（仅进入，题目未做好）"""
+    """启动语音评测模块（半自动：脚本驱动+用户朗读；继承主页版本/年级）
+    ★ 2026-08-23：语音评测从主页继承当前版本年级（如湘少版二年级上册），
+      点主页"语音评测"文字(877,1987)进入 → 目录 Unit 1-7 → 单元展开 → 部分作答
+    """
     global _VOICE_RUNNER
     if task_status["running"]:
         return jsonify({"error": "已有任务在运行"}), 409
+
+    # 请求参数：units（如 [1,2]）、grade、version（默认继承主页当前）
+    _data = request.get_json(silent=True) or {}
+    _units = _data.get("units") or None
+    _grade = _data.get("grade", "") or ""
+    _version = _data.get("version", "") or ""
 
     def _run():
         _register_task_thread()  # 记录线程 id，供"立即停止"注入异常
         try:
             set_running(f"语音评测")
-            log_msg(f"启动语音评测（题目未做好，仅进入）")
+            log_msg(f"启动语音评测（半自动：用户朗读+脚本驱动）")
             sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
             from modules.语音评测 import run_module
-            from common.tools import dismiss_global_popups, close_ad, ensure_grade
+            from common.tools import dismiss_global_popups, close_ad
             import uiautomator2 as u2
 
             d = _connect_device()
@@ -4288,11 +4297,10 @@ def api_voice_run():
             for _ in range(3):
                 dismiss_global_popups(d)
             close_ad(d)
-            ok = ensure_grade(d, "五年级上册", "湘少版")
-            log_msg("年级确认: 湘少版 五年级上册" if ok else "⚠ 年级切换失败，继续尝试")
-
-            r = run_module(d)
-            log_msg(f"✅ 语音评测进入完成: {r}")
+            # ★ 语音评测内部处理版本/年级：主页当前版本+传入期望值兜底
+            r = run_module(d, units=_units,
+                           expected_grade=_grade, expected_version=_version)
+            log_msg(f"✅ 语音评测完成: {r} 个单元")
             set_done()
         except SystemExit:
             log_msg("⏹ 任务已被立即停止", "warning")
