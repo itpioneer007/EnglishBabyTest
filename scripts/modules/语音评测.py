@@ -190,43 +190,91 @@ def _list_units(d):
 
 
 def _open_unit(d, unit_no, unit_text):
-    """点单元栏展开，返回 part 卡片列表 [(text, y_top, y_bot), ...]"""
-    # 先回到目录页（用 Unit 文字定位）
-    for _ in range(4):
+    """点单元栏展开，返回 part 卡片列表 [(text, y_top, y_bot), ...]
+    ★ Unit 栏是 LinearLayout 可点击容器 [37,778][1043,908]（非标题文字）
+      点击后必须验证展开（出现部分卡片），否则重试
+    """
+    # 找到 Unit 栏（可点击容器），点容器中心 (540, y_center)
+    # ★ 先等目录页稳定（切完年级后列表可能还在加载）
+    time.sleep(1.5)
+    for _ in range(3):
         xml = d.dump_hierarchy()
-        if unit_text in xml:
-            m = re.search(rf'text="{re.escape(unit_text)}"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml)
-            if m:
-                x = (int(m.group(1)) + int(m.group(3))) // 2
-                y = (int(m.group(2)) + int(m.group(4))) // 2
-                d.click(x, y); time.sleep(1.2)
+        # 找 Unit 标题文字坐标，取其 y 中心（栏覆盖 37-1043 宽）
+        m = re.search(rf'text="{re.escape(unit_text)}"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml)
+        if m:
+            y1, y2 = int(m.group(2)), int(m.group(4))
+            # 若已展开（可见部分卡片）→ 不用点；否则点击栏中心
+            if 'Look, Listen' in xml or 'Chant' in xml or 'Word List' in xml:
+                break  # 已展开
+            # 点栏中心 (540, y_center) —— 栏可点击容器横跨全宽
+            d.click(540, (y1 + y2) // 2)
+            # ★ 等展开动画完成：循环等待（最长 6s），出现部分卡片才 break
+            _expanded = False
+            for _w in range(6):
+                time.sleep(1.0)
+                xml2 = d.dump_hierarchy()
+                if 'Look, Listen' in xml2 or 'Chant' in xml2 or 'Word List' in xml2:
+                    _expanded = True
+                    break
+            if _expanded:
                 break
-        d.press('back'); time.sleep(0.8)
-    # 收集展开后的"部分"卡片（不带 Unit 标题/跟读报告）
+            # 展开失败：可能页面不在目录（切完年级慢加载）→ 等 1s 重试
+            time.sleep(1.0)
+        else:
+            # 不在目录页 → 直接返回（绝不 back，防止退过头到主页/桌面）
+            print(f"  ⚠ 目录页无 [{unit_text}]")
+            return []
+    # 收集展开后的"部分"卡片（不带 Unit 标题/跟读报告/状态栏/顶部版本栏）
+    # ★ 使用更宽松匹配：兼容 text 在 bounds 前/后 两种属性顺序
     parts = []
+    time.sleep(0.5)  # ★ 再次等渲染稳定
     xml = d.dump_hierarchy()
-    for m in re.finditer(r'text="([^"]+)"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml):
-        t = m.group(1)
+    # 收集所有 (text, y_top, y_bot) 兼容两种属性顺序
+    text_bounds = []
+    for m in re.finditer(r'text="([^"]+)"[^>]*?bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml):
+        text_bounds.append((m.group(1), int(m.group(3)), int(m.group(5))))
+    for m in re.finditer(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"[^>]*?text="([^"]+)"', xml):
+        text_bounds.append((m.group(4), int(m.group(2)), int(m.group(4))))
+    # 应用过滤
+    for t, y_top, y_bot in text_bounds:
+        # y 过滤：状态栏/标题栏/学习进度/简介/目录 都在 y<800；部分卡片 y>800
+        if y_top < 800:
+            continue
         if t.startswith('Unit ') or t in ('跟读报告', '继续答题', '去答题', '已评测'):
             continue
-        # 排除练习下一节/完成并获取报告等按钮
-        if any(k in t for k in ('完成并获取', '练习下一节', '开始', '规则')):
+        if any(k in t for k in ('完成并获取', '练习下一节', '开始', '规则', '学习进度', '简介', '目录')):
             continue
         if len(t) > 1 and not t.isdigit():
-            parts.append((t, int(m.group(3)), int(m.group(4))))
+            parts.append((t, y_top, y_bot))
     return parts
 
 
 def _enter_part(d, part_text):
-    """点部分卡片进入答题页"""
-    for _ in range(3):
+    """点部分卡片进入答题页（点后验证出现 原音/点击录音 才算成功）
+    ★ back 最多 1 次（防止退过头到主页/桌面）
+    """
+    for _ in range(2):
         xml = d.dump_hierarchy()
         m = re.search(rf'text="{re.escape(part_text)}"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml)
         if m:
             x = (int(m.group(1)) + int(m.group(3))) // 2
             y = (int(m.group(2)) + int(m.group(4))) // 2
             d.click(x, y); time.sleep(2.0)
-            return True
+            # 验证进入答题页（出现 原音/点击录音/录音 之一）
+            try:
+                xml2 = d.dump_hierarchy()
+                if '点击录音' in xml2 or '原音' in xml2 or 'speech_btn_confirm' in xml2:
+                    return True
+                # 可能弹"训练规则"→ 点掉再试
+                if '开始' in xml2 and '我知道了' in xml2:
+                    m2 = re.search(r'text="我知道了[^"]*"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml2)
+                    if m2:
+                        d.click((int(m2.group(1))+int(m2.group(3)))//2,
+                                (int(m2.group(2))+int(m2.group(4)))//2)
+                        time.sleep(1.0)
+                        continue
+            except Exception:
+                pass
         d.press('back'); time.sleep(0.6)
     return False
 
