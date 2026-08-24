@@ -25,7 +25,14 @@ parse_yingyubao_docx.py — 英语宝 DOCX 脚本解析器（公共骨架 + 模�
 
 from dataclasses import dataclass, field
 from docx import Document
+import os
 import re
+
+# ★ .doc 老格式（OLE）解析依赖 olefile；缺失时降级（见 _extract_legacy_doc_text）
+try:
+    import olefile
+except ImportError:
+    olefile = None
 
 
 @dataclass
@@ -338,8 +345,15 @@ class ListeningStrategy(DocxStrategy):
                 continue
 
             # Unit 识别（公共骨架）
+            # ★ 2026-08-24 修复：单元切换前必须先 finalize 上一个 pending，
+            #   否则上一单元最后一题被归到新单元（知识过关 U6 第11题串到 U7）。
+            #   仅 finalize 有内容的 pending（空占位 pending 直接丢弃，避免 unit=0 空题）
             _u = _detect_unit(t)
             if _u:
+                if pending is not None and (pending.stem or pending.answer
+                                            or pending.options or pending.recording):
+                    _finalize(pending)
+                pending = None
                 current_unit = _u
                 continue
 
@@ -440,26 +454,143 @@ class ListeningStrategy(DocxStrategy):
                 _in_knowledge = False  # 元数据结束
             elif t.startswith('认知目标：'):
                 pending.cognitive_target = t.replace('认知目标：', '').strip()
+            else:
+                # ★ 子类扩展元数据钩子（如知识过关的"题型：选择题-图文选择"）
+                if self._handle_extra_meta(t, pending):
+                    continue
+            continue
 
         # 最后一道题
         _finalize(pending)
         return questions
 
+    def _handle_extra_meta(self, t: str, pending) -> bool:
+        """子类元数据行扩展钩子；返回 True 表示已处理。"""
+        return False
+
+
+# ============================================================
+# 策略三：巧记单词（格式 ≈ 听力专项，2026-08-24）
+# ============================================================
+# 格式（实测 260413巧记单词闯关部分新湘少五上（已一校）.doc，OLE 老格式需提取）：
+#   Unit 1
+#   new                        ← 单词标签（忽略）
+#   1. 听录音，跟读单词。        ← 小题1（跟读）
+#   new / adj. 新来的；新的
+#   录音：new
+#   一级题型：/ 二级题型：跟读 难度：容易 关键词：巧记单词#新湘少五上U1#new
+#   知识点：new [adj. 新认识的] 认知目标：识记 适用年级：五年级
+#   2. 听录音，选择与录音内容相符的释义。  ← 小题2（听音选释义）
+#   A. 旧的  B. 新来的；新的  C. 漂亮的
+#   答案：B
+#   3. 根据中文提示，选择正确的字母补全单词。  ← 小题3（字母补全）
+#   n__ __ (新来的；新的) / 答案：ew
+#   每个单词 3 个小题型 → App 端 3N 题顺序对应（_kw10.xml 实测 "10/108"）
+class QiaojiStrategy(ListeningStrategy):
+    name = "巧记单词"
+
+    def detect(self, paragraphs: list) -> bool:
+        _head = "".join(t for t in paragraphs if t.strip())[:200]
+        return "巧记单词" in _head or "识词" in _head
+
+
+# ============================================================
+# 策略四：知识过关（格式 ≈ 听力专项 + "题型："元数据，2026-08-24）
+# ============================================================
+# 格式（实测 260513知识过关新湘少五上U6-10（已二校）.docx）：
+#   新湘少五上知识过关 / Unit 6  Which one do you want? / 过关锦囊（知识点材料，跳过）
+#   去过关
+#   二、句型/语法
+#   1. 选择与对话相符的图片。   A. B. / 答案：A
+#   知识点：... 认知目标：理解 难度：容易 题型：选择题-图文选择
+#   题型字段格式"大类-子类"，整体写入 type_2（供审查参考）
+class KnowledgeStrategy(ListeningStrategy):
+    name = "知识过关"
+
+    def detect(self, paragraphs: list) -> bool:
+        _head = "".join(t for t in paragraphs if t.strip())[:200]
+        return "知识过关" in _head
+
+    def _handle_extra_meta(self, t: str, pending) -> bool:
+        # ★ 知识过关用"题型："（听力专项用 一级题型/二级题型）
+        if t.startswith("题型："):
+            pending.type_2 = t.replace("题型：", "").strip()
+            return True
+        return False
+
+
+# ============================================================
+# .doc 老格式（OLE）文本提取（2026-08-24）
+# ============================================================
+# 179MB 巧记单词 .doc 是 WPS 生成的 OLE 复合文档：文本在 WordDocument 流，
+# 正文 = UTF-16LE 段 + CP1252 段交替（piece table 私有，无法可靠解析）。
+# 双轨提取：按流位置顺序扫描，UTF-16 可打印（码点放宽到 0xFFFF，含中文）
+# 与 CP1252 可打印交替收集，按序拼接 → 段落顺序即文档顺序。
+def _extract_legacy_doc_text(path: str) -> list:
+    """提取 .doc 老格式文本，返回段落列表（顺序 = 文档顺序）。"""
+    if olefile is None:
+        raise RuntimeError("解析 .doc 需要 olefile 库（pip install olefile）")
+    ole = olefile.OleFileIO(path)
+    try:
+        wd = ole.openstream("WordDocument").read()
+    finally:
+        ole.close()
+
+    segs = []
+    i = 0
+    n = len(wd)
+    while i < n - 1:
+        cp = wd[i] | (wd[i + 1] << 8)
+        # UTF-16LE 段：可打印 Unicode（0x20..0xFFFD，含中文）或换行/表格标记
+        if (0x20 <= cp <= 0xFFFD and chr(cp).isprintable()) or cp in (0x0D, 0x0A, 0x07, 0x0B):
+            seg = []
+            while i < n - 1:
+                cp = wd[i] | (wd[i + 1] << 8)
+                if (0x20 <= cp <= 0xFFFD and chr(cp).isprintable()) or cp in (0x0D, 0x0A, 0x07, 0x0B):
+                    seg.append(chr(cp))
+                    i += 2
+                else:
+                    break
+            segs.append("".join(seg))
+            continue
+        # CP1252 段：单字节可打印（英文/符号）
+        if 0x20 <= wd[i] < 0x7f or wd[i] >= 0x80:
+            seg = []
+            while i < n:
+                b = wd[i]
+                if (0x20 <= b < 0x7f) or b >= 0x80:
+                    seg.append(chr(b))
+                    i += 1
+                else:
+                    break
+            segs.append("".join(seg))
+            continue
+        i += 1
+
+    text = "".join(segs).replace("\r", "\n").replace("\x07", "\t")
+    return [ln.strip() for ln in text.split("\n") if ln.strip()]
+
 
 # ============================================================
 # 策略注册 + 入口
 # ============================================================
-STRATEGIES: list = [OralStrategy(), ListeningStrategy()]
+STRATEGIES: list = [OralStrategy(), QiaojiStrategy(), KnowledgeStrategy(), ListeningStrategy()]
 
 
 def parse(filepath: str) -> list:
-    """读取 DOCX 脚本，按策略分派解析。
+    """读取 DOCX/DOC 脚本，按策略分派解析。
 
     分派规则：依 STRATEGIES 顺序尝试 detect()，首个命中即用该策略；
     无命中（理论上不会）则用兜底 ListeningStrategy。
+    .doc 老格式（OLE）先经 _extract_legacy_doc_text 提取段落。
     """
-    doc = Document(filepath)
-    paragraphs = [p.text for p in doc.paragraphs]
+    ext = os.path.splitext(filepath)[1].lower()
+    if ext == ".doc":
+        # ★ 老格式 .doc：OLE 复合文档，python-docx 不支持，需专用提取
+        paragraphs = _extract_legacy_doc_text(filepath)
+    else:
+        doc = Document(filepath)
+        paragraphs = [p.text for p in doc.paragraphs]
     for strat in STRATEGIES:
         try:
             if strat.detect(paragraphs):
