@@ -168,64 +168,97 @@ def _wait_ready_for_record(d, timeout=20):
 
 
 def _find_active_sub_question(d, xml=None):
-    """定位当前正在作答的小题（包含 record_btn 的 speech_box）。
-    返回 (sub_no, stem_text, speech_box_bounds) 或 (None, "", None)。
+    """定位当前正在作答的小题（含 record_btn 的 ll_container）。
+
+    口语训练真机结构（2026-08-24 实测 oral_q3 / cur_home dump）：
+      - option_flexbox 内多个 ll_container，每个 = 一个小题：
+          tv_sort（内容 "1/5" / "2/5"，或 "1."/"2."）
+          speech_box
+            ├ speech_content（朗读句子题：小题题干 = 句子文本，如 "I see a bee..."）
+            └ speech_translation（翻译，可能为空）
+          或（看图回答题）tv_title_score "(2分)" + tv_answer_status "已作答" + pic_iv
+      - record_btn 只在当前作答小题出现（倒计时中/已作答状态无 record_btn）
+      - tv_question_sort（顶部 "N/M"）是大题进度，tv_sort 是小题进度（M = 本大题小题总数）
+    返回 (sub_no, total_sub, stem_text, ll_container_bounds)；
+    找不到时返回 (None, None, "", None)。
     """
     if xml is None:
         try:
             xml = d.dump_hierarchy()
         except Exception:
-            return None, "", None
-    # 找所有 speech_box 及其 bounds、内部 tv_sort 文字
-    boxes = []
-    for m in re.finditer(
-        r'<node[^>]*resource-id="[^"]*speech_box"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
-        xml,
-    ):
-        x1, y1, x2, y2 = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
-        boxes.append((y1, x1, y2, x2, (x1, y1, x2, y2)))
-    if not boxes:
-        return None, "", None
-    boxes.sort()  # 按 y 排序
-    # 哪个 speech_box 内部包含 record_btn？
-    record_m = re.search(
+            return None, None, "", None
+
+    # 1) record_btn 中心（当前作答小题的麦克风）
+    rec_m = re.search(
         r'resource-id="[^"]*record_btn"[^>]*clickable="true"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
         xml,
     )
-    if not record_m:
-        # 兜底：取最上方的 speech_box
-        active_box = boxes[0][4]
-    else:
-        rx1, ry1, rx2, ry2 = int(record_m.group(1)), int(record_m.group(2)), int(record_m.group(3)), int(record_m.group(4))
-        rcx, rcy = (rx1 + rx2) // 2, (ry1 + ry2) // 2
-        active_box = None
-        for y1, x1, y2, x2, box in boxes:
-            if x1 <= rcx <= x2 and y1 <= rcy <= y2:
-                active_box = box
+    rcx = rcy = None
+    if rec_m:
+        rcx = (int(rec_m.group(1)) + int(rec_m.group(3))) // 2
+        rcy = (int(rec_m.group(2)) + int(rec_m.group(4))) // 2
+
+    # 2) 所有 ll_container（小题容器，tv_sort 与 speech_box 都在其内）
+    containers = []
+    for m in re.finditer(
+        r'<node[^>]*resource-id="[^"]*ll_container"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
+        xml,
+    ):
+        x1, y1, x2, y2 = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+        containers.append((x1, y1, x2, y2))
+    if not containers:
+        return None, None, "", None
+    containers.sort()  # 按 y 排序
+
+    # 3) 选包含 record_btn 的容器；无 record_btn（倒计时/已答完）→ 取第一个
+    active = None
+    if rcx is not None:
+        for box in containers:
+            if box[0] <= rcx <= box[2] and box[1] <= rcy <= box[3]:
+                active = box
                 break
-        if active_box is None:
-            active_box = boxes[0][4]
-    # 在该 speech_box 内找 tv_sort（如 "1."）和题干文字
-    sub_no = None
+    if active is None:
+        active = containers[0]
+
+    # 4) 容器内提取：tv_sort（"N/M" 或 "N."）+ 题干文本
+    sub_no, total_sub = None, None
     stems = []
-    bx1, by1, bx2, by2 = active_box
-    # 收集 speech_box 内所有 text 节点
+    ax1, ay1, ax2, ay2 = active
     for m in re.finditer(r'<node[^>]*text="([^"]+)"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml):
         t = m.group(1).strip()
         x1, y1, x2, y2 = int(m.group(2)), int(m.group(3)), int(m.group(4)), int(m.group(5))
-        if x1 < bx1 or y1 < by1 or x2 > bx2 or y2 > by2:
+        if x1 < ax1 or y1 < ay1 or x2 > ax2 or y2 > ay2:
             continue
-        # tv_sort: "1." / "2."
-        mm = re.match(r"^(\d+)\.$", t)
+        # tv_sort: "1/5" / "2/5"（n/本大题小题总数） 或 "1." / "2."
+        mm = re.match(r"^(\d+)\s*/\s*(\d+)$", t)
+        if mm:
+            sub_no, total_sub = int(mm.group(1)), int(mm.group(2))
+            continue
+        mm = re.match(r"^(\d+)[\.、]\s*$", t)
         if mm:
             sub_no = int(mm.group(1))
             continue
-        # 过滤噪音：分值、空白、过长
-        if t in ("", " ") or "分" in t or len(t) > 40 or len(t) < 1:
+        # 噪音过滤：分值 "(2分)"、作答状态 "已作答/未作答"、空白、过长
+        if t in ("", " ") or "分" in t or "作答" in t or len(t) > 60:
             continue
         stems.append(t)
     stem = " / ".join(stems[:2]) if stems else "图片题"
-    return sub_no, stem, active_box
+    return sub_no, total_sub, stem, active
+
+
+def _get_big_progress(xml):
+    """读取页面顶部大题进度（tv_question_sort，内容如 "2/4" = 第2大题/共4大题）。
+    返回 (current_big, total_big) 或 (None, None)。
+    """
+    if not xml:
+        return None, None
+    # ★ 真机 dump 属性顺序 text 在 resource-id 之前，先定位节点再取 text
+    for m in re.finditer(r'<node[^>]*tv_question_sort[^>]*>', xml):
+        tm = re.search(r'text="(\d+)\s*/\s*(\d+)"', m.group(0))
+        if tm:
+            return int(tm.group(1)), int(tm.group(2))
+        break
+    return None, None
 
 
 def _click_horn(d, min_y=400):
@@ -386,9 +419,12 @@ def _answer_big_question(d, big_idx=0):
                 pass
             return q
 
-        # 大题间过渡按钮（下一题/交卷等）
+        # 大题间过渡按钮（交卷/下一大题等）
+        # ★★★ 不能包含"下一题"！真机 btn_box 里"上一题/下一题"按钮常驻（oral_q3/cur_home 实测），
+        #   "下一题"是小题导航按钮：答完第1小题就点它 → 误判本大题完成 → 提前进下一大题/记错题数。
+        #   大题完成只认：交卷（最后一大题）/ 下一大题 / 开始训练下一题 / 再来一组 等真正的过渡按钮。
         _big_done_btn = None
-        for _btxt in ("交卷", "下一大题", "开始训练下一题", "再来一组", "提交成绩", "完成本大题", "下一组", "下一题"):
+        for _btxt in ("交卷", "下一大题", "开始训练下一题", "再来一组", "提交成绩", "完成本大题", "下一组"):
             if d(text=_btxt).exists(timeout=0.05):
                 _big_done_btn = _btxt
                 break
@@ -407,7 +443,11 @@ def _answer_big_question(d, big_idx=0):
             # 当前屏没有，下滑继续找
             _scroll_question_area(d)
             time.sleep(0.5)
-            pos = _find_record_btn(d)
+            try:
+                xml = d.dump_hierarchy()   # ★ 滚动后必须刷新 XML：证据卡/小题题干都用它，
+            except Exception:              #   否则拿滚动前的旧 XML → 麦克风/题干都检测不到
+                pass
+            pos = _find_record_btn(d, xml)
             if not pos:
                 # 下滑后仍无录音按钮，且存在下一题 → 本大题答完
                 if _click_next_btn(d):
@@ -423,15 +463,22 @@ def _answer_big_question(d, big_idx=0):
                 return q
 
         # 确定当前小题编号/题干
-        sub_no, stem, _ = _find_active_sub_question(d, xml)
+        sub_no, total_sub, stem, _ = _find_active_sub_question(d, xml)
         sub_label = sub_no if sub_no is not None else q + 1
 
         # 每小题只发一次证据卡（避免重复）
         if q != _ev_q:
             try:
                 from common.evidence import collect_ui_evidence
-                step_log(f"  第{big_idx}大题·第{sub_label}小题（{stem}）完整性检查", "info",
-                         collect_ui_evidence(xml, qtype="口语训练"))
+                _ev = collect_ui_evidence(xml, qtype="口语训练")
+                # ★ 小题题干独立成一条证据（大题题干=tv_caption 由 evidence 提取）
+                if stem:
+                    _sub_note = f"小题{sub_label}" + (f"/{total_sub}" if total_sub else "") + f"题干：{stem}"
+                    _ev.insert(1, {"field": "小题题干", "type": "info",
+                                   "expected": "当前作答小题的题干",
+                                   "actual": stem,
+                                   "diff": _sub_note})
+                step_log(f"  第{big_idx}大题·第{sub_label}小题（{stem}）完整性检查", "info", _ev)
                 if not _score_checked:
                     _score_checked = True
                     try:
@@ -574,12 +621,19 @@ def _run_unit_questions(d, unit_num):
                 break
             time.sleep(0.12)
         # 判断是否最后一题：出现"交卷"
+        # ★ 日志大题号以页面 tv_question_sort（"N/M"）为准：
+        #   防止"还没切到第2大题就记'开始第2大题'"（页面进度为准，不盲信循环计数）
+        try:
+            _cur_big, _tot_big = _get_big_progress(d.dump_hierarchy())
+        except Exception:
+            _cur_big, _tot_big = None, None
+        _log_big = _cur_big if _cur_big else big
         if d(text="交卷").exists(timeout=0.15):
-            print(f"  📝 第{big}大题（最后一题）")
+            print(f"  📝 第{_log_big}大题（最后一题）")
         else:
-            print(f"  📝 第{big}大题")
-            step_log(f"📝 开始第{big}大题", "step")
-        q = _answer_big_question(d, big_idx=big)
+            print(f"  📝 第{_log_big}大题")
+            step_log(f"📝 开始第{_log_big}大题", "step")
+        q = _answer_big_question(d, big_idx=_log_big)
         total += q
         # ★ 若本大题 0 小题（q==0）→ 说明已交卷/结束/页面已到报告页，不再进入下一大题
         #   （交卷后练习报告渲染延迟，上一轮检测可能失败，q==0 是可靠信号）

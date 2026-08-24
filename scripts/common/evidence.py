@@ -49,22 +49,32 @@ def _detect_image_options(xml: str) -> int:
     return count
 
 
-def _find_control(xml: str, keywords: tuple) -> tuple:
+def _find_control(xml: str, keywords: tuple, rid_pattern: str = None) -> tuple:
     """在 XML 中查找含关键词的控件节点，返回 (found, clickable)
     - 优先匹配 clickable="true" 的节点（避免误命中介绍/标签文本）
     - 逐节点匹配 text/content-desc 含任一关键词
     - ★ 也匹配 resource-id 中的 play/sound/audio/speaker/mic/record 模式
       （真实 App 扬声器/麦克风按钮常是 rid=id/play_box，text/content-desc 为空）
+      ★ 2026-08-24：rid_pattern 可定制——播放检查传 (play|sound|audio|speaker)，
+      麦克风检查传 (record|mic)，避免"iv_caption_play 播放图标被当麦克风"这类串检
     - clickable 取该节点是否 clickable="true"
     - ★ 2026-08-24：命中非 clickable 文本节点时，会向上/向外查找包含该节点的
       clickable 父容器（如口语训练 record_btn 容器内含 "点击录音" 文本）
     """
     xml = xml or ""
+    if rid_pattern is None:
+        rid_pattern = r'resource-id="[^"]*(play|sound|audio|speaker|mic|record)[^"]*"'
+    _rid_re = re.compile(rid_pattern)
+    # ★ 2026-08-24：系统状态栏/通知栏节点永远不是 App 控件，必须跳过——
+    #   例：com.android.systemui:id/dynamic_icon_group 含子串 "mic"（dynaMIC），
+    #   会被麦克风 rid 模式误命中 → 倒计时中误报"麦克风存在"
+    def _is_system(tag: str) -> bool:
+        return "com.android.systemui" in tag or 'package="android"' in tag
     # 先收集所有 clickable 节点 bounds，用于后续“包含关系”判定
     _clickables = []
     for m in re.finditer(r'<node[^>]*>', xml):
         tag = m.group(0)
-        if 'clickable="true"' not in tag:
+        if _is_system(tag) or 'clickable="true"' not in tag:
             continue
         b = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
         if not b:
@@ -84,23 +94,25 @@ def _find_control(xml: str, keywords: tuple) -> tuple:
     # 第一轮：只找 clickable=true 的节点（避免误命中介绍文案等非控件文本）
     for m in re.finditer(r'<node[^>]*>', xml):
         tag = m.group(0)
-        if 'clickable="true"' not in tag:
+        if _is_system(tag) or 'clickable="true"' not in tag:
             continue
         for kw in keywords:
             if kw in tag:
                 return True, True
-        if re.search(r'resource-id="[^"]*(play|sound|audio|speaker|mic|record)[^"]*"', tag):
+        if _rid_re.search(tag):
             return True, True
     # 第二轮：兜底找含关键词/rid 的节点（含 clickable=false 的），并尝试找外部 clickable 容器
     nodes = list(re.finditer(r'<node[^>]*>', xml))
     for idx, m in enumerate(nodes):
         tag = m.group(0)
+        if _is_system(tag):
+            continue
         hit = False
         for kw in keywords:
             if kw in tag:
                 hit = True
                 break
-        if not hit and re.search(r'resource-id="[^"]*(play|sound|audio|speaker|mic|record)[^"]*"', tag):
+        if not hit and _rid_re.search(tag):
             hit = True
         if not hit:
             continue
@@ -111,20 +123,24 @@ def _find_control(xml: str, keywords: tuple) -> tuple:
             # 2.1 向上/向外找包含自己的 clickable 容器（口语训练 record_btn 容器）
             if _contained_by_clickable(bx1, by1, bx2, by2):
                 clickable = True
-            # 2.2 容器内子节点可点击 → 也视为可点击（兼容旧逻辑）
+            # 2.2 容器内子节点可点击 → 也视为可点击（仅限容器类节点）
+            #    ★ 2026-08-24：TextView/ImageView 等叶子控件跳过——否则大段题干文字
+            #      （如 tv_caption 含"录音"）因几何上重叠播放图标被误提升为可点击
             if not clickable:
-                for m2 in nodes[idx + 1:]:
-                    t2 = m2.group(0)
-                    b2 = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', t2)
-                    if not b2:
-                        continue
-                    x1, y1, x2, y2 = map(int, b2.groups())
-                    if x1 >= bx1 and y1 >= by1 and x2 <= bx2 and y2 <= by2:
-                        if 'clickable="true"' in t2:
-                            clickable = True
-                            break
-                    else:
-                        break  # 超出容器范围 = 非子节点
+                _leaf = re.search(r'class="android\.widget\.(TextView|ImageView|Button|ImageButton)"', tag)
+                if not _leaf:
+                    for m2 in nodes[idx + 1:]:
+                        t2 = m2.group(0)
+                        b2 = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', t2)
+                        if not b2:
+                            continue
+                        x1, y1, x2, y2 = map(int, b2.groups())
+                        if x1 >= bx1 and y1 >= by1 and x2 <= bx2 and y2 <= by2:
+                            if 'clickable="true"' in t2:
+                                clickable = True
+                                break
+                        else:
+                            break  # 超出容器范围 = 非子节点
         return True, clickable
     return False, False
 
@@ -187,15 +203,38 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
         def _strip_score(t: str) -> str:
             return re.sub(r"[（(]\s*共\s*\d+\s*分\s*[）)]", "", t).strip()
         # ★ 优先 question_title_tv（App 真题干节点）
-        for m in re.finditer(r'resource-id="[^"]*question_title_tv[^"]*"[^>]*text="([^"]+)"', xml):
-            t = _strip_score(m.group(1).strip())  # ★ 清洗尾缀"(共N分)"
-            if t and t not in seen and len(t) < 60:
-                seen.add(t)
-                stems.append(t)
+        #   ★ 真机 dump 属性顺序是 text 在 resource-id 之前（cur_home/oral_q3 实测），
+        #     不能写 "rid…text" 的顺序正则，改为先定位节点再取 text
+        for _nm in re.finditer(r'<node[^>]*question_title_tv[^>]*>', xml):
+            _tm = re.search(r'text="([^"]+)"', _nm.group(0))
+            if _tm:
+                t = _strip_score(_tm.group(1).strip())  # ★ 清洗尾缀"(共N分)"
+                if t and t not in seen and len(t) < 60:
+                    seen.add(t)
+                    stems.append(t)
             if len(stems) >= 3:
                 break
+        # ★★★ 大题题干优先：tv_caption（大题介绍节点，如口语训练
+        #   "请大声朗读你看到的句子，注意字母组合ee的发音。点击"录音"开始作答。…(共15分)"）
+        #   用户要求：口语训练大题题干 = 题目介绍内容（听录音，回答问题什么的）；
+        #   小题题干（要读的单词/句子）由模块 _find_active_sub_question 单独提取记录，不混入。
+        #   长度放宽到 160（大题介绍通常 60~120 字，旧逻辑 len>=60 会把它过滤掉）
+        _caption_taken = False
+        for _nm in re.finditer(r'<node[^>]*tv_caption[^>]*>', xml):
+            _tm = re.search(r'text="([^"]+)"', _nm.group(0))
+            if _tm:
+                t = _strip_score(_tm.group(1).strip())
+                if t and t not in seen and len(t) < 160:
+                    seen.add(t)
+                    stems.append(t)
+                    _caption_taken = True
+            break  # 大题介绍只有一条
         # ★ 兜底：其他长文本（缩短到 ≥4 字符，抓到"听录音选图"等短题干）
         for m in re.finditer(r'text="([^"]{4,})"', xml):
+            # ★ 口语题已拿到大题题干(tv_caption)时跳过兜底：
+            #   避免把小题句子（speech_content 等）混进"题干"字段
+            if is_speaking and _caption_taken:
+                break
             t = _strip_score(m.group(1).strip())  # ★ 清洗尾缀"(共N分)"
             if not t or t in seen or t in noise or len(t) >= 60:
                 continue
@@ -339,10 +378,14 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
                     "play_btn", "audio", "sound", "▶", "原音")
         # ★ 麦克风检测：口语训练答题页录音控件核心文本是"点击录音/点击结束"
         #   （实际麦克风图标是图片无文本）。这些文本控件 100% 关联到录音功能，可靠。
-        MIC_KWS = ("麦克风", "录音", "record", "mic", "开始作答",
-                   "点击录音", "点击结束", "点击完成", "继续作答")
-        play_found, play_clickable = _find_control(xml, PLAY_KWS)
-        mic_found, mic_clickable = _find_control(xml, MIC_KWS)
+        #   ★ 2026-08-24：不能包含泛词"录音/开始作答/继续作答"——大题说明文字(tv_caption)
+        #   里就有"点击"录音"开始作答"，会被误判为麦克风 → 倒计时中误报"麦克风可点击"。
+        #   只认：record/mic（resource-id 必含）+"点击录音/点击结束/点击完成/麦克风"精确词
+        MIC_KWS = ("record", "mic", "点击录音", "点击结束", "点击完成", "麦克风")
+        play_found, play_clickable = _find_control(
+            xml, PLAY_KWS, rid_pattern=r'resource-id="[^"]*(play|sound|audio|speaker)[^"]*"')
+        mic_found, mic_clickable = _find_control(
+            xml, MIC_KWS, rid_pattern=r'resource-id="[^"]*(record|mic)[^"]*"')
 
         if _audio_skipped:
             pass  # 图片题已发 skip，不再走听力/口语音频检查
