@@ -423,25 +423,10 @@ def _answer_big_question(d, big_idx=0):
                 pass
             return q
 
-        # 大题间过渡按钮（交卷/下一大题等）
-        # ★★★ 不能包含"下一题"！真机 btn_box 里"上一题/下一题"按钮常驻（oral_q3/cur_home 实测），
-        #   "下一题"是小题导航按钮：答完第1小题就点它 → 误判本大题完成 → 提前进下一大题/记错题数。
-        #   大题完成只认：交卷（最后一大题）/ 下一大题 / 开始训练下一题 / 再来一组 等真正的过渡按钮。
-        _big_done_btn = None
-        for _btxt in ("交卷", "下一大题", "开始训练下一题", "再来一组", "提交成绩", "完成本大题", "下一组"):
-            if d(text=_btxt).exists(timeout=0.05):
-                _big_done_btn = _btxt
-                break
-        if _big_done_btn:
-            # 仅当本大题已答至少 1 小题，或按钮是"交卷"（最后一题）时才点
-            if q > 0 or _big_done_btn == "交卷":
-                d(text=_big_done_btn).click()
-                print(f"    ✅ 大题完成 → 点{_big_done_btn}")
-                step_log(f"➡ {_big_done_btn}", "success")
-                time.sleep(0.8)
-                return q
-
-        # 找当前 active 录音按钮
+        # 找当前 active 录音按钮（★ 优先答小题；过渡按钮检测移到下方"无录音按钮"分支，
+        #   因为真机 btn_box 的"下一题/交卷"按钮常驻——第4大题从答题开始就有"交卷"，
+        #   若在循环顶部检测 → 答完1小题就点交卷 → 被 App Toast 拒绝（还有题未答）
+        #   → 交卷不生效、界面停住、脚本却误报"点交卷"成功）
         pos = _find_record_btn(d, xml)
         if not pos:
             # 当前屏没有，下滑继续找
@@ -453,13 +438,47 @@ def _answer_big_question(d, big_idx=0):
                 pass
             pos = _find_record_btn(d, xml)
             if not pos:
-                # 下滑后仍无录音按钮，且存在下一题 → 本大题答完
+                # ---- 下滑后仍无录音按钮 → 本大题已答满，处理过渡按钮 ----
+                # 1) 交卷（最后一大题）：点击后必须等"确定交卷"确认框！
+                #    确认框不出现 = 交卷被 App 拒绝（还有小题未答/页面未就绪）
+                #    → continue 重新循环，不误报成功
+                if d(text="交卷").exists(timeout=0.2):
+                    d(text="交卷").click()
+                    print(f"    ✅ 大题完成 → 点交卷")
+                    step_log("➡ 交卷", "success")
+                    if d(text="确定交卷").exists(timeout=2):
+                        d(text="确定交卷").click()
+                        print("    ✅ 点确定交卷")
+                        step_log("➡ 确定交卷", "success")
+                        time.sleep(1.0)
+                        if not d(text="练习报告").exists(timeout=3):
+                            print("    ⚠ 确定交卷后练习报告未出现（可能仍在渲染）")
+                        else:
+                            print("    ✅ 练习报告页出现")
+                        return q
+                    else:
+                        print("    ⚠ 点交卷后未出现确认框（可能还有小题未答），继续作答")
+                        time.sleep(0.5)
+                        continue
+                # 2) 其他大题过渡按钮（下一大题/再来一组/提交成绩…）
+                _done_btn = None
+                for _btxt in ("下一大题", "开始训练下一题", "再来一组", "提交成绩", "完成本大题", "下一组"):
+                    if d(text=_btxt).exists(timeout=0.05):
+                        _done_btn = _btxt
+                        break
+                if _done_btn:
+                    d(text=_done_btn).click()
+                    print(f"    ➡ {_done_btn}（大题完成）")
+                    step_log(f"➡ {_done_btn}", "step")
+                    time.sleep(0.8)
+                    return q
+                # 3) 下一题按钮（此时 record_btn 已消失 = 本大题答满，点击安全）
                 if _click_next_btn(d):
                     print(f"    ➡ 下一题（大题完成）")
                     step_log("➡ 进入下一大题", "step")
                     time.sleep(0.8)
                     return q
-                # 仍无按钮，可能已结束或异常
+                # 4) 无任何过渡按钮 → 大题完成/结束
                 if q > 0:
                     print(f"    ✅ 大题完成（已答{q}小题，无新录音按钮）")
                     return q
