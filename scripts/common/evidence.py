@@ -205,15 +205,18 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
         # ★ 优先 question_title_tv（App 真题干节点）
         #   ★ 真机 dump 属性顺序是 text 在 resource-id 之前（cur_home/oral_q3 实测），
         #     不能写 "rid…text" 的顺序正则，改为先定位节点再取 text
+        #   ★ 2026-08-24：知识过关填字母页 question_title_tv 是【多个字母块节点】
+        #     （"n"/"c"/"("/"友好的；"/"吸引人"/"的)"…），只取第一条且短文本无汉字
+        #     跳过（否则字母块/词义被当题干 → "友好的； / 吸引人"）
         for _nm in re.finditer(r'<node[^>]*question_title_tv[^>]*>', xml):
             _tm = re.search(r'text="([^"]+)"', _nm.group(0))
             if _tm:
                 t = _strip_score(_tm.group(1).strip())  # ★ 清洗尾缀"(共N分)"
-                if t and t not in seen and len(t) < 60:
+                if t and t not in seen and len(t) < 60 \
+                        and (len(t) >= 4 or re.search(r'[\u4e00-\u9fff]', t)):
                     seen.add(t)
                     stems.append(t)
-            if len(stems) >= 3:
-                break
+            break  # ★ 只取第一条（知识过关的 question_title_tv 是多个字母块，不能全收）
         # ★★★ 大题题干优先：tv_caption（大题介绍节点，如口语训练
         #   "请大声朗读你看到的句子，注意字母组合ee的发音。点击"录音"开始作答。…(共15分)"）
         #   用户要求：口语训练大题题干 = 题目介绍内容（听录音，回答问题什么的）；
@@ -237,6 +240,16 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
                 break
             t = _strip_score(m.group(1).strip())  # ★ 清洗尾缀"(共N分)"
             if not t or t in seen or t in noise or len(t) >= 60:
+                continue
+            # ★ 单元标题（"Unit 1 What does she look like?"）与词义行（"adj. 新来的；新的"）
+            #   不是题干（知识过关页顶部标题+词义提示被误当题干，用户实测）
+            if re.match(r'^Unit\s*\d+', t, re.IGNORECASE) or \
+               re.match(r'^(n|v|adj|adv|det|pron|prep|conj|num|art|int)\.', t, re.IGNORECASE):
+                continue
+            # ★ 词义/提示碎片（知识过关填字母页 "( 友好的；" / "吸引人" / "的)" 被拆段）：
+            #   纯中文短碎片（<5 字符无英文）、括号开头、分号/右括号结尾 → 不是题干
+            if (len(t) < 5 and not re.search(r'[A-Za-z]', t)) \
+                    or t.startswith(("（", "(")) or t.endswith(("；", ")")):
                 continue
             # ★ 排除选项文本："A. fast" / "B. food"（字母+句点+内容）
             if re.match(r"^[TFABCDE][\.、．]\s*\S", t):
@@ -282,6 +295,10 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
                     continue
                 if t in noise or any(n in t for n in noise):
                     continue
+                # ★ 单元标题/词义行不是题干（同兜底规则）
+                if re.match(r'^Unit\s*\d+', t, re.IGNORECASE) or \
+                   re.match(r'^(n|v|adj|adv|det|pron|prep|conj|num|art|int)\.', t, re.IGNORECASE):
+                    continue
                 if t in seen or len(t) < 2 or len(t) > 30:
                     continue
                 if _timer_pat.match(t):
@@ -311,6 +328,19 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
         has_edit = "EditText" in xml
         # ★ 图片选项检测：CheckBox（图片题常见）或大尺寸可点击 ImageView
         image_opt_count = _detect_image_options(xml) if not opts_found else 0
+        # ★ 字母按钮检测（知识过关填字母题）：多个小尺寸 clickable LinearLayout/FrameLayout
+        #   （字母按钮无文本，uiautomator 读不到 → 靠尺寸+clickable 特征，2 行 5 列 193x137）
+        _letter_btns = 0
+        if not opts_found:
+            for _ml in re.finditer(
+                r'<node[^>]*class="android\.widget\.(LinearLayout|FrameLayout)"[^>]*clickable="true"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
+                xml,
+            ):
+                _bx1, _by1, _bx2, _by2 = (int(_ml.group(2)), int(_ml.group(3)),
+                                          int(_ml.group(4)), int(_ml.group(5)))
+                if 90 < (_bx2 - _bx1) < 340 and 70 < (_by2 - _by1) < 260 \
+                        and 250 < _by1 < 2200:
+                    _letter_btns += 1
         if opts_found:
             ev.append({"field": "选项", "type": "text_ok",
                        "expected": "存在可选项", "actual": ",".join(opts_found),
@@ -324,6 +354,11 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
             ev.append({"field": "选项", "type": "text_ok",
                        "expected": "存在可选项", "actual": f"图片选项×{image_opt_count}",
                        "diff": f"本题为图片题，检测到 {image_opt_count} 个图片选项（CheckBox/大图）"})
+        elif _letter_btns >= 4:
+            # ★ 填字母题（知识过关）：字母按钮作答，无 A/B/C 选项属正常 → skip
+            ev.append({"field": "选项", "type": "skip",
+                       "expected": "填字母题无ABC选项", "actual": f"字母按钮×{_letter_btns}",
+                       "diff": f"字母补全题：{_letter_btns} 个字母按钮作答，无需 A/B/C 选项"})
         elif is_speaking:
             # ★ 口语题（录音作答）：无选项属正常，作答方式为"点麦克风"
             #   此前误判"未检测到选项"与 AI"无ABC选项"（用户实测）现跳过
@@ -389,19 +424,10 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
 
         if _audio_skipped:
             pass  # 图片题已发 skip，不再走听力/口语音频检查
-        elif is_listening:
-            if play_found:
-                ev.append({"field": "音频", "type": "text_ok" if play_clickable else "text_mismatch",
-                           "expected": "听力题须有可点击的扬声器",
-                           "actual": "播放控件" + ("(可点击)" if play_clickable else "(存在但不可点击)"),
-                           "diff": ("扬声器/播放标识可见且可点击（题干含'听录音'）" if play_clickable
-                                    else "⚠ 扬声器存在但不可点击（无法播放音频）")})
-            else:
-                ev.append({"field": "音频", "type": "text_mismatch",
-                           "expected": "听力题须有扬声器/播放标识",
-                           "actual": "未检测到播放控件",
-                           "diff": "⚠ 题干含'听录音'但页面未检测到扬声器/播放标识"})
         elif is_speaking:
+            # ★ 口语分支优先（2026-08-24）：跟读题题干"听录音，跟读单词"同时命中听/说关键词，
+            #   若 is_listening 优先 → 跟读题被当听力题 → 误报"扬声器存在但不可点击"
+            #   （知识过关 U2 报告第5/7/13/14题实测）
             # ★ 口语题：是否检查播放控件(小喇叭)取决于题干是否要求"点击小喇叭/播放问题"
             #   ★ 用户实测：有些口语小题没有小喇叭，题干没提到"小喇叭/播放"就不该检查！
             #   题干/页面含"小喇叭/播放问题/先听/听一听再读/点小喇叭" → 必须有小喇叭可点
@@ -430,6 +456,18 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
                        "diff": ("麦克风/录音控件可见且可点击" if mic_clickable
                                 else ("⚠ 麦克风存在但不可点击（无法录音）" if mic_found
                                       else "⚠ 口语题未检测到麦克风/录音控件"))})
+        elif is_listening:
+            if play_found:
+                ev.append({"field": "音频", "type": "text_ok" if play_clickable else "text_mismatch",
+                           "expected": "听力题须有可点击的扬声器",
+                           "actual": "播放控件" + ("(可点击)" if play_clickable else "(存在但不可点击)"),
+                           "diff": ("扬声器/播放标识可见且可点击（题干含'听录音'）" if play_clickable
+                                    else "⚠ 扬声器存在但不可点击（无法播放音频）")})
+            else:
+                ev.append({"field": "音频", "type": "text_mismatch",
+                           "expected": "听力题须有扬声器/播放标识",
+                           "actual": "未检测到播放控件",
+                           "diff": "⚠ 题干含'听录音'但页面未检测到扬声器/播放标识"})
         else:
             ev.append({"field": "音频", "type": "skip",
                        "expected": "非听力/口语题",
@@ -456,6 +494,10 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
         #   解决"作答元素: 检查/录音/输入元素未识别"误报（用户实测：麦克风是 ImageView 无文本，
         #   XML dump 时若"点击录音"刚切换到"点击结束"瞬间，_act_signals 字符串都抓不到）
         if is_speaking and mic_found and mic_clickable:
+            _act_signals = True
+        # ★ 填字母题（知识过关）：字母按钮（≥4 个小尺寸 clickable 容器）= 作答入口
+        #   字母按钮无文本，_act_signals 字符串/大图兜底都抓不到 → 必须按特征识别
+        if not _act_signals and _letter_btns >= 4:
             _act_signals = True
         # ★ 可点击大图（图片选项/排序/匹配题的作答入口）
         if not _act_signals:

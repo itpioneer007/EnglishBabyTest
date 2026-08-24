@@ -118,8 +118,21 @@ def _answer_loop(d, max_q=120):
     for _ in range(max_q):
         # ★ 每题界面级完整性检查证据（题型/题干/选项/音频/作答）→ 前端证据卡
         #   在答题处理前采集当前页（新题加载后发一次，q 变化去重）
+        #   ★ 2026-08-24 修复采集时机（对照听力专项）：
+        #     ① 先等反馈浮层消失（"恭喜你/回答正确/回答错误/很遗憾"），否则 dump 到反馈页
+        #        → 题干提取成反馈文字 → "未提取到题干文字"误报（U2 报告第1/8/10/11/16题）；
+        #     ② 再固定等 0.8s 保证新题题干渲染完成，然后重新 dump 作为证据源
         if q != _ev_q:
             try:
+                _xml_ev = d.dump_hierarchy()
+                for _fb in range(6):
+                    if ('恭喜' in _xml_ev or '回答正确' in _xml_ev
+                            or '回答错误' in _xml_ev or '很遗憾' in _xml_ev):
+                        time.sleep(0.4)
+                        _xml_ev = d.dump_hierarchy()
+                    else:
+                        break
+                time.sleep(0.8)   # ★ 题干渲染稳定（首题可更长，这里统一 0.8s）
                 _xml_ev = d.dump_hierarchy()
                 step_log(f"  第{q+1}题 完整性检查", "info",
                          collect_ui_evidence(_xml_ev, qtype="知识过关"))
