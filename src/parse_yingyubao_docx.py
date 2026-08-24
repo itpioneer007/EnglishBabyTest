@@ -39,6 +39,11 @@ class YingYuBaoQuestion:
     knowledge_points: list = field(default_factory=list)
     skill: str = ""
     cognitive_target: str = ""
+    # ★ 口语训练脚本专用字段（2026-08-24 新增，其他模块不受影响）
+    big: int = 0                     # 大题序号（1/2/3/4）
+    big_title: str = ""              # 大题标题（如 "一、朗读单词。（15分）"）
+    caption: str = ""                # 大题说明（"请大声朗读你看到的单词..."）
+    passage: str = ""                # 阅读题短文材料
 
 
 def _split_opts(t: str) -> list:
@@ -71,6 +76,168 @@ def _is_knowledge_line(content: str) -> bool:
     return False
 
 
+# ============================================================
+# 口语训练脚本专用解析（2026-08-24）
+# ============================================================
+# ★ 口语训练 docx 与听力专项格式完全不同，旧解析器会把它解析成垃圾题：
+#   - 朗读单词："1. try  2. scarf  3. pair  4. idea  5. little"（单行 5 小题，tab 分隔）
+#   - 朗读句子：逐行 "1. I have a red car."
+#   - 看图说句："1. 句型提示：Which one do you want, ...?" + 参考答案：/关键词：
+#   - 情景问答："1. 听力材料：What chores does she do in her room?" + 参考答案：/关键词：
+#   - 阅读短文：短文段落 + "听力材料：1. Whose coat is too big?" + 参考答案：/关键词：
+#   - 元数据块（一级题型/二级题型/难度/关键词/知识点/技能/认知目标...）挂到大题所有小题
+#   结构：单元标题（口语训练新湘少版五上U6）→ 4 个大题（一、~ 四、），每大题 5 小题
+_ORAL_BIG_HDR = re.compile(r'^[一二三四五六七八九十]+[、\.]')
+_ORAL_UNIT_RE = re.compile(r'[Uu]\s*(\d{1,2})\b')
+_ORAL_META_PREFIX = ("一级题型", "二级题型", "难度", "难度系数", "关键词",
+                     "知识点", "技能", "认知目标", "适用年级", "编写年份", "主题")
+
+
+def _oral_make_sub(unit, big, big_title, n, content):
+    """构造口语训练小题：剥离"听力材料：/句型提示："前缀，保留题干正文"""
+    stem = content
+    for _pre in ("听力材料", "句型提示"):
+        if stem.startswith(_pre + "：") or stem.startswith(_pre + ":"):
+            stem = stem.split("：", 1)[1].strip() if "：" in stem else stem.split(":", 1)[1].strip()
+            break
+    return YingYuBaoQuestion(unit=unit, big=big, big_title=big_title, stage_idx=n, stem=stem)
+
+
+def parse_oral_paragraphs(paragraphs: list, unit_hint: int = 0) -> list:
+    """口语训练脚本专用解析（段落列表输入，便于测试/无 python-docx 环境模拟）。
+
+    Returns: list[YingYuBaoQuestion]，global_idx 全局连续（跨单元、跨大题）。
+    """
+    unit = unit_hint
+    big = 0
+    big_title = ""
+    big_type = ""          # 单词/句子/问答/阅读
+    caption = ""
+    passage_lines = []
+    meta = {}
+    kp_mode = False        # 知识点：后的数字行
+    subs = []              # 当前大题小题
+    questions = []         # 全部小题
+
+    def _attach_meta():
+        for q in subs:
+            q.type_1 = meta.get("一级题型", "")
+            q.type_2 = meta.get("二级题型", "") or "/"
+            q.difficulty = meta.get("难度", "") or meta.get("难度系数", "")
+            # ★ 小题自己的"关键词："（如 red, blue）优先，元数据关键词(单元标签)仅兜底
+            if not q.keywords:
+                q.keywords = list(meta.get("关键词列表", []))
+            q.knowledge_points = list(meta.get("知识点", []))
+            q.skill = meta.get("技能", "")
+            q.cognitive_target = meta.get("认知目标", "")
+
+    def _flush_big():
+        nonlocal subs, meta, caption, passage_lines, kp_mode
+        _attach_meta()
+        for q in subs:
+            q.caption = caption
+            if passage_lines:
+                q.passage = "\n".join(passage_lines)
+            questions.append(q)
+        subs, meta, caption, passage_lines, kp_mode = [], {}, "", [], False
+
+    for raw in paragraphs:
+        t = raw.strip()
+        if not t:
+            continue
+        # ---- 单元标题行："口语训练新湘少版五上U6" ----
+        if len(t) < 40 and not t.startswith("关键词") and _ORAL_UNIT_RE.search(t) \
+                and ("口语训练" in t or t.startswith("Unit")):
+            unit = int(_ORAL_UNIT_RE.search(t).group(1))
+            continue
+        # ---- 大题标题："一、朗读单词。（15分）" ----
+        if _ORAL_BIG_HDR.match(t):
+            _flush_big()
+            big += 1
+            big_title = t
+            big_type = ("单词" if "单词" in t else "句子" if "句子" in t
+                        else "阅读" if ("阅读" in t or "短文" in t) else "问答")
+            continue
+        # ---- 元数据行 ----
+        if any(t.startswith(k) for k in _ORAL_META_PREFIX):
+            if t.startswith("关键词："):
+                meta["关键词列表"] = [k.strip() for k in
+                                      t.replace("关键词：", "").split("#") if k.strip()]
+            elif t.startswith("知识点："):
+                meta.setdefault("知识点", [])
+                kp_mode = True
+            elif t.startswith("技能："):
+                meta["技能"] = t.replace("技能：", "").strip()
+                kp_mode = False
+            elif t.startswith("认知目标："):
+                meta["认知目标"] = t.replace("认知目标：", "").strip()
+            elif t.startswith("一级题型：") or t.startswith("二级题型：") \
+                    or t.startswith("难度：") or t.startswith("难度系数："):
+                key = t.split("：")[0]
+                meta[key] = t.split("：", 1)[1].strip()
+            # 适用年级/编写年份/主题：忽略
+            continue
+        # ---- 知识点区数字行："1. ar 在单词中的发音 /ɑ:(r)/" ----
+        if kp_mode and re.match(r"^\d+[\.、]", t):
+            meta.setdefault("知识点", []).append(t)
+            continue
+        # ---- 大题说明（含"录音/作答/准备时间"等）----
+        if big and ("录音" in t or "作答" in t or "准备时间" in t or "播放问题" in t):
+            caption = t
+            continue
+        # ---- 参考答案（挂在最后一个小题，可能多组）----
+        if t.startswith("参考答案："):
+            _ans = re.sub(r"[（(]\s*隐藏\s*[）)]", "", t.replace("参考答案：", "").strip()).strip()
+            if subs:
+                subs[-1].answer = (subs[-1].answer + "\n" + _ans).strip() if subs[-1].answer else _ans
+            continue
+        # ---- 小题级"关键词：red, blue"（挂在最后一个小题）----
+        if t.startswith("关键词：") and subs:
+            for _k in t.replace("关键词：", "").split(","):
+                _k = _k.strip()
+                if _k and _k not in subs[-1].keywords:
+                    subs[-1].keywords.append(_k)
+            continue
+        # ---- 独立"听力材料：N. xxx"（阅读题）----
+        _lm = re.match(r"^听力材料[:：]\s*(\d+)[\.、]\s*(.*)$", t)
+        if _lm:
+            subs.append(_oral_make_sub(unit, big, big_title, int(_lm.group(1)), _lm.group(2).strip()))
+            continue
+        # ---- 宽容：无编号的"句型提示：/听力材料："行 ----
+        #   ★ 脚本笔误场景（实测 U9 第三大题第4小题漏写"4. "前缀）：
+        #   知识点区有第4条说明，但小题行只有"句型提示：I feel ..."。
+        #   此时按"最后小题+1"补序号，保证 App 第4小题能对上脚本；
+        #   脚本自身的漏编号问题由"整卷脚本审查"(script_reviewer) 发现。
+        if subs and (t.startswith("句型提示") or t.startswith("听力材料")):
+            subs.append(_oral_make_sub(unit, big, big_title, subs[-1].stage_idx + 1, t))
+            continue
+        # ---- 小题行："1. try 2. scarf 3. pair..."（朗读单词单行多小题）或 "1. 句型提示：..." ----
+        _sm = re.match(r"^(\d+)[\.、]\s*(.*)$", t)
+        if _sm:
+            num = int(_sm.group(1))
+            content = _sm.group(2).strip()
+            parts = re.split(r'\s+(?=\d+[\.、]\s)', content) if content else []
+            if len(parts) >= 2:   # 单行多小题
+                subs.append(_oral_make_sub(unit, big, big_title, num, parts[0].strip()))
+                for _p in parts[1:]:
+                    _pm = re.match(r"^(\d+)[\.、]\s*(.*)$", _p.strip())
+                    if _pm:
+                        subs.append(_oral_make_sub(unit, big, big_title,
+                                                   int(_pm.group(1)), _pm.group(2).strip()))
+            else:
+                subs.append(_oral_make_sub(unit, big, big_title, num, content))
+            continue
+        # ---- 阅读短文段落（未归类的长文本，仅阅读题）----
+        if big and big_type == "阅读":
+            passage_lines.append(t)
+    _flush_big()
+
+    # 全局题号：跨单元/跨大题连续
+    for i, q in enumerate(questions, 1):
+        q.global_idx = i
+    return questions
+
+
 def parse(filepath: str) -> list[YingYuBaoQuestion]:
     """解析英语宝听力专项 DOCX（段落模式）
 
@@ -84,6 +251,15 @@ def parse(filepath: str) -> list[YingYuBaoQuestion]:
     ★ 支持选项单空格/多空格/制表符分隔
     """
     doc = Document(filepath)
+    paragraphs = [p.text for p in doc.paragraphs]
+
+    # ★ 口语训练脚本识别（2026-08-24）：标题含"口语训练"→ 专用解析。
+    #   口语训练 docx 与听力专项格式完全不同（朗读单词单行多词/朗读句子逐行/
+    #   句型提示+参考答案/听力材料+短文），旧解析器会解析成垃圾题 → 脚本审查乱报。
+    _head = "".join(t for t in paragraphs if t.strip())[:200]
+    if "口语训练" in _head:
+        return parse_oral_paragraphs(paragraphs)
+
     questions = []
     pending = None          # 当前正在累积的题
     current_unit = 0

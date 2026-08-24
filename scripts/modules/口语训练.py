@@ -700,6 +700,9 @@ def run_module(d, units=None):
             d(text="口语训练").click(); time.sleep(1.2)
         _close_bottom_ad(d)
 
+    # ★ 模块完成信号（web_server log_msg 靠"完成"关键词触发脚本内容审查）
+    #   练习报告页可能因渲染延迟没检测到 → 这里兜底必发
+    step_log(f"✅ 口语训练完成，共{total}题", "success")
     print(f"✅ 口语训练完成: {total} 题, 耗时 {time.time()-t0:.0f}s")
     return total
 

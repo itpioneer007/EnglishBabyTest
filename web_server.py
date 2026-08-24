@@ -333,19 +333,36 @@ def _detect_content_dimension(module: str = ""):
                 continue
             idx = (q or {}).get("idx", 0)
             if not idx: continue
-            sqs = [s for s in agent.script_questions if s.global_idx == idx]
+            # ★ 口语训练题卡对齐（2026-08-24 修复"脚本审查乱报"根因二）：
+            #   口语训练模块记录 idx=小题号(1-5)+big(1-4)，而脚本 global_idx 是全局题号(1-20)。
+            #   ⚠ 不能先按 global_idx 匹配：第3大题·第2小题(idx=2)会错配到脚本 Q02（朗读单词），
+            #   必须优先按 (unit, big, stage_idx) 精确定位；无 big 的题卡（听力专项等）再走 global_idx。
+            _q_big = (q or {}).get("big") or 0
+            _q_no = (q or {}).get("module_qno") or 0
+            sqs = []
+            if _q_big and _q_no:
+                sqs = [s for s in agent.script_questions
+                       if s.unit == _unit_cur and s.big == _q_big and s.stage_idx == _q_no]
+            if not sqs:
+                sqs = [s for s in agent.script_questions if s.global_idx == idx]
             if not sqs: continue
             sq = sqs[0]
             stem = (getattr(sq, "stem", "") or "").strip()
             opts = "; ".join([o for o in (sq.options or []) if o]) or "(无)"
             ans = (getattr(sq, "answer", "") or "").strip() or "(无)"
             typ = (getattr(sq, "type_2", "") or "").strip() or "未知"
-            batch.append(f"Q{idx}: 题型={typ}, 脚本={stem or '(无)'}, 选项={opts}, 答案={ans}")
-            qid_map[idx] = qid
+            # ★ 口语训练：定位描述用"第N大题·第M小题"（与 App 证据卡一致），非口语题保持 Q{idx}
+            _pos = f"第{sq.big}大题·第{sq.stage_idx}小题" if getattr(sq, "big", 0) else f"Q{idx}"
+            _caption = (getattr(sq, "caption", "") or "").strip()
+            # ★ 唯一序号：口语训练多题共用 idx=小题号(1-5)，qid_map 不能用 idx 当 key（会互相覆盖）
+            _batch_idx = len(batch) + 1
+            batch.append(f"{_batch_idx}. {_pos}: 题型={typ}, 大题说明={(_caption or '(无)')[:45]}, 题干={stem or '(无)'}, 答案={ans}")
+            qid_map[_batch_idx] = qid
         if not batch: return
         rules = ("规则:对每题做内容检查-1.知识性(PASS/REVIEW/REJECT)必须有依据才判错;"
                  "2.语言质量(拼写/语法/选项/搭配/语义)。"
-                 '输出JSON数组:[{"idx":1,"verdict":"PASS/REVIEW/REJECT","basis":"判断依据","lang":["问题描述"]},...]')
+                 '输出JSON数组:[{"idx":1,"verdict":"PASS/REVIEW/REJECT","basis":"判断依据","lang":["问题描述"]},...]'
+                 "其中 idx 为上面列表中每题的序号(1,2,3...)。")
         prompt_text = f"批量内容审查:共{len(batch)}题\n" + "\n".join(batch) + "\n\n" + rules + "\n只输出JSON数组。"
         try:
             raw = (agent.llm.ask(prompt_text) or "").strip()
@@ -395,7 +412,7 @@ def _detect_content_dimension(module: str = ""):
                     _existing_qid = None
                     for _k, _v in list(_inspection_state["questions"].items()):
                         if (_v.get("idx") == qi
-                                and (_v.get("stage") or "") == (stage or "")):
+                                and (_v.get("stage") or "") == (_cur_stage or "")):
                             _existing_qid = _k
                             break
                     if _existing_qid:
