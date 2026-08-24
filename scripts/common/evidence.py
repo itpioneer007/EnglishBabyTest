@@ -53,10 +53,34 @@ def _find_control(xml: str, keywords: tuple) -> tuple:
     """在 XML 中查找含关键词的控件节点，返回 (found, clickable)
     - 优先匹配 clickable="true" 的节点（避免误命中介绍/标签文本）
     - 逐节点匹配 text/content-desc 含任一关键词
-    - ★ 也匹配 resource-id 中的 play/sound/audio/speaker/mic 模式
+    - ★ 也匹配 resource-id 中的 play/sound/audio/speaker/mic/record 模式
       （真实 App 扬声器/麦克风按钮常是 rid=id/play_box，text/content-desc 为空）
     - clickable 取该节点是否 clickable="true"
+    - ★ 2026-08-24：命中非 clickable 文本节点时，会向上/向外查找包含该节点的
+      clickable 父容器（如口语训练 record_btn 容器内含 "点击录音" 文本）
     """
+    xml = xml or ""
+    # 先收集所有 clickable 节点 bounds，用于后续“包含关系”判定
+    _clickables = []
+    for m in re.finditer(r'<node[^>]*>', xml):
+        tag = m.group(0)
+        if 'clickable="true"' not in tag:
+            continue
+        b = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+        if not b:
+            continue
+        _clickables.append((int(b.group(1)), int(b.group(2)), int(b.group(3)), int(b.group(4)), tag))
+
+    def _contained_by_clickable(x1, y1, x2, y2, margin=20):
+        """判断某个区域是否被某个 clickable 节点包含（或中心落在其中）。"""
+        cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+        for bx1, by1, bx2, by2, tag in _clickables:
+            # 区域中心落在 clickable 容器内，或容器几乎完全包含目标区域
+            if (bx1 - margin <= cx <= bx2 + margin and by1 - margin <= cy <= by2 + margin) or \
+               (bx1 <= x1 and by1 <= y1 and bx2 >= x2 and by2 >= y2):
+                return True
+        return False
+
     # 第一轮：只找 clickable=true 的节点（避免误命中介绍文案等非控件文本）
     for m in re.finditer(r'<node[^>]*>', xml):
         tag = m.group(0)
@@ -65,9 +89,9 @@ def _find_control(xml: str, keywords: tuple) -> tuple:
         for kw in keywords:
             if kw in tag:
                 return True, True
-        if re.search(r'resource-id="[^"]*(play|sound|audio|speaker|mic)[^"]*"', tag):
+        if re.search(r'resource-id="[^"]*(play|sound|audio|speaker|mic|record)[^"]*"', tag):
             return True, True
-    # 第二轮：兜底找含关键词/rid 的节点（含 clickable=false 的）
+    # 第二轮：兜底找含关键词/rid 的节点（含 clickable=false 的），并尝试找外部 clickable 容器
     nodes = list(re.finditer(r'<node[^>]*>', xml))
     for idx, m in enumerate(nodes):
         tag = m.group(0)
@@ -76,17 +100,19 @@ def _find_control(xml: str, keywords: tuple) -> tuple:
             if kw in tag:
                 hit = True
                 break
-        if not hit and re.search(r'resource-id="[^"]*(play|sound|audio|speaker|mic)[^"]*"', tag):
+        if not hit and re.search(r'resource-id="[^"]*(play|sound|audio|speaker|mic|record)[^"]*"', tag):
             hit = True
         if not hit:
             continue
         clickable = 'clickable="true"' in tag
-        # ★ 容器内子节点可点击 → 视为可点击（真实 App 录音按钮 record_btn 是
-        #   ViewGroup 容器 clickable=false，但容器内子 View 可点击——口语训练麦克风实测）
-        if not clickable:
-            b = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
-            if b:
-                bx1, by1, bx2, by2 = map(int, b.groups())
+        b = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+        if b and not clickable:
+            bx1, by1, bx2, by2 = map(int, b.groups())
+            # 2.1 向上/向外找包含自己的 clickable 容器（口语训练 record_btn 容器）
+            if _contained_by_clickable(bx1, by1, bx2, by2):
+                clickable = True
+            # 2.2 容器内子节点可点击 → 也视为可点击（兼容旧逻辑）
+            if not clickable:
                 for m2 in nodes[idx + 1:]:
                     t2 = m2.group(0)
                     b2 = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', t2)

@@ -15,7 +15,9 @@
 批量调用：from modules.口语训练 import run_module; run_module(d)
 """
 import os
-import sys, os, time
+import sys
+import time
+import re
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import uiautomator2 as u2
@@ -91,29 +93,139 @@ def _close_bottom_ad(d):
     return False
 
 
-def _find_record_btn(d):
-    """动态查找麦克风按钮：找"点击录音"文字位置，其上方圆形 clickable。
-    关键：录音按钮坐标会随页面滚动/换题变化，必须动态获取。
+def _find_record_btn(d, xml=None):
+    """动态查找当前可点击的录音按钮中心坐标。
+
+    口语训练录音按钮结构（2026-08-24 真机 dump）：
+      - 容器 record_btn (com.dinoenglish.yyb:id/record_btn) clickable=true
+      - 内部包含 record_icon_imageview / speech_textview 文字"点击录音"等
+      - 文字节点自身 clickable=false
+    查找策略：
+      ① 优先按 resource-id "record_btn" 定位可点击容器；
+      ② 兜底按"点击录音/点击结束/点击完成"文字，找其所在的 clickable 父容器。
+    返回 (x, y) 或 None。
     """
-    rec = None
-    for e in (d.xpath('//*[@text!=""]').all() or []):
-        t = (e.text or "").strip()
-        if "点击录音" in t or "点击录制" in t:
-            rec = e
-            break
-    if not rec:
-        return None
-    rb = rec.bounds
-    rx, ry = (rb[0] + rb[2]) // 2, (rb[1] + rb[3]) // 2
-    # 找"点击录音"文字正上方的圆形 clickable（麦克风）
-    for ce in (d.xpath('//*[@clickable="true"]').all() or []):
-        b = ce.bounds
-        cx = (b[0] + b[2]) // 2
-        cy = (b[1] + b[3]) // 2
-        # 麦克风特征：在文字上方，x 接近，宽 200-300、高 250-300
-        if abs(cx - rx) < 100 and cy < ry and (ry - cy) < 200 and (b[2]-b[0]) > 150:
-            return (cx, cy)
+    if xml is None:
+        try:
+            xml = d.dump_hierarchy()
+        except Exception:
+            xml = ""
+    # ① 直接定位 record_btn 容器（最可靠，不依赖文字）
+    for m in re.finditer(
+        r'resource-id="[^"]*record_btn"[^>]*clickable="true"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
+        xml,
+    ):
+        x1, y1, x2, y2 = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+        return ((x1 + x2) // 2, (y1 + y2) // 2)
+    # 兼容：文字节点在 record_btn 内部，文字节点不可点击；找包含文字节点的 clickable 容器
+    for kw in ("点击录音", "点击结束", "点击完成"):
+        m = re.search(rf'text="{re.escape(kw)}"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml)
+        if m:
+            tx1, ty1, tx2, ty2 = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+            tcx, tcy = (tx1 + tx2) // 2, (ty1 + ty2) // 2
+            # 找包含该文字中心的 clickable 容器（通常是 record_btn 或 speech_box）
+            best = None
+            for m2 in re.finditer(
+                r'<node[^>]*clickable="true"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
+                xml,
+            ):
+                bx1, by1, bx2, by2 = int(m2.group(1)), int(m2.group(2)), int(m2.group(3)), int(m2.group(4))
+                if bx1 <= tcx <= bx2 and by1 <= tcy <= by2:
+                    # 取最小且包含该文字的 clickable 容器
+                    area = (bx2 - bx1) * (by2 - by1)
+                    if best is None or area < best[2]:
+                        best = ((bx1 + bx2) // 2, (by1 + by2) // 2, area)
+            if best:
+                return best[:2]
     return None
+
+
+def _is_transition_state(xml):
+    """页面是否处于过渡/上传/倒计时状态（此时不应提取证据/找录音按钮）。"""
+    if not xml:
+        return False
+    for kw in ("请阅读题目", "正在上传", "正在提交", "请稍候", "加载中"):
+        if kw in xml:
+            return True
+    return False
+
+
+def _wait_ready_for_record(d, timeout=20):
+    """等待倒计时/上传结束，且 record_btn 出现。
+    返回是否成功。
+    """
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        xml = d.dump_hierarchy()
+        if _is_transition_state(xml):
+            time.sleep(0.2)
+            continue
+        pos = _find_record_btn(d, xml)
+        if pos:
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def _find_active_sub_question(d, xml=None):
+    """定位当前正在作答的小题（包含 record_btn 的 speech_box）。
+    返回 (sub_no, stem_text, speech_box_bounds) 或 (None, "", None)。
+    """
+    if xml is None:
+        try:
+            xml = d.dump_hierarchy()
+        except Exception:
+            return None, "", None
+    # 找所有 speech_box 及其 bounds、内部 tv_sort 文字
+    boxes = []
+    for m in re.finditer(
+        r'<node[^>]*resource-id="[^"]*speech_box"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
+        xml,
+    ):
+        x1, y1, x2, y2 = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+        boxes.append((y1, x1, y2, x2, (x1, y1, x2, y2)))
+    if not boxes:
+        return None, "", None
+    boxes.sort()  # 按 y 排序
+    # 哪个 speech_box 内部包含 record_btn？
+    record_m = re.search(
+        r'resource-id="[^"]*record_btn"[^>]*clickable="true"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
+        xml,
+    )
+    if not record_m:
+        # 兜底：取最上方的 speech_box
+        active_box = boxes[0][4]
+    else:
+        rx1, ry1, rx2, ry2 = int(record_m.group(1)), int(record_m.group(2)), int(record_m.group(3)), int(record_m.group(4))
+        rcx, rcy = (rx1 + rx2) // 2, (ry1 + ry2) // 2
+        active_box = None
+        for y1, x1, y2, x2, box in boxes:
+            if x1 <= rcx <= x2 and y1 <= rcy <= y2:
+                active_box = box
+                break
+        if active_box is None:
+            active_box = boxes[0][4]
+    # 在该 speech_box 内找 tv_sort（如 "1."）和题干文字
+    sub_no = None
+    stems = []
+    bx1, by1, bx2, by2 = active_box
+    # 收集 speech_box 内所有 text 节点
+    for m in re.finditer(r'<node[^>]*text="([^"]+)"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml):
+        t = m.group(1).strip()
+        x1, y1, x2, y2 = int(m.group(2)), int(m.group(3)), int(m.group(4)), int(m.group(5))
+        if x1 < bx1 or y1 < by1 or x2 > bx2 or y2 > by2:
+            continue
+        # tv_sort: "1." / "2."
+        mm = re.match(r"^(\d+)\.$", t)
+        if mm:
+            sub_no = int(mm.group(1))
+            continue
+        # 过滤噪音：分值、空白、过长
+        if t in ("", " ") or "分" in t or len(t) > 40 or len(t) < 1:
+            continue
+        stems.append(t)
+    stem = " / ".join(stems[:2]) if stems else "图片题"
+    return sub_no, stem, active_box
 
 
 def _click_horn(d, min_y=400):
@@ -176,106 +288,150 @@ def _click_next_btn(d):
     return False
 
 
-def _wait_countdown(d, timeout=15):
-    """等待'请阅读题目'倒计时结束（出现'点击录音'文字）。
-    速度优化：轮询间隔 0.25s，出现录音按钮立即返回。
+def _wait_countdown(d, timeout=20):
+    """兼容旧调用：等待倒计时/上传结束且录音按钮出现。"""
+    return _wait_ready_for_record(d, timeout)
+
+
+def _speak_one_sub(d):
+    """作答当前可见的录音小题：点录音 → 等状态变 → 点结束。
+    返回是否成功。
     """
-    t0 = time.time()
-    while time.time() - t0 < timeout:
-        if _find_record_btn(d):
-            return True
-        time.sleep(0.12)
-    return False
-
-
-def _speak_question(d, wait_countdown=True):
-    """作答一个小题（动态坐标）：等倒计时 → 点录音 → 点结束。
-    关键：录音麦克风位置是动态的，必须每次用 _find_record_btn 获取。
-    速度优化：录音后等待缩短（App 切换状态约 0.8s）
-    """
-    # 1. 等倒计时结束
-    if wait_countdown:
-        _wait_countdown(d)
-
-    # 2. 动态找录音按钮
     pos = _find_record_btn(d)
     if not pos:
-        # 可能页面没渲染完或需下滑
-        time.sleep(0.3)
-        pos = _find_record_btn(d)
-    if not pos:
-        print("    ⚠ 未找到录音按钮")
         return False
-
-    # 3. 点录音图标（麦克风圆形按钮）
-    d.click(pos[0], pos[1])
+    d.click(*pos)
     print(f"    🎤 点录音 ({pos[0]},{pos[1]})")
-    step_log(f"🎤 点录音", "info")
-    # ★ 竞态修复：等 App 把"点击录音"切换成"点击结束"状态再点（轮询替代固定0.35s）。
-    #   否则点快于刷新 → 第二次点击点空/误点，录音没结束就进入下一小题。
-    _t0 = time.time()
-    _ended = False
-    while time.time() - _t0 < 2.0:
-        try:
-            _x = d.dump_hierarchy()
-            if "点击结束" in _x or "点击完成" in _x:
-                _ended = True
-                break
-            # 状态已变（录音按钮消失）也算就绪
-            if "点击录音" not in _x and "点击录制" not in _x:
-                _ended = True
-                break
-        except Exception:
-            pass
-        time.sleep(0.1)
-    if not _ended:
-        time.sleep(0.3)  # 兜底：状态未切换也等一次再点（防点空）
-    # 4. 点结束（同一位置，文字从"点击录音"变成"点击结束"）
-    d.click(pos[0], pos[1])
+    step_log("🎤 点录音", "info")
+    # 等 App 切换到"点击结束"/"点击完成"状态
+    t0 = time.time()
+    while time.time() - t0 < 3.0:
+        xml = d.dump_hierarchy()
+        if _is_transition_state(xml):
+            time.sleep(0.15)
+            continue
+        if "点击结束" in xml or "点击完成" in xml:
+            break
+        # 兜底：等一小会儿
+        time.sleep(0.15)
+    # 再点一次结束录音
+    d.click(*pos)
     print(f"    ⏹ 点结束 ({pos[0]},{pos[1]})")
-    step_log(f"⏹ 点结束", "info")
-    # ★ 等"点击结束"消失（本轮小题完成，App 进入下一小题或出"下一题"）
-    _t1 = time.time()
-    while time.time() - _t1 < 1.5:
-        try:
-            _x2 = d.dump_hierarchy()
-            if "点击结束" not in _x2 and "点击完成" not in _x2:
-                break
-        except Exception:
-            pass
-        time.sleep(0.1)
+    step_log("⏹ 点结束", "info")
+    # 等录音结束状态消失（上传/切换下一题）
+    t1 = time.time()
+    while time.time() - t1 < 3.0:
+        xml = d.dump_hierarchy()
+        if _is_transition_state(xml):
+            time.sleep(0.15)
+            continue
+        if not _find_record_btn(d, xml):
+            # 当前 record_btn 消失/切换了 → 大概率已完成
+            break
+        if "点击结束" in xml or "点击完成" in xml:
+            time.sleep(0.2)
+            continue
+        break
     return True
 
 
-def _answer_big_question(d, big_idx=0):
-    """作答一个大题（含多个小题）：
-    - 大题首题需等"请阅读题目"倒计时结束（仅首次大题需要）
-    - 每小题前可能要点小喇叭播放问题
-    - 然后点录音+点结束
-    - 下滑查看下一小题（4/5, 5/5等）
-    - 答完所有小题 → 出现「下一大题」或「交卷」
+def _scroll_question_area(d):
+    """在题目滚动区内向下滑动，露出下方小题。"""
+    S_swipe(d, 540, 1700, 540, 900, 0.4)
 
-    ★ 用户实测根因（2026-08-18）：
-      - 口语训练是"同页连续"模式：5 个喇叭图标都在同一页，进度条 1/5~5/5
-      - 大题间**没有"下一题"按钮**（找"下一题"永远找不到 → _answer_big_question 跑完 15 次循环
-        → 第 6 次发"第6题·完整性检查"证据卡 → 重复计题 + 误判"作答未识别"）
-      - 退出条件应改为：进度条到 5/5 + 找"交卷/下一大题/开始训练下一题/再来一组"等大题间过渡按钮
+
+def _answer_big_question(d, big_idx=0):
+    """作答一个大题（含若干小题）。
+
+    口语训练当前结构（2026-08-24 真机）：
+      - 一个大题一个长页面，顶部进度 "1/4"、"2/4"... 表示大题序号；
+      - 页面内列出所有小题（通常 4~5 道），每道小题包含 tv_sort "1."、pic_iv 图片、分值；
+      - 同一时刻只有一道小题出现可点击的 record_btn；
+      - 点完当前小题录音后，下一道小题的 record_btn 才会出现；
+      - 本大题全部答完后，底部出现"下一题"/"交卷"按钮。
+
+    流程：
+      1. 等"请阅读题目"倒计时结束，首个 record_btn 出现；
+      2. 逐小题：定位当前 active record_btn → 收集证据 → 点录音 → 点结束；
+      3. 当前 record_btn 消失后，若下方出现新的 record_btn 继续；否则下滑；
+      4. 无新 record_btn 且出现"下一题/交卷" → 点击进入下一大题。
     """
     q = 0
-    _ev_q = -1  # 已发证据卡的题号（每题只发一次）
-    _score_checked = False  # ★ 每大题只做一次分值检查（避免拖慢流程）
-    # ★ 大题最多 5 小题（口语训练每大题固定 5 题，进度条 N/5），不再盲目跑 15 次
-    for _ in range(5):
-        # ★ 每题界面级完整性检查证据（题型/题干/选项/音频/作答）→ 前端证据卡
-        #   口语题为录音作答：证据卡会显示"录音/麦克风"作答元素 + 题干文字
-        #   ★ 精确定位：标注"第big_idx大题·第M小题"（用户要求错题能定位到题）
+    _ev_q = -1          # 已发证据卡的题号（每小题只发一次）
+    _score_checked = False
+    _horn_clicked = False  # 每大题只需点一次顶部说明喇叭
+
+    # 1. 等大题首题 ready
+    if not _wait_ready_for_record(d, timeout=22):
+        print(f"    ❌ 第{big_idx}大题：等待首题录音按钮超时")
+        return 0
+
+    # 2. 逐小题作答
+    for _ in range(30):  # 防护上限
+        if should_stop():
+            step_log("⏹ 收到停止请求，中断当前模块", "warning")
+            return q
+
+        xml = d.dump_hierarchy()
+
+        # 整单元结束标记
+        if "练习报告" in xml:
+            print(f"    ✅ 练习报告页出现，单元结束")
+            step_log("📊 练习报告（单元完成）", "success")
+            try:
+                sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                from src.doc_checks import check_report_page
+                check_report_page(d, module_name="口语训练")
+            except Exception:
+                pass
+            return q
+
+        # 大题间过渡按钮（下一题/交卷等）
+        _big_done_btn = None
+        for _btxt in ("交卷", "下一大题", "开始训练下一题", "再来一组", "提交成绩", "完成本大题", "下一组", "下一题"):
+            if d(text=_btxt).exists(timeout=0.05):
+                _big_done_btn = _btxt
+                break
+        if _big_done_btn:
+            # 仅当本大题已答至少 1 小题，或按钮是"交卷"（最后一题）时才点
+            if q > 0 or _big_done_btn == "交卷":
+                d(text=_big_done_btn).click()
+                print(f"    ✅ 大题完成 → 点{_big_done_btn}")
+                step_log(f"➡ {_big_done_btn}", "success")
+                time.sleep(0.8)
+                return q
+
+        # 找当前 active 录音按钮
+        pos = _find_record_btn(d, xml)
+        if not pos:
+            # 当前屏没有，下滑继续找
+            _scroll_question_area(d)
+            time.sleep(0.5)
+            pos = _find_record_btn(d)
+            if not pos:
+                # 下滑后仍无录音按钮，且存在下一题 → 本大题答完
+                if _click_next_btn(d):
+                    print(f"    ➡ 下一题（大题完成）")
+                    step_log("➡ 进入下一大题", "step")
+                    time.sleep(0.8)
+                    return q
+                # 仍无按钮，可能已结束或异常
+                if q > 0:
+                    print(f"    ✅ 大题完成（已答{q}小题，无新录音按钮）")
+                    return q
+                print(f"    ⚠ 第{big_idx}大题未找到任何录音按钮")
+                return q
+
+        # 确定当前小题编号/题干
+        sub_no, stem, _ = _find_active_sub_question(d, xml)
+        sub_label = sub_no if sub_no is not None else q + 1
+
+        # 每小题只发一次证据卡（避免重复）
         if q != _ev_q:
             try:
-                _xml_ev = d.dump_hierarchy()
                 from common.evidence import collect_ui_evidence
-                step_log(f"  第{big_idx}大题·第{q+1}小题 完整性检查", "info",
-                         collect_ui_evidence(_xml_ev, qtype="口语训练"))
-                # ★ 文档检查点：大题首题做一次分值核对（页面显示的分值是否正常）
+                step_log(f"  第{big_idx}大题·第{sub_label}小题（{stem}）完整性检查", "info",
+                         collect_ui_evidence(xml, qtype="口语训练"))
                 if not _score_checked:
                     _score_checked = True
                     try:
@@ -287,129 +443,28 @@ def _answer_big_question(d, big_idx=0):
                 _ev_q = q
             except Exception:
                 pass
-        # ★ 停止检查：web_server 收到停止请求 → 中断
-        if should_stop():
-            step_log("⏹ 收到停止请求，中断当前模块", "warning")
-            return q
-        # 完成判断：练习报告页（交卷后出现，整单元结束）
-        if d(text="练习报告").exists(timeout=0.1):
-            print(f"    ✅ 练习报告页出现，单元结束")
-            step_log("📊 练习报告（单元完成）", "success")
-            # ★ 文档检查点：报告页核对（总分=得分之和、结果图标、题干文字）
-            try:
-                sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-                from src.doc_checks import check_report_page
-                check_report_page(d, module_name="口语训练")
-            except Exception:
-                pass
-            time.sleep(0.8)
-            return q
 
-        # 完成判断：交卷（最后一题）
-        if d(text="交卷").exists(timeout=0.1):
-            d(text="交卷").click()
-            print(f"    ✅ 交卷按钮出现，点击交卷")
-            step_log("✅ 交卷", "success")
-            time.sleep(0.6)
-            if d(text="确定交卷").exists(timeout=2):
-                d(text="确定交卷").click()
-                print(f"    ✅ 确定交卷")
-                # ★ 等练习报告渲染（1-2s 延迟）：确保上层 _run_unit_questions
-                #   能检测到"练习报告"→ 不会误进下一大题记假错题
-                for _r in range(5):
-                    if d(text="练习报告").exists(timeout=0.5):
-                        break
+        # 每大题首次点击顶部说明小喇叭（iv_caption_play）
+        if q == 0 and not _horn_clicked:
+            try:
+                if d(resourceId="com.dinoenglish.yyb:id/iv_caption_play").exists(timeout=0.2):
+                    d(resourceId="com.dinoenglish.yyb:id/iv_caption_play").click()
+                    print("    🔊 播放题目说明")
                     time.sleep(0.5)
-            return q
-
-        # ★★★ 完成判断：口语训练同页模式（进度条 1/5~5/5），大题结束靠【进度满 5/5】+ 大题间按钮
-        #   找"交卷"/"确定交卷"/"下一大题"/"开始训练下一题"/"再来一组"/"提交成绩"等大题间过渡按钮
-        _big_done_btn = None
-        for _btxt in ("交卷", "下一大题", "开始训练下一题", "再来一组", "提交成绩", "完成本大题", "下一组", "下一题"):
-            try:
-                if d(text=_btxt).exists(timeout=0.06):
-                    _big_done_btn = _btxt
-                    break
+                    _horn_clicked = True
             except Exception:
                 pass
-        if _big_done_btn:
-            d(text=_big_done_btn).click()
-            print(f"    ✅ 大题完成 → 点{_big_done_btn}")
-            step_log(f"➡ {_big_done_btn}", "success")
-            time.sleep(0.6)
-            return q
-        # 旧逻辑兜底：找"下一题"按钮（兼容旧 App 布局）
-        if q > 0 and d(text="下一题").exists(timeout=0.1):
-            d(text="下一题").click()
-            print(f"    ➡ 下一题（进入下一大题）")
-            step_log(f"➡ 进入下一大题", "step")
-            time.sleep(0.8)
-            return q
 
-        # ★ 用户优化：麦克风全部点击完出现下一题后快速点下一题（不等倒计时）
-        #   下滑策略改为：只要当前页没有"点击录音"按钮（无论大题刚切换/录音结束/需要下一小题）
-        #   就立即下滑（最多 2 屏），不再等 _wait_countdown 慢轮询
-        # 检查是否小喇叭题型（页面有"小喇叭"提示或喇叭图标）
-        # 方式1：找"小喇叭"文字
-        has_horn = False
-        for e in (d.xpath('//*[@text!=""]').all() or []):
-            t = (e.text or "").strip()
-            if "小喇叭" in t or "播放问题" in t:
-                has_horn = True
-                break
-        if has_horn:
-            pos = _click_horn(d)
-            if pos:
-                print(f"    🔊 点小喇叭 ({pos[0]},{pos[1]})")
-                step_log(f"🔊 点小喇叭", "info")
-                time.sleep(0.6)
+        # 作答
+        if _speak_one_sub(d):
+            q += 1
+            time.sleep(0.3)
+            continue
+        else:
+            print(f"    ⚠ 第{big_idx}大题·第{sub_label}小题录音失败")
+            _scroll_question_area(d)
+            time.sleep(0.5)
 
-        # ★ 大题首题（q==0）：必须等"请阅读题目"倒计时结束、第一个麦克风出现！
-        #   ★★ 用户实测根因：首题还在倒计时时找麦克风必然找不到 → 立即下滑 →
-        #   下滑2次找不到 → 误判"大题结束"退出 → 0题。必须等倒计时结束再作答。
-        if q == 0 and not _find_record_btn(d):
-            print(f"    ⏳ 首题等待倒计时结束（等第一个麦克风出现）…")
-            step_log(f"⏳ 首题等待麦克风", "info")
-            _wait_countdown(d, timeout=18)  # 等"点击录音"出现（倒计时通常12s）
-            if not _find_record_btn(d):
-                # 倒计时结束仍无麦克风 → 才下滑找（长页面首题可能在下方）
-                S_swipe(d, 540, 1600, 540, 800, 0.4)
-                time.sleep(0.4)
-        # ★ 用户要求：先快速试一次(不等倒计时)；若没找到"点击录音"则立即下滑（不等15s）
-        #   之前路径：_speak_question 默认 wait_countdown=True → _wait_countdown 等15s
-        #   → 每题白白等 15s，即使录音按钮马上就有
-        #   优化：第一次尝试不预等；若 _speak_question 失败 → 立刻下滑（不等倒计时）
-        if _speak_question(d, wait_countdown=False):
-            q += 1
-            continue
-        # 没找到录音按钮：用户要求"页面没有麦克风图标就往下滑"——直接下滑，不等
-        # ★★★ 优化：下滑前不再 _wait_countdown（用户实测白白等 15s+）
-        S_swipe(d, 540, 1600, 540, 800, 0.4)
-        time.sleep(0.4)
-        # 再试一次（同样不等倒计时）
-        if _speak_question(d, wait_countdown=False):
-            q += 1
-            continue
-        # 仍没有：再滑一次（覆盖长页面）
-        S_swipe(d, 540, 1600, 540, 800, 0.4)
-        time.sleep(0.4)
-        if _speak_question(d, wait_countdown=False):
-            q += 1
-            continue
-        # ★ 用户要求：麦克风全部点完 → 出现"下一题"就点（大题结束）
-        #   下滑 2 次仍无录音按钮 = 本大题已答完，找"下一题"按钮（支持文本/rid/右下角坐标）
-        if _click_next_btn(d):
-            print(f"    ➡ 下一题（大题完成）")
-            step_log(f"➡ 进入下一大题", "step")
-            time.sleep(0.6)
-            return q  # ★ 修复：之前 continue → 循环继续 → 重复计题；现在 return 退出大题循环
-        # ★★★ 兜底：下滑 2 次仍无录音按钮 = 大题已答完（口语训练同页模式，每大题固定 5 小题）
-        #   之前错误：继续循环 + 发"第6题"证据卡 + 误判"作答未识别"
-        #   修复：直接退出大题循环（q 即为已答小題数）
-        if q >= 3:  # 至少答了 3 小题 + 下滑 2 次无录音 = 大题完成
-            print(f"    ✅ 大题完成（已答{q}小題，下滑无新录音按钮）")
-            return q
-        time.sleep(0.4)
     return q
 
 

@@ -31,6 +31,7 @@ from common.evidence import collect_ui_evidence
 from common.tools import (
     S, S_swipe, S_h, S_w,
     close_ad, dismiss_global_popups, ensure_grade, scroll_and_find,
+    applock_blocked,
 )
 
 APP_PACKAGE = "com.dinoenglish.yyb"
@@ -44,9 +45,10 @@ _cur_unit = 0
 # 每单元关卡数（1~5 + boss = 6 关）
 LEVELS_PER_UNIT = 6
 
-# 主页「巧记单词」卡片位置（教材精学第二张大卡片，x=540,y=1191；入口是图片形式无文字）
-# ★ 之前 (876,1191) 实际是语音评测卡片，不是巧记单词（导致选巧记单词却跑去语音评测！）
-QIAOJI_CARD = (540, 1191)
+# 主页「巧记单词」卡片位置（教材精学行中间那张图片卡，无文字标签）
+# ★ 真机实测（2026-08-24）：教材精学行三张卡片中心 y≈1357，x 分别为 203 / 540 / 876
+#   巧记单词是中间一张 = (540,1357)。旧坐标 (540,1191) 点在了卡片上方空白区，所以进不去。
+QIAOJI_CARD = (540, 1357)
 
 
 UNITS = [1]  # U1 验证；打通后 list(range(1, 10))
@@ -72,43 +74,108 @@ def _resolve_units(units, default_units):
     return result or list(default_units)
 
 
-def _enter_qiaoji(d):
-    """首页 → 教材精学 → 巧记单词卡片（图片形式入口）
-
-    ★ 入口是 ImageView 图片卡片（text/content-desc 都为空），不能用文本定位。
-      ① 先到"教材精学"页（首页下方入口）
-      ② 点第二张大卡片 QIAOJI_CARD=(540,1191)
-      ③ 验证进入：页面有"单词同步闯关"按钮/"分级排行"等巧记单词特征
+def _find_qiaoji_card(d, xml=None):
+    """在教材精学行（y≈1250-1450）动态定位中间那张巧记单词卡片中心坐标。
+    教材精学行有 3 张 root_layout 图片卡（无文字），巧记单词是中间一张（x 中心≈540）。
+    返回 (x, y) 设备或 None。
     """
-    # 确认在首页（教材精学在首页，特征：教材精学/小学/湘少版）
-    for _ in range(5):
-        xml = d.dump_hierarchy()
-        if "教材精学" in xml and ("小学" in xml or "湘少版" in xml):
-            break
-        d.press("back"); time.sleep(0.6)
-    # 进教材精学（若已在则跳过）
-    if not d(text="听课文").exists(timeout=1):
-        for _ in range(3):
-            if d(text="教材精学").exists(timeout=1.5):
-                d(text="教材精学").click()
-                time.sleep(1.6)
-                break
-            d.press("back"); time.sleep(0.6)
-    # 点巧记单词卡片（ImageView 图片按钮，坐标定位）
-    d.click(*S(d, *QIAOJI_CARD))
-    print(f"    ✅ 点巧记单词卡片")
-    time.sleep(2.0)
-    # 验证进入：巧记单词页有"单词同步闯关"按钮 + "掌握 X/N 词" + "你已通关"
-    for _ in range(3):
+    if xml is None:
         try:
             xml = d.dump_hierarchy()
         except Exception:
-            xml = ""
-        if "单词同步闯关" in xml or "单词分类复习" in xml or "全脑排行榜" in xml or "你已通关" in xml:
-            return True
-        time.sleep(1.0)
-    print(f"    ❌ 未进入巧记单词页")
-    return False
+            return None
+    cards = []
+    for m in re.finditer(
+        r'resource-id="[^"]*root_layout"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
+        xml,
+    ):
+        x1, y1, x2, y2 = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+        # 仅取教材精学行（卡片 y 在 1250-1450 范围）
+        if 1250 < y1 < 1450:
+            cards.append(((x1 + x2) // 2, (y1 + y2) // 2))
+    if not cards:
+        return None
+    # 取 x 中心最接近屏幕中线（540）的卡片 = 中间那张
+    cards.sort(key=lambda p: abs(p[0] - 540))
+    return cards[0]
+
+
+def _enter_qiaoji(d, expected_grade="", expected_version=""):
+    """首页 → 巧记单词（图片卡，无文字标签，按动态定位/坐标进入）
+    ★ 参照语音评测入口逻辑（2026-08-24 重构）：
+      ① 检测首页（教材精学 + 专项突破 同屏，无需进入子页）
+      ② 优先按文字"巧记单词"定位；找不到则按教材精学行中间卡片坐标 (540,1357) 进入
+      ③ 处理 OPPO 应用锁拦截
+      ④ 验证进入（单词同步闯关 / 单词分类复习 / 全脑排行榜 / 你已通关），失败重试
+    """
+    expected_grade = expected_grade or GRADE_LEVEL
+    expected_version = expected_version or BOOK_VERSION
+    # 1. 确保在首页
+    for _ in range(5):
+        try:
+            xml = d.dump_hierarchy()
+            if '教材精学' in xml and '专项突破' in xml:
+                break
+        except Exception:
+            pass
+        d.press('back'); time.sleep(0.6)
+    # 2. 定位并点击巧记单词卡片
+    _clicked = False
+    for _ in range(3):
+        try:
+            xml = d.dump_hierarchy()
+            # 优先：文字"巧记单词"直接定位（部分版本/状态卡片带文字）
+            m = re.search(r'text="巧记单词"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml)
+            if m:
+                x = (int(m.group(1)) + int(m.group(3))) // 2
+                y = (int(m.group(2)) + int(m.group(4))) // 2
+                print(f"  → 点巧记单词文字 ({x},{y})")
+                d.click(x, y)
+                _clicked = True
+                break
+            # 兜底：教材精学行中间卡片（动态定位 root_layout 容器，取 x 中心≈540 的那张）
+            pos = _find_qiaoji_card(d, xml)
+            if pos:
+                print(f"  → 点巧记单词卡片 {pos}")
+                d.click(*pos)
+                _clicked = True
+                break
+        except Exception:
+            pass
+        time.sleep(0.5)
+    if not _clicked:
+        # 最后兜底：硬编码坐标（按 1080x2400 基准缩放）
+        print(f"  → 未定位到卡片，使用兜底坐标 {QIAOJI_CARD}")
+        d.click(*S(d, *QIAOJI_CARD))
+        _clicked = True
+    time.sleep(2.5)
+    # 3. 应用锁拦截（点卡片偶发触发 OPPO 应用锁）
+    if applock_blocked(d):
+        print("  ⚠ 触发应用锁，等待自动消失...")
+        for _ in range(15):
+            time.sleep(0.8)
+            if not applock_blocked(d):
+                print("    ✅ 应用锁已消失")
+                break
+        else:
+            print("    ❌ 应用锁未消失，请手动解锁后重试")
+            return False
+    # 4. 验证进入巧记单词页
+    _entered = False
+    for _ in range(6):
+        try:
+            xml = d.dump_hierarchy()
+            if '单词同步闯关' in xml or '单词分类复习' in xml or '全脑排行榜' in xml or '你已通关' in xml:
+                _entered = True
+                break
+        except Exception:
+            pass
+        time.sleep(0.5)
+    if not _entered:
+        print("  ❌ 未进入巧记单词页")
+        return False
+    print("  ✅ 已进入巧记单词")
+    return True
 
 
 def _enter_sync_challenge(d):
@@ -496,10 +563,11 @@ def _run_one_unit(d, unit_no, start_level):
     return total
 
 
-def run_module(d, units=None):
+def run_module(d, units=None, expected_grade="", expected_version=""):
     """核心入口：跑完巧记单词指定单元
 
     units: 单元范围，如 [1,2] 或 '1-2'；None=默认全部
+    expected_grade/expected_version: 期望年级/版本（从主页继承，内部校验用）
     """
     t0 = time.time()
     total = 0
@@ -519,7 +587,7 @@ def run_module(d, units=None):
         _coll = None
 
     # 1. 进入巧记单词
-    if not _enter_qiaoji(d):
+    if not _enter_qiaoji(d, expected_grade, expected_version):
         return 0
     # 2. 单词同步闯关
     if not _enter_sync_challenge(d):
