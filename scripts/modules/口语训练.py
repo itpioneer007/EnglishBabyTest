@@ -241,6 +241,10 @@ def _find_active_sub_question(d, xml=None):
         # 噪音过滤：分值 "(2分)"、作答状态 "已作答/未作答"、空白、过长
         if t in ("", " ") or "分" in t or "作答" in t or len(t) > 60:
             continue
+        # ★ 2026-08-24 真机实测：看图说句/阅读问答题的 speech_box 无文本题干（题干在图片/喇叭），
+        #   会提取到得分 "0.0" 和倒计时 "25S" → 过滤纯数字/计时文本（否则题干= "0.0 / 25S"）
+        if re.match(r"^\d+(\.\d+)?\s*S?$", t) or re.match(r"^S\s*\d+$", t):
+            continue
         stems.append(t)
     stem = " / ".join(stems[:2]) if stems else "图片题"
     return sub_no, total_sub, stem, active
