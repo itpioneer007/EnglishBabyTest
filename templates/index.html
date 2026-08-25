@@ -905,29 +905,19 @@ async function startCooking(){
   const docxs=getUploadedDocxs()
   const {v:matchV,g:matchG}=curVersionGrade()
   const docxMap={}
-  // ★ 手动选中的脚本（reviewDocx 下拉）仅作为模块名匹配的兜底：
-  //   旧逻辑：单模块时直接绑（任意脚本）→ 用户口语训练选了"听力专项"脚本，弹窗只警告
-  //   "单元1不在U6-U6"（掩盖根本问题）；修正：手动脚本必须也通过模块名关键词匹配
-  //   （仍允许"知识过关脚本"给"知识过关"模块用这种语义相近场景，但禁止跨模块错配）
+  // ★ 手动选中的脚本（reviewDocx 下拉）作为兜底：自动匹配失败时直接绑
+  //   不再做"模块/版本/年级"二次校验——理由：
+  //   1. 选错脚本是用户责任，运行前预览（卡片下方"无匹配脚本/有脚本+单元不匹配"）
+  //      已经把每个模块的状态显示给用户了，弹窗再警告一遍是废话
+  //   2. 匹配失败时静默走基础完整性即可，不需要弹窗警告
+  //   3. 真要拦截脚本错配，放在跑完后端（review_agent）发现 0 题时自然告警即可
   const manualDocx=$('reviewDocx')?$('reviewDocx').value:''
   const manualOk=manualDocx&&manualDocx!=='— 尚未上传 —'&&manualDocx!==''
-  // ★ 记录手动脚本与模块不匹配的情况，弹窗里明确告诉用户"X 脚本不属于 Y 模块"
-  const manualMismatch=[]
   moduleConfigs.forEach(m=>{
     let _d=matchDocxForModule(m.name,docxs,matchV,matchG)
-    if(!_d && manualOk){
-      // ★ 校验手动脚本是否含所选模块的关键词（MOD_KEYWORDS）——通过才绑
-      //   修正：即使单模块也必须模块名匹配，避免"听力专项脚本"绑到"口语训练"上
-      const modKws=MOD_KEYWORDS[m.name]||[m.name]
-      const modOk=modKws.some(k=>manualDocx.includes(k))
-      // ★ 进一步要求：手动脚本也要匹配所选版本/年级（防止把五上脚本绑到二下）
-      const verOk=!matchV||(VER_KEYWORDS[matchV]||_verAliases(matchV)).some(k=>manualDocx.includes(k))
-      const grOk=!matchG||(GRADE_KEYWORDS[matchG]||_gradeAliases(matchG)).some(k=>manualDocx.includes(k))
-      if(modOk && verOk && grOk){
-        _d=manualDocx
-      } else {
-        manualMismatch.push({mod:m.name, docx:manualDocx, modOk, verOk, grOk})
-      }
+    if(!_d && manualOk && moduleConfigs.length===1){
+      // 单模块：手动脚本直接绑（用户自选，自负责）
+      _d=manualDocx
     }
     if(_d) docxMap[m.name]=_d
   })
@@ -942,16 +932,8 @@ async function startCooking(){
     confirmMsg += '\n单元范围: '
     confirmMsg += moduleConfigs.filter(m=>m.units).map(m=>`${m.name}=${m.units}`).join(', ')
   }
-  // ★ 手动脚本与模块不匹配的明确告警（修正前只警告"单元不在范围"，掩盖根本问题）
-  manualMismatch.forEach(m=>{
-    const reasons=[]
-    if(!m.modOk) reasons.push(`脚本不是「${m.mod}」模块（关键词不匹配）`)
-    if(!m.verOk) reasons.push(`脚本版本与所选「${matchV}」不符`)
-    if(!m.grOk) reasons.push(`脚本年级与所选「${matchG}」不符`)
-    confirmMsg += `\n❌ 警告: 手动脚本「${m.docx}」与模块「${m.mod}」不匹配（${reasons.join('；')}），不进行 LLM 审查，仅做基础完整性！`
-  })
-  // ★ 脚本-单元匹配校验：脚本文件名含"U6-10"而所选单元不在其中 → 警告
-  //   （用户实测：跑口语训练U1却匹配到"U6-U10"脚本 → LLM审查0题，静默无提示）
+  // ★ 仅保留：脚本匹配上但所选单元不在脚本范围 → 警告（用户最值得知道的诊断）
+  //   "脚本与模块不匹配/脚本不在库"等废话警告移除——运行前预览已经显示每个模块的脚本状态
   moduleConfigs.forEach(m=>{
     const _d=docxMap[m.name]; if(!_d) return
     const _uRaw=(m.units||'').toString()
@@ -964,7 +946,7 @@ async function startCooking(){
     const _mm=/^(\d+)(?:[-~](\d+))?$/.exec(_rng)
     if(_mm){_lo=parseInt(_mm[1]);_hi=_mm[2]?parseInt(_mm[2]):_lo}
     if(_hi && (_firstU<_lo || _firstU>_hi)){
-      confirmMsg += `\n⚠️ 警告: ${m.name} 所选单元 ${_firstU} 不在脚本 ${_d} 的单元范围(U${_lo}-U${_hi})内，脚本审查将无匹配题！`
+      confirmMsg += `\n⚠️ ${m.name} 所选单元 ${_firstU} 不在脚本 ${_d} 的单元范围(U${_lo}-U${_hi})内，脚本审查将无匹配题！`
     }
   })
   if(orderText) confirmMsg += `\n清单描述: "${orderText.substring(0,80)}${orderText.length>80?'…':''}"`
