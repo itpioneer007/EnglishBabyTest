@@ -577,6 +577,17 @@ def _run_one_unit(d, unit_num, is_retry):
                         return _run_unit_questions(d, unit_num)
         S_swipe(d, 540, 1800, 540, 600, 0.3); time.sleep(0.4)
 
+    # ★ 方式1 失败诊断：滑动 8 次未找到目标 U 入口，dump 当前页可见 U 标题
+    #   （用户实测：二年级下册跑口语训练 U1 返回 0 不知原因 → 现在直接告知）
+    _diag = _snapshot_page(d, want_kw=("U1", "U2", "U3", "Unit"), limit=12)
+    _visible_u = [t for t in _diag["texts"] if re.search(r"[Uu]\s*\d|Unit", t)][:8]
+    print(f"    ❌ 方式1 失败：滑动 8 次未找到 U{unit_num} 标题（年级={GRADE_LEVEL}）")
+    print(f"    当前页可见 U 标题: {_visible_u}")
+    try:
+        step_log(f"❌ 口语训练 U{unit_num} 入口缺失：年级={GRADE_LEVEL}，当前页无该单元标题行（可见 U: {','.join(_visible_u[:5]) or '无'}，可能该年级无此单元）", "error")
+    except Exception:
+        pass
+
     # 方式2（兜底）：按第 unit_num 个答题按钮（原逻辑）
     btns = []
     idx = unit_num - 1
@@ -593,13 +604,39 @@ def _run_one_unit(d, unit_num, is_retry):
             break
         S_swipe(d, 540, 1800, 540, 600, 0.3); time.sleep(0.4)
     if not chosen_btn:
+        _diag2 = _snapshot_page(d, want_kw=("开始", "重新", "继续", "U1", "U2"), limit=12)
+        _visible_btns = [t for t in _diag2["texts"] if t in ("开始答题", "重新答题", "继续答题")]
         print(f"    ❌ 找不到 U{unit_num} 的答题按钮（已找：{'/'.join(btn_candidates)}）")
+        print(f"    当前页可见答题按钮: {_visible_btns}")
+        try:
+            step_log(f"❌ 口语训练 U{unit_num} 无答题按钮：年级={GRADE_LEVEL}，当前页答题按钮={_visible_btns or '无'}", "error")
+        except Exception:
+            pass
         return 0
     btns[idx].click()
     print(f"    ✅ 点击 {chosen_btn} (U{unit_num})")
     time.sleep(1.2)
     _after_unit_enter(d)
     return _run_unit_questions(d, unit_num)
+
+
+def _snapshot_page(d, want_kw=("U1", "U2", "口语", "训练", "开始", "重新", "继续"), limit=15):
+    """诊断：找不到期望元素时快照当前页关键文本 + resource-id 前缀（仅 read-only）。
+    返回 {texts: [...], rids: [...]} 方便日志/stdout 排查。"""
+    out = {"texts": [], "rids": []}
+    try:
+        xml = d.dump_hierarchy()
+    except Exception as e:
+        out["texts"] = [f"<dump失败: {e}>"]
+        return out
+    texts = [t for t in re.findall(r'text="([^"]+)"', xml) if t.strip()]
+    # 优先输出含 want_kw 的；其它再补足到 limit
+    prio = [t for t in texts if any(k in t for k in want_kw)]
+    others = [t for t in texts if t not in prio]
+    out["texts"] = (prio + others)[:limit]
+    rids = sorted({r for r in re.findall(r'resource-id="com\.dinoenglish\.yyb:id/([a-z_0-9]+)"', xml)})
+    out["rids"] = rids[:8]
+    return out
 
 
 def _after_unit_enter(d):
@@ -699,11 +736,21 @@ def run_module(d, units=None):
         d.press("back"); time.sleep(0.5)
 
     # ② 主页直接找口语训练入口（可见，无需滑动；找不到直接失败）
+    #   ★ 2026-08-25 修复：找不到时 dump 当前页文本 + log 告警
+    #   旧逻辑：print 一行就 return 0，用户日志"完成 0 题"完全不知道是入口问题还是题问题
     if d(text="口语训练").exists(timeout=3):
         d(text="口语训练").click(); time.sleep(1.6)
         print("  ✅ 主页点口语训练入口")
     else:
-        print("  ❌ 主页找不到口语训练入口"); return 0
+        _diag = _snapshot_page(d, want_kw=("口语", "U1", "U2", "训练", "单元"), limit=15)
+        print(f"  ❌ 主页找不到'口语训练'入口（年级={GRADE_LEVEL} 版本={BOOK_VERSION}）")
+        print(f"  当前页关键文本: {_diag['texts']}")
+        print(f"  当前页 resource-id 前缀: {_diag['rids']}")
+        try:
+            step_log(f"❌ 口语训练 入口缺失：年级={GRADE_LEVEL} 版本={BOOK_VERSION}，当前页无可点'口语训练'卡片（可能该年级无此模块）", "error")
+        except Exception:
+            pass
+        return 0
 
     # 关底部广告
     _close_bottom_ad(d)
