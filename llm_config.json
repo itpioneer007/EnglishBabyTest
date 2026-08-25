@@ -1,14 +1,12 @@
 {
   "_架构": "统一走阿里云百炼 API",
-  "_策略": "纯文本用 qwen-plus，看图用 qwen3.7-plus（百炼视觉模型）",
+  "_策略": "纯文本用 qwen-plus，看图用 qwen3.7-plus（百炼视觉模型）；额度用尽自动切 qwen3.7-max-2026-06-08",
   "_安全": "密钥已迁移到 .env 文件，请勿在此文件中存放敏感信息",
-
   "model": "qwen-plus",
   "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-
   "vision_model": "qwen3.7-plus",
   "vision_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-
   "max_tokens": 2000,
-  "temperature": 0.1
+  "temperature": 0.1,
+  "vision_model_fallback": "qwen3.7-max-2026-06-08"
 }

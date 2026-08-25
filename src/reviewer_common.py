@@ -318,7 +318,8 @@ class LLMClient:
     def __init__(self, api_key: str = None, model: str = "deepseek-chat",
                  base_url: str = "https://api.deepseek.com/v1",
                  vision_api_key: str = "", vision_model: str = "",
-                 vision_base_url: str = ""):
+                 vision_base_url: str = "",
+                 vision_model_fallback: str = ""):
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
         self.model = model
         self.base_url = base_url.rstrip("/")
@@ -326,6 +327,9 @@ class LLMClient:
         self.vision_api_key = vision_api_key or self.api_key
         self.vision_model = vision_model
         self.vision_base_url = vision_base_url.rstrip("/") if vision_base_url else ""
+        # ★ 2026-08-25：视觉模型额度用尽时的备选模型（如 qwen3.7-max-2026-06-08）
+        #   调用失败（额度/欠费/429）→ 自动用 fallback 重试，不中断审查
+        self.vision_model_fallback = vision_model_fallback
 
     @classmethod
     def from_config(cls, config_path: str = None) -> "LLMClient":
@@ -360,6 +364,9 @@ class LLMClient:
                         or config.get("vision_model", ""))
         vision_base_url = (os.environ.get("VISION_BASE_URL")
                            or config.get("vision_base_url", ""))
+        # ★ 2026-08-25：视觉模型额度用尽备选（VISION_MODEL_FALLBACK / vision_model_fallback）
+        vision_model_fallback = (os.environ.get("VISION_MODEL_FALLBACK")
+                                 or config.get("vision_model_fallback", ""))
 
         return cls(
             api_key=api_key,
@@ -368,6 +375,7 @@ class LLMClient:
             vision_api_key=vision_api_key,
             vision_model=vision_model,
             vision_base_url=vision_base_url,
+            vision_model_fallback=vision_model_fallback,
         )
 
     def ask(self, prompt: str, image_path: str = None, image_paths: list = None) -> str:
@@ -386,13 +394,33 @@ class LLMClient:
 
         if paths and self.vision_model:
             # 有视觉模型：直接发图
+            # ★ 2026-08-25：额度用尽自动切换 fallback 模型（qwen3.7-plus → qwen3.7-max-2026-06-08）
+            #   识别额度相关错误（insufficient/额度/quota/欠费/429/403），才走 fallback；
+            #   其他错误（网络/超时/格式）不切换（可能是临时故障，走纯文本降级）
+            _vision_err = ""
             try:
                 return self._call_api(prompt, paths,
                     model=self.vision_model,
                     base_url=self.vision_base_url or self.base_url,
                     api_key=self.vision_api_key)
             except Exception as e:
-                return f"[视觉模型失败: {e}] → 降级为纯文本分析\n{self._call_api(prompt, image_paths=None)}"
+                _vision_err = str(e)
+                _e_low = _vision_err.lower()
+                if (self.vision_model_fallback
+                        and any(k in _e_low for k in
+                               ("insufficient", "quota", "额度", "欠费", "余额",
+                                "429", "403", "free", "耗尽", "用完", "no balance"))):
+                    print(f"⚠ 视觉模型 {self.vision_model} 额度问题({_vision_err[:80]})"
+                          f" → 自动切换 {self.vision_model_fallback}")
+                    try:
+                        return self._call_api(prompt, paths,
+                            model=self.vision_model_fallback,
+                            base_url=self.vision_base_url or self.base_url,
+                            api_key=self.vision_api_key)
+                    except Exception as e2:
+                        return (f"[视觉模型失败: {_vision_err} → fallback 也失败: {e2}]"
+                                f" → 降级为纯文本分析\n{self._call_api(prompt, image_paths=None)}")
+                return f"[视觉模型失败: {_vision_err}] → 降级为纯文本分析\n{self._call_api(prompt, image_paths=None)}"
 
         if paths:
             # 无视觉模型：OCR 降级
