@@ -53,11 +53,37 @@ class ReviewConfig:
     """审查配置"""
     docx_path: str = ""               # 公司提供的脚本 DOCX
     knowledge_docx: str = ""          # 教材知识库来源(可选, 同名DOCX)
-    unit: int = 0                     # 0=全部
+    unit: object = 0                  # 0/None=全部；int=单个(6)；str 支持 "2,4"、"2-4"、"2,4-6"；list=[2,4]
     stage: str = ""                   # 空=全部, "基础巩固"/"综合进阶"/"难点突破"
     screenshot_dir: str = "screenshots"
     output_dir: str = "outputs"
     verbose: bool = True              # 打印详细信息
+
+
+def normalize_units(u) -> Optional[set]:
+    """把 unit 配置归一化成单元集合 set[int]；0/None/""/"NONE" → None(全部)。
+
+    支持: int(6) / str("6") / str("2,4") / str("2-4") / str("2,4-6") / list([2,4])
+    """
+    if u is None:
+        return None
+    if isinstance(u, int):
+        return {u} if u > 0 else None
+    if isinstance(u, (list, tuple, set)):
+        nums = {int(x) for x in u if str(x).lstrip("-").isdigit() and int(x) > 0}
+        return nums or None
+    s = str(u).strip()
+    if not s or s.upper() in ("0", "NONE", "全部"):
+        return None
+    out = set()
+    for part in s.split(","):
+        part = part.strip()
+        mm = re.match(r"^(\d+)(?:\s*[-~]\s*(\d+))?$", part)
+        if mm:
+            lo = int(mm.group(1))
+            hi = int(mm.group(2)) if mm.group(2) else lo
+            out.update(range(lo, hi + 1))
+    return out or None
 
 # ============================================================
 # 审查结果数据模型
@@ -181,17 +207,20 @@ class ReviewAgent:
             self.script_questions = parse(self.cfg.docx_path)
             # ★ 脚本实际单元分布（含单元=0 表示解析不到单元号）
             self.script_units = {q.unit for q in self.script_questions}
-            # 过滤
-            if self.cfg.unit:
+            # ★ 过滤：支持多单元（"2,4" / "2-4" / [2,4]），脚本覆盖所选任一单元即保留
+            #   （2026-08-25 用户需求：脚本"口语训练湘少五上U2"只审U2；全单元脚本
+            #   提取所选 U2/U4 题目审查；不含所选单元的脚本自动跳过，不报错）
+            _units = normalize_units(self.cfg.unit)
+            if _units:
                 self.script_questions = [
-                    q for q in self.script_questions if q.unit == self.cfg.unit
+                    q for q in self.script_questions if q.unit in _units
                 ]
-                # ★ 单元不匹配提示：脚本不含所选单元（用户实测"单元根本没脚本"，
-                #   静默显示 0 题误导人 → 明确提示脚本实际覆盖哪些单元）
+                # 单元不匹配提示：脚本不含所选单元（静默跳过审查=用户预期，
+                #   print 一行供命令行排查即可，不上抛不告警）
                 if not self.script_questions:
                     _units_sorted = sorted(u for u in self.script_units if u > 0)
                     _u0 = 0 in self.script_units
-                    print(f"⚠ 脚本不含单元 {self.cfg.unit}！脚本实际单元: "
+                    print(f"ℹ 脚本不含所选单元 {sorted(_units)}！脚本实际单元: "
                           f"{_units_sorted if _units_sorted else '无(未解析到)'}"
                           f"{' + 未标注单元' if _u0 else ''}")
             if self.cfg.stage:

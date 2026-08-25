@@ -4539,12 +4539,11 @@ def _run_llm_script_review(module: str, docx: str, version: str, unit, stage: st
             pass
     try:
         sys.path.insert(0, str(PROJECT_ROOT))
-        from src.review_agent import ReviewAgent, ReviewConfig
-        _u = 0
-        try:
-            _u = int(str(unit).split("-")[0])
-        except Exception:
-            pass
+        from src.review_agent import ReviewAgent, ReviewConfig, normalize_units
+        # ★ 2026-08-25 修复：支持多单元（"2,4" / "2-4"），不再截断成第一个单元
+        #   用户场景：选"口语训练五上 U2、U4"，脚本"口语训练湘少五上(全单元)"
+        #   → 应提取 U2+U4 的题目审查；旧逻辑 int(unit.split("-")[0]) 只审 U2
+        _u = str(unit).strip() if unit not in (None, "", 0, "0", "NONE") else 0
         agent = ReviewAgent(ReviewConfig(
             docx_path=str(docx_path),
             screenshot_dir=str(PROJECT_ROOT / "screenshots"),
@@ -4554,10 +4553,11 @@ def _run_llm_script_review(module: str, docx: str, version: str, unit, stage: st
         #   静默显示"0题"误导人）→ 明确日志：脚本实际覆盖哪些单元
         if not agent.script_questions:
             _units_ok = sorted(u for u in getattr(agent, "script_units", set()) if u > 0)
-            _note = (f"脚本「{docx}」不含单元 {_u or '全部'}！"
+            _units_want = normalize_units(_u)
+            _note = (f"脚本「{docx}」不含所选单元 {sorted(_units_want) if _units_want else '全部'}！"
                      f"脚本实际单元: {_units_ok if _units_ok else '未解析到'}"
-                     f"（所选单元与脚本不匹配，跳过 LLM 脚本审查）")
-            log_msg(f"⚠️ {module} {_note}", "warning")
+                     f"（该单元无脚本覆盖，跳过 LLM 脚本审查，仅基础完整性）")
+            log_msg(f"ℹ {module} {_note}", "info")
             return
         # ★ 不传 screenshots：自动化过程只有答错截图，旧截图与本次题目对不上会误导 LLM 判定
         #   → 统一走 LLM 脚本审查（_review_script_llm：脚本信息 → LLM 六维判定，理由具体有说服力）
@@ -4691,6 +4691,8 @@ def api_modules_run():
                 #   （原同步调用：听力专项完成后在主页面卡几分钟等逐题 LLM 审查，
                 #     审查完才继续口语训练 → 用户实测"主页卡好久"）
                 # ★ unit 解析：听力专项·测试单元在 units["听力专项_测试"]；练习单元在 units["听力专项"]
+                #   ★ 2026-08-25 修复：传完整单元范围（"2,4"/"2-4"），不再截断成第一个单元
+                #     （用户选 U2、U4 时旧逻辑只审 U2，U4 被静默丢弃）
                 #   ★ 防御："NONE"哨兵（前端未勾选）→ 不是数字，忽略
                 _u = 0
                 if _stage == "测试":
@@ -4700,7 +4702,7 @@ def api_modules_run():
                 try:
                     _u_str = str(_u_raw).strip()
                     if _u_str and _u_str.upper() != "NONE" and _u_str[0].isdigit():
-                        _u = int(_u_str.split("-")[0])
+                        _u = _u_str            # ★ 完整范围（"2,4" / "2-4"），归一化交给 review_agent
                     else:
                         _u = 0
                 except Exception:

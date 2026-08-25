@@ -914,7 +914,7 @@ async function startCooking(){
   const manualDocx=$('reviewDocx')?$('reviewDocx').value:''
   const manualOk=manualDocx&&manualDocx!=='— 尚未上传 —'&&manualDocx!==''
   moduleConfigs.forEach(m=>{
-    let _d=matchDocxForModule(m.name,docxs,matchV,matchG)
+    let _d=matchDocxForModule(m.name,docxs,matchV,matchG,curModuleUnits(m.name))
     if(!_d && manualOk && moduleConfigs.length===1){
       // 单模块：手动脚本直接绑（用户自选，自负责）
       _d=manualDocx
@@ -932,21 +932,23 @@ async function startCooking(){
     confirmMsg += '\n单元范围: '
     confirmMsg += moduleConfigs.filter(m=>m.units).map(m=>`${m.name}=${m.units}`).join(', ')
   }
-  // ★ 仅保留：脚本匹配上但所选单元不在脚本范围 → 警告（用户最值得知道的诊断）
-  //   "脚本与模块不匹配/脚本不在库"等废话警告移除——运行前预览已经显示每个模块的脚本状态
+  // ★ 弹窗警告原则（2026-08-25 用户定调）：
+  //   - 自动匹配失败（本模块本年级本单元无脚本）→ 静默走基础完整性，不警告
+  //   - 唯一值得提醒：同模块+同版本 但 不同年级 的脚本存在（说明该模块其他年级有脚本，
+  //     当前年级没有 → 提醒用户，可能想切年级或传脚本）
   moduleConfigs.forEach(m=>{
-    const _d=docxMap[m.name]; if(!_d) return
-    const _uRaw=(m.units||'').toString()
-    const _firstU=parseInt(_uRaw)||0
-    if(!_firstU) return
-    const _m=/U(\d+(?:\s*[-~]\s*\d+)?)/i.exec(_d)
-    if(!_m) return
-    const _rng=_m[1].replace(/\s+/g,'')
-    let _lo=_hi=0
-    const _mm=/^(\d+)(?:[-~](\d+))?$/.exec(_rng)
-    if(_mm){_lo=parseInt(_mm[1]);_hi=_mm[2]?parseInt(_mm[2]):_lo}
-    if(_hi && (_firstU<_lo || _firstU>_hi)){
-      confirmMsg += `\n⚠️ ${m.name} 所选单元 ${_firstU} 不在脚本 ${_d} 的单元范围(U${_lo}-U${_hi})内，脚本审查将无匹配题！`
+    if(docxMap[m.name]) return    // 已有匹配脚本（覆盖所选单元）→ 不用提醒
+    const _kws=MOD_KEYWORDS[m.name]||[m.name]
+    const _verKws=matchV?(VER_KEYWORDS[matchV]||_verAliases(matchV)):[]
+    const _gKws=matchG?(GRADE_KEYWORDS[matchG]||_gradeAliases(matchG)):[]
+    const _hasK=d=>_kws.some(k=>d.includes(k))
+    const _verOk=d=>!_verKws.length||_verKws.some(k=>d.includes(k))
+    const _grOk=d=>!_gKws.length||_gKws.some(k=>d.includes(k))
+    // 同模块+同版本、但年级不是当前所选 → 值得提醒
+    const _other = docxs.find(d=>_hasK(d)&&_verOk(d)&&!_grOk(d))
+    if(_other){
+      confirmMsg += `\nℹ️ ${m.name} 当前年级(${matchG||'?'})无匹配脚本，但发现其他年级脚本「${_other}」\n` +
+                    `   （如需 LLM 审查请切换年级或上传当前年级脚本，否则仅做基础完整性）`
     }
   })
   if(orderText) confirmMsg += `\n清单描述: "${orderText.substring(0,80)}${orderText.length>80?'…':''}"`
@@ -1664,7 +1666,12 @@ function _gradeAliases(g){
   const m=String(g||'').match(/^([一二三四五六])年级([上下])册$/)
   return m?[String(g),m[1]+m[2]]:[String(g)]
 }
-function matchDocxForModule(mod,docxs,version,grade){
+// ★★ 模块 → 脚本 四要素匹配：模块 + 版本 + 年级 + 单元（2026-08-25 核心逻辑）
+//   unitRange：所选单元范围字符串（"2,4" / "2-4" / ""=不限制）
+//   - 脚本无 U 信息（如"口语训练湘少五上"全单元脚本）→ 视为覆盖所有单元 → 命中
+//   - 脚本 U 范围与所选单元有交集（如 U6-U10 覆盖所选 U6）→ 命中（后端按单元提取题目审查）
+//   - 无交集（如选 U2 但脚本只有 U6-U10）→ 不命中 → 该模块走基础完整性（不弹窗警告）
+function matchDocxForModule(mod,docxs,version,grade,unitRange){
   const kws=MOD_KEYWORDS[mod]||[mod]
   // ★ 关键：未知版本/年级绝不允许“不限制”——表里有就用表，表外就用选项值本身推导匹配
   const verKws=(version&&version!=='通用')?(VER_KEYWORDS[version]||_verAliases(version)):[]
@@ -1672,9 +1679,16 @@ function matchDocxForModule(mod,docxs,version,grade){
   const hasK=d=>kws.some(k=>d.includes(k))
   const verOk=d=>!verKws.length||verKws.some(k=>d.includes(k))
   const gOk=d=>!gKws.length||gKws.some(k=>d.includes(k))
-  // ★ 严格匹配：模块 + 版本 + 年级 三者全部命中才算「有脚本」
-  //   （不做降级兜底，避免版本/年级不对的脚本被误用，导致 LLM 对照错误）
-  return docxs.find(d=>hasK(d)&&verOk(d)&&gOk(d))||''
+  // ★ 单元维度：有单元范围时，脚本必须覆盖所选单元（有交集）才算匹配；
+  //   脚本无 U 信息（全单元脚本）视为覆盖
+  const uOk=d=>{
+    if(!unitRange||unitRange==='NONE') return true
+    const su=scriptUnitsOf(d)
+    return unitCoveredBy(unitRange,su)!==false
+  }
+  // ★ 严格匹配：模块 + 版本 + 年级 + 单元 四者全部命中才算「有脚本」
+  //   （不做降级兜底，避免版本/年级/单元不对的脚本被误用，导致 LLM 对照错误）
+  return docxs.find(d=>hasK(d)&&verOk(d)&&gOk(d)&&uOk(d))||''
 }
 function curVersionGrade(){
   return {v:$('setupVersion')?$('setupVersion').value:'',g:$('setupGrade')?$('setupGrade').value:''}
@@ -1731,7 +1745,7 @@ function updateModuleMatch(){
   }
   // ★ 运行前单元-脚本匹配预览：所选单元有没有脚本覆盖，一目了然
   list.innerHTML=mods.map(m=>{
-    const d=matchDocxForModule(m,docxs,v,g)
+    const d=matchDocxForModule(m,docxs,v,g,curModuleUnits(m))
     if(!d){
       return `<div class="flex items-center gap-1.5 px-2 py-1 bg-[#fef3c7] border border-[#fde68a] rounded">
         <span class="text-[#92400e]">—</span>
@@ -1741,21 +1755,11 @@ function updateModuleMatch(){
         <span class="ml-auto text-[10px] text-[#92400e]">仅基础</span>
       </div>`
     }
+    // ★ 2026-08-25：d 已按"模块+版本+年级+单元"四要素匹配（matchDocxForModule 内部
+    //   uOk 已排除不覆盖所选单元的脚本）→ 到这里的脚本必然覆盖所选单元，
+    //   "有脚本但单元不匹配"分支不再可能出现，只分"LLM"与"无匹配脚本"
     const su=scriptUnitsOf(d)
-    const u=curModuleUnits(m)
-    const covered=unitCoveredBy(u,su)
-    if(su && covered===false){
-      // ⚠ 有脚本但单元不匹配：脚本审查无题可对，仅基础完整性
-      return `<div class="flex items-center gap-1.5 px-2 py-1 bg-[#fef3c7] border border-[#fde68a] rounded">
-        <span class="text-[#92400e]">⚠</span>
-        <span class="text-[#92400e] font-semibold">${escHtml(m)}</span>
-        <span class="text-[#9aa5a0]">→</span>
-        <span class="text-[#475569] truncate" title="${escHtml(d)}">${escHtml(d)}</span>
-        <span class="text-[10px] text-[#92400e]">脚本U${su.lo}${su.hi>su.lo?'-'+su.hi:''} · 所选${u||'?'}不在内</span>
-        <span class="ml-auto text-[10px] text-[#92400e]">仅基础</span>
-      </div>`
-    }
-    if(su && covered===true){
+    if(su){
       // ✅ 有脚本 + 单元覆盖 → LLM 脚本审查
       return `<div class="flex items-center gap-1.5 px-2 py-1 bg-[#f0f7f4] border border-[#bbf7d0] rounded">
         <span class="text-[#2d6a4f]">✓</span>
@@ -1775,7 +1779,7 @@ function updateModuleMatch(){
     </div>`
   }).join('')
   const hit=mods.filter(m=>{
-    const d=matchDocxForModule(m,docxs,v,g); if(!d) return false
+    const d=matchDocxForModule(m,docxs,v,g,curModuleUnits(m)); if(!d) return false
     const su=scriptUnitsOf(d)
     return !su || unitCoveredBy(curModuleUnits(m),su)!==false
   }).length
@@ -1809,7 +1813,7 @@ async function startInsp(){
   const docxs=getUploadedDocxs()
   const {v:cv,g:cg}=curVersionGrade()
   const matchedMod=mods.length?mods[0]:''
-  const docx=matchedMod?matchDocxForModule(matchedMod,docxs,cv,cg):''
+  const docx=matchedMod?matchDocxForModule(matchedMod,docxs,cv,cg,curModuleUnits(matchedMod)):''
   $('runBtn').disabled=true
   addLog('info',`开始检查: ${v} U${u} ${stages.join('、')} · ${matchedMod||'未选模块'} ${docx?'(脚本 '+docx+' 启用 LLM)':'(无脚本，仅基础完整性)'}`)
   try{
@@ -1833,7 +1837,7 @@ async function quickInsp(){
   const docxs=getUploadedDocxs()
   const {v,g}=curVersionGrade()
   const matchedMod=mods.length?mods[0]:''
-  const docx=matchedMod?matchDocxForModule(matchedMod,docxs,v,g):($('reviewDocx')?$('reviewDocx').value:'')
+  const docx=matchedMod?matchDocxForModule(matchedMod,docxs,v,g,curModuleUnits(matchedMod)):($('reviewDocx')?$('reviewDocx').value:'')
   const unit=$('reviewUnit')?$('reviewUnit').value:''
   const withAI=docx&&docx!=='— 尚未上传 —'&&docx!==''
   addLog('info',`快速检查: ${matchedMod||'未选模块'} · ${withAI?'有脚本，启用 LLM 六维审查':'无脚本，仅做基础完整性'}`)
@@ -1863,7 +1867,7 @@ async function runReview(){
   const docxs=getUploadedDocxs()
   const {v,g}=curVersionGrade()
   let d=''
-  if(mods.length){d=matchDocxForModule(mods[0],docxs,v,g)}
+  if(mods.length){d=matchDocxForModule(mods[0],docxs,v,g,curModuleUnits(mods[0]))}
   if(!d)d=$('reviewDocx').value
   const u=parseInt($('reviewUnit')?.value||'0')
   if(!d||d==='— 尚未上传 —'){
