@@ -25,6 +25,7 @@ from common.logger import step_log, should_stop
 from common.tools import (
     S, S_swipe, S_h, S_w,
     close_ad, dismiss_global_popups, ensure_grade,
+    scroll_and_find,
 )
 
 APP_PACKAGE = "com.dinoenglish.yyb"
@@ -581,10 +582,24 @@ def _run_one_unit(d, unit_num, is_retry):
     #   （用户实测：二年级下册跑口语训练 U1 返回 0 不知原因 → 现在直接告知）
     _diag = _snapshot_page(d, want_kw=("U1", "U2", "U3", "Unit"), limit=12)
     _visible_u = [t for t in _diag["texts"] if re.search(r"[Uu]\s*\d|Unit", t)][:8]
-    print(f"    ❌ 方式1 失败：滑动 8 次未找到 U{unit_num} 标题（年级={GRADE_LEVEL}）")
+    # ★ 占位页识别：模块页显示"正在开发 敬请期待~" → 该年级该模块在 App 未上线
+    #   （2026-08-25 真机：湘少版(2024审定)二年级下册口语训练模块页 = WebView 占位页，
+    #    无任何单元入口。旧逻辑报"找不到 U1 入口"，误导成代码 bug）
+    try:
+        _xml_now = d.dump_hierarchy()
+        if "正在开发" in _xml_now or "敬请期待" in _xml_now:
+            print(f"    ❌ 口语训练 U{unit_num}：模块页为占位页（'正在开发 敬请期待~'）→ 该年级口语训练未上线，跳过")
+            try:
+                step_log(f"❌ 口语训练 U{unit_num}：该年级口语训练未上线（App 显示'正在开发 敬请期待~'），无法作答", "error")
+            except Exception:
+                pass
+            return 0
+    except Exception:
+        pass
+    print(f"    ❌ 方式1 失败：滑动 8 次未找到 U{unit_num} 标题")
     print(f"    当前页可见 U 标题: {_visible_u}")
     try:
-        step_log(f"❌ 口语训练 U{unit_num} 入口缺失：年级={GRADE_LEVEL}，当前页无该单元标题行（可见 U: {','.join(_visible_u[:5]) or '无'}，可能该年级无此单元）", "error")
+        step_log(f"❌ 口语训练 U{unit_num} 入口缺失：当前页无该单元标题行（可见 U: {','.join(_visible_u[:5]) or '无'}，可能该年级无此单元）", "error")
     except Exception:
         pass
 
@@ -609,7 +624,7 @@ def _run_one_unit(d, unit_num, is_retry):
         print(f"    ❌ 找不到 U{unit_num} 的答题按钮（已找：{'/'.join(btn_candidates)}）")
         print(f"    当前页可见答题按钮: {_visible_btns}")
         try:
-            step_log(f"❌ 口语训练 U{unit_num} 无答题按钮：年级={GRADE_LEVEL}，当前页答题按钮={_visible_btns or '无'}", "error")
+            step_log(f"❌ 口语训练 U{unit_num} 无答题按钮：当前页答题按钮={_visible_btns or '无'}", "error")
         except Exception:
             pass
         return 0
@@ -735,19 +750,30 @@ def run_module(d, units=None):
             pass
         d.press("back"); time.sleep(0.5)
 
-    # ② 主页直接找口语训练入口（可见，无需滑动；找不到直接失败）
-    #   ★ 2026-08-25 修复：找不到时 dump 当前页文本 + log 告警
-    #   旧逻辑：print 一行就 return 0，用户日志"完成 0 题"完全不知道是入口问题还是题问题
-    if d(text="口语训练").exists(timeout=3):
+    # ② 主页找口语训练入口（★ 不同年级主页布局不同！）
+    #   ★ 2026-08-25 修复：二年级下册主页"专项突破"区在首屏下方（首屏只有 教材精学/语音评测 等），
+    #   五年级上册"口语训练"卡片首屏可见。旧逻辑 d(text="口语训练").exists 只看首屏 →
+    #   二年级下册必然找不到 → 静默 return 0（"完成0题4s"）。
+    #   → 改用 scroll_and_find：先首屏 → 上滑翻找（内容下移）→ 下滑回顶部，最多各4次。
+    # ★ 诊断信息用设备实际年级（不写死 GRADE_LEVEL——多模块调度器已把设备切到目标年级，
+    #   写死"五年级上册"会误导排查）
+    _dev_v, _dev_g = None, None
+    try:
+        from common.setup import _current_texts
+        _dev_v, _dev_g = _current_texts(d)
+    except Exception:
+        pass
+    _grade_label = _dev_g or GRADE_LEVEL
+    if scroll_and_find(d, "口语训练", max_swipes=4):
         d(text="口语训练").click(); time.sleep(1.6)
         print("  ✅ 主页点口语训练入口")
     else:
         _diag = _snapshot_page(d, want_kw=("口语", "U1", "U2", "训练", "单元"), limit=15)
-        print(f"  ❌ 主页找不到'口语训练'入口（年级={GRADE_LEVEL} 版本={BOOK_VERSION}）")
-        print(f"  当前页关键文本: {_diag['texts']}")
+        print(f"  ❌ 主页找不到'口语训练'入口（设备当前: {_dev_v or '?'} {_grade_label}）")
+        print(f"  下滑翻找后当前页关键文本: {_diag['texts']}")
         print(f"  当前页 resource-id 前缀: {_diag['rids']}")
         try:
-            step_log(f"❌ 口语训练 入口缺失：年级={GRADE_LEVEL} 版本={BOOK_VERSION}，当前页无可点'口语训练'卡片（可能该年级无此模块）", "error")
+            step_log(f"❌ 口语训练 入口缺失（设备年级={_grade_label}）：下滑翻找后当前页仍无'口语训练'卡片（可能该年级无此模块，或主页布局变化）", "error")
         except Exception:
             pass
         return 0
