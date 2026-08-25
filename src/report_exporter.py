@@ -155,7 +155,10 @@ class ReportExporter:
         return out[:120] if out else ""
 
     def _loc_label(self, q: dict, meta: dict = None) -> str:
-        """生成题目定位标签：模块 · 子模块 · 第N题（如：听力专项 · 练习 · 第3题）"""
+        """生成题目定位标签：
+        - 脚本审查题（口语训练）：模块 · 脚本审查 · U3·第2大题·第4小题（可快速定位）
+        - 跑题/快查：模块 · 子模块 · 第N题（如：听力专项 · 练习 · 第3题）
+        """
         mod = (q.get("module", "") or "").strip()
         stage = (q.get("stage", "") or "").strip()
         if not mod:
@@ -163,6 +166,12 @@ class ReportExporter:
             _m = re.match(r"^([^-]+)-?([^-]*)$", qid or "")
             if _m and _m.group(1) not in ("", "auto", "quick"):
                 mod = _m.group(1)
+        # ★ 2026-08-25 口语训练错题定位：脚本审查题用 position 字段（"U3·第2大题·第4小题"），
+        #   不再笼统显示"口语训练·第45题"（口语训练脚本 100 题，Q45 定位不到具体页）
+        _pos = (q.get("position") or "").strip()
+        _note = q.get("note", "") or ""
+        if _pos and ("脚本" in _note or (q.get("qid", "") or "").find("-脚本-") >= 0):
+            return f"{mod} · 脚本审查 · {_pos}"
         qno = q.get("module_qno") or q.get("idx") or q.get("progress") or "?"
         if isinstance(qno, float):
             qno = int(qno) if qno == int(qno) else qno
@@ -636,10 +645,16 @@ class ReportExporter:
                 idx = qi
 
                 # 位置说明（★ 已在分组大标题下展示模块，题内只写第几题）
-                loc_str = f"第{idx}题"
+                # 位置说明（★ 2026-08-25 口语训练脚本审查题用 position：U3·第2大题·第4小题；
+                #   跑题/快查无 position 时回退"第N题"）
+                _pos = (q.get("position") or "").strip()
+                if _pos:
+                    loc_str = _pos
+                else:
+                    loc_str = f"第{idx}题"
 
                 # 题型标题
-                h = doc.add_heading(f"{qi}. 第{idx}题　[{qtype}]", level=2)
+                h = doc.add_heading(f"{qi}. {loc_str}　[{qtype}]", level=2)
                 # ★ 美化：每题标题深灰色
                 for run in h.runs:
                     run.font.color.rgb = RGBColor(0x1A, 0x20, 0x2C)  # 近黑

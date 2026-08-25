@@ -145,8 +145,13 @@ def _find_control(xml: str, keywords: tuple, rid_pattern: str = None) -> tuple:
     return False, False
 
 
-def collect_ui_evidence(xml: str, qtype: str = "") -> list:
-    """从页面 XML 提取四维完整性证据。返回 evidence 列表（供 step_log 前端证据卡）"""
+def collect_ui_evidence(xml: str, qtype: str = "", skip_stem: bool = False) -> list:
+    """从页面 XML 提取四维完整性证据。返回 evidence 列表（供 step_log 前端证据卡）
+
+    skip_stem: True 时不输出"题干"维度（口语训练同大题第 2-N 小题用——大题题干已在
+               第一小题下显示过，下面小题不再重复；下滑后大题题干会被滚动条挤出，
+               残留旧 XML 导致大题题干错位）
+    """
     ev = []
     # ★ is_speaking/is_listening 提前定义：③ 选项检查（口语题跳过"无选项"）在 ④ 之前执行，
     #   必须在函数开头就可用，否则 NameError 被 except 吞掉 → 证据只返回前 2 项（用户实测）
@@ -166,7 +171,11 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
                    "actual": qtype or "选择题", "diff": f"识别为[{qtype or '选择题'}]"})
 
         # ② 题干文字（页面上的长文本，排除按钮/进度/反馈弹窗/计时器/顶部导航）
-        stems = []
+        #   skip_stem=True 时不输出"题干"维度（口语训练同大题第 2-N 小题用——
+        #   大题题干已在第一小题下显示过，下面小题不再重复；
+        #   下滑后大题题干 tv_caption 会被滚动条挤出可视区，残留旧 XML 抓的
+        #   大题题干会错位显示成上面大题的内容——不重复展示即可）
+        stems = [] if not skip_stem else None
         seen = set()
         noise = ("下一题", "上一题", "检查", "提交", "开始答题", "重新答题",
                  "继续练习", "查看报告", "练习报告", "完成", "点击录音", "点击结束",
@@ -202,120 +211,126 @@ def collect_ui_evidence(xml: str, qtype: str = "") -> list:
         # ★ 分值后缀清洗："听单词...。 (共2分)" → 去掉" (共N分)" 保留题干
         def _strip_score(t: str) -> str:
             return re.sub(r"[（(]\s*共\s*\d+\s*分\s*[）)]", "", t).strip()
-        # ★ 优先 question_title_tv（App 真题干节点）
+        # ★ skip_stem=True 时跳过整个题干提取段（stems=None），避免 stems.append 崩溃
+        if stems is not None:
+            # ★ 优先 question_title_tv（App 真题干节点）
         #   ★ 真机 dump 属性顺序是 text 在 resource-id 之前（cur_home/oral_q3 实测），
         #     不能写 "rid…text" 的顺序正则，改为先定位节点再取 text
         #   ★ 2026-08-24：知识过关填字母页 question_title_tv 是【多个字母块节点】
         #     （"n"/"c"/"("/"友好的；"/"吸引人"/"的)"…），只取第一条且短文本无汉字
         #     跳过（否则字母块/词义被当题干 → "友好的； / 吸引人"）
-        for _nm in re.finditer(r'<node[^>]*question_title_tv[^>]*>', xml):
-            _tm = re.search(r'text="([^"]+)"', _nm.group(0))
-            if _tm:
-                t = _strip_score(_tm.group(1).strip())  # ★ 清洗尾缀"(共N分)"
-                if t and t not in seen and len(t) < 60 \
-                        and (len(t) >= 4 or re.search(r'[\u4e00-\u9fff]', t)):
-                    seen.add(t)
-                    stems.append(t)
-            break  # ★ 只取第一条（知识过关的 question_title_tv 是多个字母块，不能全收）
-        # ★★★ 大题题干优先：tv_caption（大题介绍节点，如口语训练
-        #   "请大声朗读你看到的句子，注意字母组合ee的发音。点击"录音"开始作答。…(共15分)"）
-        #   用户要求：口语训练大题题干 = 题目介绍内容（听录音，回答问题什么的）；
-        #   小题题干（要读的单词/句子）由模块 _find_active_sub_question 单独提取记录，不混入。
-        #   长度放宽到 160（大题介绍通常 60~120 字，旧逻辑 len>=60 会把它过滤掉）
-        _caption_taken = False
-        for _nm in re.finditer(r'<node[^>]*tv_caption[^>]*>', xml):
-            _tm = re.search(r'text="([^"]+)"', _nm.group(0))
-            if _tm:
-                t = _strip_score(_tm.group(1).strip())
-                if t and t not in seen and len(t) < 160:
-                    seen.add(t)
-                    stems.append(t)
-                    _caption_taken = True
-            break  # 大题介绍只有一条
-        # ★ 兜底：其他长文本（缩短到 ≥4 字符，抓到"听录音选图"等短题干）
-        for m in re.finditer(r'text="([^"]{4,})"', xml):
-            # ★ 口语题已拿到大题题干(tv_caption)时跳过兜底：
-            #   避免把小题句子（speech_content 等）混进"题干"字段
-            if is_speaking and _caption_taken:
-                break
-            t = _strip_score(m.group(1).strip())  # ★ 清洗尾缀"(共N分)"
-            if not t or t in seen or t in noise or len(t) >= 60:
-                continue
-            # ★ 单元标题（"Unit 1 What does she look like?"）与词义行（"adj. 新来的；新的"）
-            #   不是题干（知识过关页顶部标题+词义提示被误当题干，用户实测）
-            if re.match(r'^Unit\s*\d+', t, re.IGNORECASE) or \
-               re.match(r'^(n|v|adj|adv|det|pron|prep|conj|num|art|int)\.', t, re.IGNORECASE):
-                continue
-            # ★ 词义/提示碎片（知识过关填字母页 "( 友好的；" / "吸引人" / "的)" 被拆段）：
-            #   纯中文短碎片（<5 字符无英文）、括号开头、分号/右括号结尾 → 不是题干
-            if (len(t) < 5 and not re.search(r'[A-Za-z]', t)) \
-                    or t.startswith(("（", "(")) or t.endswith(("；", ")")):
-                continue
-            # ★ 排除选项文本："A. fast" / "B. food"（字母+句点+内容）
-            if re.match(r"^[TFABCDE][\.、．]\s*\S", t):
-                continue
-            if any(n in t for n in noise):
-                continue
-            if "点击图片" in t or "高清大图" in t:
-                continue
-            if _timer_pat.match(t):      # ★ 时间/得分/进度（21:12、77.0、3/40）
-                continue
-            seen.add(t)
-            stems.append(t)
-            if len(stems) >= 3:
-                break
-        # ★★★ 口语/朗读题型特殊路径：用户实测大题题干（如 "him."）在"请阅读题目"和
-        #   "练习结束还剩"之间。question_title_tv 兜底都拿不到时，按"区间提取"拿到真题干。
-        #   区间：y 坐标在 "请阅读题目"/"请朗读题目" 节点之后、"练习结束"节点之前
-        if not stems and is_speaking:
-            _zone_texts = []
-            _low, _high = 0, 99999
-            for m in re.finditer(r'<node[^>]*>', xml):
-                b = m.group(0)
-                tm = re.search(r'text="([^"]+)"', b)
-                bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', b)
-                if not (tm and bm):
+            for _nm in re.finditer(r'<node[^>]*question_title_tv[^>]*>', xml):
+                _tm = re.search(r'text="([^"]+)"', _nm.group(0))
+                if _tm:
+                    t = _strip_score(_tm.group(1).strip())  # ★ 清洗尾缀"(共N分)"
+                    if t and t not in seen and len(t) < 60 \
+                            and (len(t) >= 4 or re.search(r'[\u4e00-\u9fff]', t)):
+                        seen.add(t)
+                        stems.append(t)
+                break  # ★ 只取第一条（知识过关的 question_title_tv 是多个字母块，不能全收）
+            # ★★★ 大题题干优先：tv_caption（大题介绍节点，如口语训练
+            #   "请大声朗读你看到的句子，注意字母组合ee的发音。点击"录音"开始作答。…(共15分)"）
+            #   用户要求：口语训练大题题干 = 题目介绍内容（听录音，回答问题什么的）；
+            #   小题题干（要读的单词/句子）由模块 _find_active_sub_question 单独提取记录，不混入。
+            #   长度放宽到 160（大题介绍通常 60~120 字，旧逻辑 len>=60 会把它过滤掉）
+            _caption_taken = False
+            for _nm in re.finditer(r'<node[^>]*tv_caption[^>]*>', xml):
+                _tm = re.search(r'text="([^"]+)"', _nm.group(0))
+                if _tm:
+                    t = _strip_score(_tm.group(1).strip())
+                    if t and t not in seen and len(t) < 160:
+                        seen.add(t)
+                        stems.append(t)
+                        _caption_taken = True
+                break  # 大题介绍只有一条
+            # ★ 兜底：其他长文本（缩短到 ≥4 字符，抓到"听录音选图"等短题干）
+            for m in re.finditer(r'text="([^"]{4,})"', xml):
+                # ★ 口语题已拿到大题题干(tv_caption)时跳过兜底：
+                #   避免把小题句子（speech_content 等）混进"题干"字段
+                if is_speaking and _caption_taken:
+                    break
+                t = _strip_score(m.group(1).strip())  # ★ 清洗尾缀"(共N分)"
+                if not t or t in seen or t in noise or len(t) >= 60:
                     continue
-                txt = tm.group(1).strip()
-                if "请阅读题目" in txt or "请朗读题目" in txt or "练习结束" in txt:
-                    y1 = int(bm.group(2)); y2 = int(bm.group(4))
-                    if "请阅读" in txt or "请朗读" in txt:
-                        _low = max(_low, y2)  # 题目在"请阅读"之后
-                    if "练习结束" in txt:
-                        _high = min(_high, y1)  # 题目在"练习结束"之前
-            for m in re.finditer(r'<node[^>]*>', xml):
-                b = m.group(0)
-                tm = re.search(r'text="([^"]+)"', b)
-                bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', b)
-                if not (tm and bm):
-                    continue
-                y1 = int(bm.group(2))
-                t = tm.group(1).strip()
-                if y1 < _low or y1 > _high:   # 不在题目区间
-                    continue
-                if t in noise or any(n in t for n in noise):
-                    continue
-                # ★ 单元标题/词义行不是题干（同兜底规则）
+                # ★ 单元标题（"Unit 1 What does she look like?"）与词义行（"adj. 新来的；新的"）
+                #   不是题干（知识过关页顶部标题+词义提示被误当题干，用户实测）
                 if re.match(r'^Unit\s*\d+', t, re.IGNORECASE) or \
                    re.match(r'^(n|v|adj|adv|det|pron|prep|conj|num|art|int)\.', t, re.IGNORECASE):
                     continue
-                if t in seen or len(t) < 2 or len(t) > 30:
+                # ★ 词义/提示碎片（知识过关填字母页 "( 友好的；" / "吸引人" / "的)" 被拆段）：
+                #   纯中文短碎片（<5 字符无英文）、括号开头、分号/右括号结尾 → 不是题干
+                if (len(t) < 5 and not re.search(r'[A-Za-z]', t)) \
+                        or t.startswith(("（", "(")) or t.endswith(("；", ")")):
                     continue
-                if _timer_pat.match(t):
+                # ★ 排除选项文本："A. fast" / "B. food"（字母+句点+内容）
+                if re.match(r"^[TFABCDE][\.、．]\s*\S", t):
                     continue
-                # ★ 排除"小题标题/序号"：1./2./3. 或 "1"/"1 " 这种纯序号
-                if re.match(r"^\d+[\.、\s]*$", t):
+                if any(n in t for n in noise):
                     continue
-                _zone_texts.append(t)
+                if "点击图片" in t or "高清大图" in t:
+                    continue
+                if _timer_pat.match(t):      # ★ 时间/得分/进度（21:12、77.0、3/40）
+                    continue
                 seen.add(t)
-                if len(_zone_texts) >= 3:
+                stems.append(t)
+                if len(stems) >= 3:
                     break
-            if _zone_texts:
-                stems = _zone_texts
+            # ★★★ 口语/朗读题型特殊路径：用户实测大题题干（如 "him."）在"请阅读题目"和
+            #   "练习结束还剩"之间。question_title_tv 兜底都拿不到时，按"区间提取"拿到真题干。
+            #   区间：y 坐标在 "请阅读题目"/"请朗读题目" 节点之后、"练习结束"节点之前
+            if not stems and is_speaking:
+                _zone_texts = []
+                _low, _high = 0, 99999
+                for m in re.finditer(r'<node[^>]*>', xml):
+                    b = m.group(0)
+                    tm = re.search(r'text="([^"]+)"', b)
+                    bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', b)
+                    if not (tm and bm):
+                        continue
+                    txt = tm.group(1).strip()
+                    if "请阅读题目" in txt or "请朗读题目" in txt or "练习结束" in txt:
+                        y1 = int(bm.group(2)); y2 = int(bm.group(4))
+                        if "请阅读" in txt or "请朗读" in txt:
+                            _low = max(_low, y2)  # 题目在"请阅读"之后
+                        if "练习结束" in txt:
+                            _high = min(_high, y1)  # 题目在"练习结束"之前
+                for m in re.finditer(r'<node[^>]*>', xml):
+                    b = m.group(0)
+                    tm = re.search(r'text="([^"]+)"', b)
+                    bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', b)
+                    if not (tm and bm):
+                        continue
+                    y1 = int(bm.group(2))
+                    t = tm.group(1).strip()
+                    if y1 < _low or y1 > _high:   # 不在题目区间
+                        continue
+                    if t in noise or any(n in t for n in noise):
+                        continue
+                    # ★ 单元标题/词义行不是题干（同兜底规则）
+                    if re.match(r'^Unit\s*\d+', t, re.IGNORECASE) or \
+                       re.match(r'^(n|v|adj|adv|det|pron|prep|conj|num|art|int)\.', t, re.IGNORECASE):
+                        continue
+                    if t in seen or len(t) < 2 or len(t) > 30:
+                        continue
+                    if _timer_pat.match(t):
+                        continue
+                    # ★ 排除"小题标题/序号"：1./2./3. 或 "1"/"1 " 这种纯序号
+                    if re.match(r"^\d+[\.、\s]*$", t):
+                        continue
+                    _zone_texts.append(t)
+                    seen.add(t)
+                    if len(_zone_texts) >= 3:
+                        break
+                if _zone_texts:
+                    stems = _zone_texts
         stem_txt = " / ".join(stems[:2]) if stems else "(无题干文字)"
-        ev.append({"field": "题干", "type": "text_ok" if stems else "text_mismatch",
-                   "expected": "文字完整可见", "actual": stem_txt,
-                   "diff": f"提取到{len(stems)}条文字" if stems else "未提取到题干文字"})
+        if not skip_stem:
+            ev.append({"field": "题干", "type": "text_ok" if stems else "text_mismatch",
+                       "expected": "文字完整可见", "actual": stem_txt,
+                       "diff": f"提取到{len(stems)}条文字" if stems else "未提取到题干文字"})
+        # ★ 2026-08-25 skip_stem=True 时题干提取段全部跳过，但"seen"后续不再使用，
+        #   且 stems=None 时上面的提取逻辑（question_title_tv/tv_caption/兜底/zone）已在
+        #   if stems is not None 保护外——需确认所有 stems.append 都在保护内：见下方 for 循环
 
         # ③ 选项存在性（字母选项 A/B/C/D/T/F 或 图片选项 CheckBox/大图）
         #   ★ 兼容 "A. fast" / "B. food" 带句点选项（普通听力/选择题目常见）

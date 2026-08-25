@@ -1334,7 +1334,7 @@ function updQ(f){
   // ★ 按模块/阶段分组渲染（每组一个标题，让用户知道题目归属哪个模块/子模块）
   const groupKey=qid=>{
     const s=String(qid),q=qs[qid]
-    if(s.includes('-脚本-')){const mod=s.split('-')[0];return `${mod}${q.stage?' · '+q.stage:' · 脚本审查'}`}
+    if(s.includes('-脚本-')){const mod=s.split('-')[0];return `${mod}${q.stage?' · '+q.stage:''} · 脚本审查${q.position?' · '+q.position:''}`}
     if(s.startsWith('auto-')){return `${String(q.question_type||'完整性检查').replace(/[（(].*?[）)]/g,'')} · 完整性检查`}
     const stage=(s.match(/(基础巩固|综合进阶|难点突破)/)||[])[1]
     const um=s.match(/U(\d+)/)
@@ -1518,7 +1518,7 @@ function updWrong(f){
     // ★ 优先用记录的 module/stage 字段（web_server 检测时写入，定位最准）
     if(q.module) return `${q.module}${q.stage?' · '+q.stage:''}`
     const s=String(id)
-    if(s.includes('-脚本-')){const mod=s.split('-')[0];return `${mod}${q.stage?' · '+q.stage:' · 脚本审查'}`}
+    if(s.includes('-脚本-')){const mod=s.split('-')[0];return `${mod}${q.stage?' · '+q.stage:''} · 脚本审查${q.position?' · '+q.position:''}`}
     if(s.startsWith('auto-')){return `${String(q.question_type||'完整性检查').replace(/[（(].*?[）)]/g,'')} · 完整性检查`}
     const stage=(s.match(/(基础巩固|综合进阶|难点突破)/)||[])[1]
     const um=s.match(/U(\d+)/)

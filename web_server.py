@@ -4458,8 +4458,26 @@ def api_modules_stop():
 # 脚本对照 LLM 知识性审查（有脚本的模块：基础自动化后追加）
 # ============================================================
 
-def _qreview_to_state(module: str, docx: str, unit, r, stage: str = "") -> dict:
+def _qreview_to_state(module: str, docx: str, unit, r, stage: str = "", q=None) -> dict:
     """把 ReviewAgent 的 QuestionReview 转成六维面板 questions 记录。"""
+    # ★ 2026-08-25 错题日志定位：构造"口语训练 · U3 · 第2大题·第4小题"位置
+    #   （口语题 script_question 含 big/stage_idx；听力专项无 big 用 stage+unit）
+    #   缺 q 时回退到"Q{idx:02d}"，不会因为脚本格式差异导致空位
+    _pos = ""
+    if q is not None:
+        _u = getattr(q, "unit", 0) or unit or 0
+        _big = getattr(q, "big", 0) or 0
+        _no = getattr(q, "stage_idx", 0) or 0
+        if _u and _big and _no:
+            _pos = f"U{_u}·第{_big}大题·第{_no}小题"
+        elif _u and _big:
+            _pos = f"U{_u}·第{_big}大题"
+        elif _u and _no:
+            _pos = f"U{_u}·第{_no}小题"
+        elif _u:
+            _pos = f"U{_u}"
+    if not _pos:
+        _pos = f"Q{r.idx:02d}"
     def _cr(chk):
         if chk is None:
             return None, "", "skip"
@@ -4490,6 +4508,7 @@ def _qreview_to_state(module: str, docx: str, unit, r, stage: str = "") -> dict:
             overall = True
         # 部分检查（无 False 但未全过，如仅 1 维）→ 保持 None（未定），不误报不通过
     # ★ module_qno：脚本 idx（后续由 report_exporter 按 stage 分组重置显示）
+    # ★ progress：含具体位置（口语训练·U3·第2大题·第4小题），方便错题日志快速定位
     return {
         "idx": r.idx, "total": 0,
         "question_type": r.question_type or "脚本题",
@@ -4497,7 +4516,8 @@ def _qreview_to_state(module: str, docx: str, unit, r, stage: str = "") -> dict:
         "stage": stage or "",        # ★ 子模块阶段（基础巩固/综合进阶/难点突破）
         "module_qno": r.idx,        # 写脚本 idx；report_exporter 按 stage 重新排号
         "screenshot": "",
-        "progress": f"Q{r.idx:02d}",
+        "progress": f"{_pos}",      # ★ 口语训练 U3·第2大题·第4小题 / 听力专项 基础巩固 1.1
+        "position": _pos,           # ★ 单独存一份，供报告导出/下载错题日志按位置排序
         "ai_stem": dims["stem"][0], "ai_content": dims["content"][0],
         "ai_image": dims["image"][0], "ai_answer": dims["answer"][0],
         "ai_audio": dims["audio"][0], "ai_post_error": dims["post_error"][0],
@@ -4566,7 +4586,7 @@ def _run_llm_script_review(module: str, docx: str, version: str, unit, stage: st
         for q, rr in zip(agent.script_questions, results):
             qid = f"{module}-脚本-Q{rr.idx:02d}"
             _inspection_state["questions"][qid] = _qreview_to_state(
-                module, docx, unit, rr, stage=getattr(q, "stage", "") or "")
+                module, docx, unit, rr, stage=getattr(q, "stage", "") or "", q=q)
         _save_inspection_state_merge()
         # ★ 触发实时错题报告（前端「📑 查看报告」）
         try:

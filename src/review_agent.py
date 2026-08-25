@@ -554,6 +554,9 @@ class ReviewAgent:
         is_image_q = ("图片" in qtype or "看图" in qtype)
         is_judge_q = ("判断" in qtype)            # ★ 听音判断图片/信息/正误：T/F 判断题
         is_match_q = ("匹配" in qtype)            # ★ 听音匹配图片：答案映射格式 1-5 C E D A B
+        is_speak_q = ("朗读" in qtype or "跟读" in qtype or "口语" in qtype
+                      or "发音" in qtype or "读一读" in qtype
+                      or "读单词" in qtype or "读句子" in qtype)  # ★ 2026-08-25：口语训练答案非唯一，App 录音评分
         stem_txt = (q.stem or "").strip()
         opt_str = ", ".join(q.options) if q.options else "(脚本未列出选项/图片选项)"
 
@@ -609,7 +612,19 @@ class ReviewAgent:
                     f"题型: {qtype or '未知'}\n选项: {opt_str}\n答案: {q.answer or '(未给出)'}", "content")
 
         # (3) 作答
-        if q.answer:
+        if is_speak_q:
+            # ★ 2026-08-25 口语训练：答案非唯一，App 根据录音评分，脚本答案仅作评分参考
+            #   旧逻辑：LLM 拿"选项+答案+录音"判断 → 口语题答案常是"朗读 try"等描述性内容，
+            #   LLM 不认为是有效答案 → 误报"脚本未提供答案"（用户实测第45题66分误判）
+            #   改：口语题作答维度直接 skip（不作为错题判定），同时把脚本答案+关键词
+            #   作为评分参考信息保留（供报告展示）
+            r.answer_check = CheckResult(
+                passed=True, score=1.0, method="skip",
+                details=[f"口语训练：作答方式=录音（点麦克风说），App 根据录音评分，"
+                         f"答案非唯一。脚本答案「{q.answer or '(无)'}」+关键词「{','.join(q.keywords or []) or '(无)'}」"
+                         f"仅作评分参考，不作为错题判定依据。"]
+            )
+        elif q.answer:
             if is_judge_q:
                 # ★ 判断题答案固定 T/F，用规则判定（更快更准，不依赖 LLM）
                 _ans = str(q.answer).strip().upper()

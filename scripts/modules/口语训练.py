@@ -239,12 +239,20 @@ def _find_active_sub_question(d, xml=None):
         if mm:
             sub_no = int(mm.group(1))
             continue
-        # 噪音过滤：分值 "(2分)"、作答状态 "已作答/未作答"、空白、过长
+        # ★ 2026-08-25 噪音过滤（按真实页面补充）：
+        #   ① 动作文本（麦克风区按钮文字，不是题干）："点击录音"/"点击结束"/"点击完成"/"继续作答"
+        #   ② 分值 "(2分)" / 计时 "0.0" / "25S"（原逻辑）
+        #   ③ 作答状态 "已作答"/"未作答"（原逻辑）
+        if t in ("点击录音", "点击结束", "点击完成", "继续作答", "结束录音", "录音中"):
+            continue
         if t in ("", " ") or "分" in t or "作答" in t or len(t) > 60:
             continue
-        # ★ 2026-08-24 真机实测：看图说句/阅读问答题的 speech_box 无文本题干（题干在图片/喇叭），
-        #   会提取到得分 "0.0" 和倒计时 "25S" → 过滤纯数字/计时文本（否则题干= "0.0 / 25S"）
         if re.match(r"^\d+(\.\d+)?\s*S?$", t) or re.match(r"^S\s*\d+$", t):
+            continue
+        # ★ 2026-08-25 优先：小题题干通常是"句型提示：xxx"/"听力材料：xxx"/"单词"等
+        #   保留原始前缀（不剥除"句型提示："），学生在 App 看到的就是这个
+        #   短中文/无内容（如"句型提示"被 split 后）→ 跳过
+        if not t or len(t) < 1:
             continue
         stems.append(t)
     stem = " / ".join(stems[:2]) if stems else "图片题"
@@ -398,6 +406,7 @@ def _answer_big_question(d, big_idx=0):
     _ev_q = -1          # 已发证据卡的题号（每小题只发一次）
     _score_checked = False
     _horn_clicked = False  # 每大题只需点一次顶部说明喇叭
+    _last_ev_big = -1       # 上次发证据卡时的大题号（变化时=新大题首小题，发"大题题干"）
 
     # 1. 等大题首题 ready
     if not _wait_ready_for_record(d, timeout=22):
@@ -494,15 +503,21 @@ def _answer_big_question(d, big_idx=0):
         if q != _ev_q:
             try:
                 from common.evidence import collect_ui_evidence
-                _ev = collect_ui_evidence(xml, qtype="口语训练")
-                # ★ 小题题干独立成一条证据（大题题干=tv_caption 由 evidence 提取）
+                # ★ 2026-08-25：每大题只在第一小题下显示大题题干（来自 tv_caption），
+                #   后续小题 skip_stem=True 不显示大题题干——避免下滑后大题题干错位显示
+                #   成上面大题的内容（用户实测"听/答→listen/answer"残留）
+                _is_first_of_big = (big_idx != _last_ev_big)
+                _ev = collect_ui_evidence(xml, qtype="口语训练", skip_stem=not _is_first_of_big)
+                # ★ 小题题干：每小题都加（口语训练学生看的就是"句型提示：xxx"/"听力材料：xxx"/"单词"等）
                 if stem:
-                    _sub_note = f"小题{sub_label}" + (f"/{total_sub}" if total_sub else "") + f"题干：{stem}"
+                    _sub_label = f"小题{sub_label}" + (f"/{total_sub}" if total_sub else "")
                     _ev.insert(1, {"field": "小题题干", "type": "info",
                                    "expected": "当前作答小题的题干",
                                    "actual": stem,
-                                   "diff": _sub_note})
+                                   "diff": f"{_sub_label}题干：{stem}"})
                 step_log(f"  第{big_idx}大题·第{sub_label}小题（{stem}）完整性检查", "info", _ev)
+                _ev_q = q
+                _last_ev_big = big_idx
                 if not _score_checked:
                     _score_checked = True
                     try:
@@ -655,22 +670,38 @@ def _snapshot_page(d, want_kw=("U1", "U2", "口语", "训练", "开始", "重新
 
 
 def _after_unit_enter(d):
-    """进入单元后的公共处理：弹窗 + 开始答题"""
+    """进入单元后的公共处理：弹窗 + 试卷首页 rule-based 检查 + 开始答题
+
+    ★ 2026-08-25 修复：去掉 LLM 调用 check_paper_header（每次进入单元等10-30秒太慢）
+      按 txt 流程第 2 点"试卷首页检查"用规则匹配即可（标题+总分+时量+按钮），
+      不需要 LLM 语义判断，毫秒级完成。
+    """
     if d(text="好的，我知道啦~").exists(timeout=3):
         d(text="好的，我知道啦~").click()
         print(f"    ✅ 好的，我知道啦~")
-        time.sleep(0.8)
-    # ★ 文档检查点：试卷首页/单元目录核对（标题、总分/时量、按钮文字）
+        time.sleep(0.5)
+    # ★ Rule-based 试卷首页检查（替代 LLM 调用的 check_paper_header）
+    #   解析 XML 文本节点提取：标题/总分/时长/按钮，毫秒级
     try:
-        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from src.doc_checks import check_paper_header
-        check_paper_header(d, module_name="口语训练")
-    except Exception:
-        pass
+        _xml = d.dump_hierarchy()
+        _texts = [t for t in re.findall(r'text="([^"]+)"', _xml) if t.strip()]
+        _title = next((t for t in _texts if "口语训练" in t and ("U" in t or "Unit" in t or "湘少" in t or "新湘" in t)), None)
+        _total = next((re.search(r"总分\s*(\d+\s*分)", t).group(0) for t in _texts if re.search(r"总分\s*\d+\s*分", t)), None)
+        _time = next((re.search(r"(?:时间|时长).{0,5}?(\d+\s*分钟)", t).group(0) for t in _texts if re.search(r"(?:时间|时长).{0,5}?\d+\s*分钟", t)), None)
+        _btn = next((t for t in _texts if t in ("开始答题", "重新答题", "继续答题")), None)
+        _ok = bool(_title) and bool(_btn)
+        _msg = f"标题={_title or '无'} · 总分={_total or '无'} · 时长={_time or '无'} · 按钮={_btn or '无'}"
+        print(f"    📋 试卷首页: {'✅' if _ok else '⚠'} {_msg}")
+        try:
+            step_log(f"📋 试卷首页检查: {'通过' if _ok else '异常'} | {_msg}", "info" if _ok else "warning")
+        except Exception:
+            pass
+    except Exception as e:
+        print(f"    📋 试卷首页检查异常: {e}")
     if d(text="开始答题").exists(timeout=3):
         d(text="开始答题").click()
         print(f"    ✅ 开始答题")
-        time.sleep(1.6)
+        time.sleep(1.2)
     return True
 
 
