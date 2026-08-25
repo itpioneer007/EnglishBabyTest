@@ -168,7 +168,9 @@ class OralStrategy(DocxStrategy):
         unit = unit_hint
         big = 0
         big_title = ""
-        big_type = ""          # 单词/句子/问答/阅读
+        big_type = ""          # 当前大题类型（朗读单词/朗读句子/情景问答/阅读短文…）
+        cur_big_type = ""      # ★ 当前 subs 所属大题的 big_type（_flush_big 时 attach 用）
+                               #   （_flush_big 在 big_type 更新前调用，必须单独记录避免错位）
         caption = ""
         passage_lines = []
         meta = {}
@@ -179,7 +181,12 @@ class OralStrategy(DocxStrategy):
         def _attach_meta():
             for q in subs:
                 q.type_1 = meta.get("一级题型", "")
-                q.type_2 = meta.get("二级题型", "") or "/"
+                # ★ 2026-08-25：口语训练脚本"二级题型：/"是显式的空（truthy 字符串会短路
+                #   cur_big_type）→ 显式"/"视为无类型，用 cur_big_type（朗读单词/看图说句…）
+                #   供 review_agent 判断口语题（is_speak_q 命中"朗读/口语/读" → answer 维度 skip）
+                _t2 = meta.get("二级题型", "")
+                q.type_2 = (_t2 if _t2 and _t2.strip() not in ("", "/", "无") else "") \
+                    or cur_big_type or "/"
                 q.difficulty = meta.get("难度", "") or meta.get("难度系数", "")
                 # ★ 小题自己的"关键词："（如 red, blue）优先，元数据关键词(单元标签)仅兜底
                 if not q.keywords:
@@ -206,15 +213,23 @@ class OralStrategy(DocxStrategy):
             if len(t) < 40 and not t.startswith("关键词"):
                 _u = _detect_unit(t)
                 if _u and ("口语训练" in t or t.startswith("Unit")):
+                    # ★ 2026-08-25：单元切换时 flush 上单元剩余小题 + 重置 big 计数
+                    #   （旧逻辑 big 全程递增：U7 大题显示"第5大题"而非"第1大题"）
+                    _flush_big()
                     unit = _u
+                    big = 0
+                    cur_big_type = ""
                     continue
             # ---- 大题标题："一、朗读单词。（15分）" ----
             if _ORAL_BIG_HDR.match(t):
+                # ★ 先 flush 上一大题（attach 用旧 cur_big_type），再更新 cur_big_type
+                #   （顺序反了会错位：第1大题 type_2 变成"朗读句子"）
                 _flush_big()
+                cur_big_type = re.sub(r"[（(].*$", "",
+                                      re.sub(r"^[一二三四五六七八九十]+、\s*", "", t)).strip() or "口语"
                 big += 1
                 big_title = t
-                big_type = ("单词" if "单词" in t else "句子" if "句子" in t
-                            else "阅读" if ("阅读" in t or "短文" in t) else "问答")
+                big_type = cur_big_type
                 continue
             # ---- 元数据行 ----
             if any(t.startswith(k) for k in _ORAL_META_PREFIX):

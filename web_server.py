@@ -4846,4 +4846,6 @@ if __name__ == "__main__":
     # ★ 常驻实时截图（前端「手机画面」随时可见，不再只在任务运行时才有）
     _start_live_screenshot_daemon()
 
-    app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
+    # ★ 2026-08-25：支持 PORT 环境变量（默认 5000；多实例验证/端口冲突时可换端口）
+    _port = int(os.environ.get("PORT", "5000"))
+    app.run(host="0.0.0.0", port=_port, debug=False, threaded=True)
