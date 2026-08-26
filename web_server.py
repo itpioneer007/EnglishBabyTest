@@ -501,7 +501,13 @@ def log_msg(msg: str, level: str = "info", evidence: list = None):
             # ★ 修复：兼容实际消息格式——"第1题 检查"(可能带前导空格) 与
             #   "第1题 完整性检查"(测试循环) 都能命中
             #   ★ 口语训练："第2大题·第3小题 完整性检查"（大题·小题精确定位）
-            m = re.match(r"\s*(?:第(\d+)大题·)?第(\d+)(?:题|小题)\s*(?:完整性)?\s*检查", msg)
+            #   ★ 2026-08-25 修复：口语训练实际消息是
+            #     "第1大题·第2小题（句型提示：xxx）完整性检查"——"小题"和"检查"之间
+            #     夹着（题干内容）！旧正则要求紧跟导致匹配失败 → 界面证据从未写入，
+            #     前端只有脚本审查结果（用户实测"没有实际测试记录，全是脚本审查"）
+            m = re.match(
+                r"\s*(?:第(\d+)大题·)?第(\d+)(?:题|小题)\s*"
+                r"(?:（[^）]*）)?\s*(?:完整性)?\s*检查", msg)
             if m:
                 _big = int(m.group(1)) if m.group(1) else None
                 qidx = int(m.group(2))
@@ -1684,28 +1690,58 @@ def api_login():
 
 @app.route("/api/errors/summary", methods=["GET"])
 def api_errors_summary():
-    """返回当前检测中的错题汇总（供前端 renderServe 展示）"""
-    state_path = PROJECT_ROOT / "data" / "inspection_state.json"
-    if not state_path.exists():
-        return jsonify({"error": "暂无检测数据"}), 404
+    """返回当前检测中的错题汇总（供前端 renderServe 展示）
+
+    ★ 2026-08-25 统计口径修复：只统计【实际测试的题】（auto-Q* 界面证据题），
+      不统计【脚本全量审查的题】（*-脚本-Q*，LLM 把整个 docx 所有题都审一遍，
+      很多题根本没在手机上测过）。
+      → 分母 = 实际测试的题数；分子 = 其中判定不通过(overall_passed is False)的题数。
+      ★ 同时修复 not overall_passed 把 None(未审查) 误计为不通过的问题。
+
+    ★ 2026-08-25 数据源修复：优先读内存 _inspection_state（本次运行的实时数据）。
+      旧逻辑只读磁盘 data/inspection_state.json —— 多模块入口启动时只清内存不清磁盘，
+      磁盘残留上次运行的题（如五年级20题+4不通过）→ 用户跑三年级未上线0题，
+      日志显示0题但前端 summary 却显示"不通过4/20"，前后矛盾。
+      内存为空（服务重启等）才读磁盘兜底。
+    """
+    questions = _inspection_state.get("questions") or {}
+    if not questions:
+        state_path = PROJECT_ROOT / "data" / "inspection_state.json"
+        if not state_path.exists():
+            return jsonify({"error": "暂无检测数据"}), 404
+        try:
+            with open(state_path, "r", encoding="utf-8") as f:
+                state = json.load(f)
+            questions = state.get("questions", {})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
     try:
-        with open(state_path, "r", encoding="utf-8") as f:
-            state = json.load(f)
-        questions = state.get("questions", {})
-        if isinstance(questions, list):
-            questions_list = questions
+        if isinstance(questions, dict):
+            # ★ 保留 qid(key) 才能区分 auto-Q(实际测试) / *-脚本-Q*(脚本全量审查)
+            q_items = list(questions.items())
         else:
-            questions_list = list(questions.values())
+            q_items = [(str(q.get("qid") or q.get("_qid") or f"q{i}"), q)
+                       for i, q in enumerate(questions)]
+
+        # ★ 只保留"实际测试"的题：qid 以 auto-Q 开头（界面证据题 = 引擎真正跑到的题）。
+        #   排除 *-脚本-Q*（LLM 脚本全量审查：整个 docx 的题都审，含未实际测试的）
+        tested = [q for _qid, q in q_items
+                  if str(_qid).startswith("auto-Q") or
+                  (str(_qid).startswith("Q") and "脚本-Q" not in str(_qid))]
 
         failed = []
+        # ★ 2026-08-25 修复：key 必须与 questions 里的字段名完全一致（ai_stem/ai_content/ai_image/
+        #   ai_answer/ai_audio/ai_post_error）。旧代码用 key[:3]（stem→ste、content→con、post_error→pos）
+        #   全部对不上 → failed_dims 永远是空数组 → 错题报告不显示"哪些维度不通过"。
         dim_keys = [
-            ("题干", "stem"), ("内容", "content"), ("配图", "image"),
-            ("作答", "answer"), ("答错后", "post_error"), ("音频", "audio")
+            ("题干", "ai_stem"), ("内容", "ai_content"), ("配图", "ai_image"),
+            ("作答", "ai_answer"), ("答错后", "ai_post_error"), ("音频", "ai_audio")
         ]
-        for q in questions_list:
-            if not q.get("overall_passed", True):
+        for q in tested:
+            # ★ 修复：只看严格不通过(False)；None(未审查/信息不足)不误计
+            if q.get("overall_passed") is False:
                 failed_dims = [label for label, key in dim_keys
-                               if not q.get(f"ai_{key[:3]}", True)]
+                               if q.get(key) is False]
                 failed.append({
                     "qid": q.get("qid", ""),
                     "idx": q.get("idx", 0),
@@ -1715,10 +1751,12 @@ def api_errors_summary():
                 })
 
         return jsonify({
-            "total_questions": len(questions_list),
-            "failed_count": len(failed),
+            "total_questions": len(tested),     # ★ 分母 = 实际测试题数
+            "failed_count": len(failed),        # ★ 分子 = 其中严格不通过数
             "failed_items": failed,
             "has_errors": len(failed) > 0,
+            # ★ 附加信息：脚本审查另有 N 题（供前端展示"另有脚本审查错题"）
+            "script_review_count": len(q_items) - len(tested),
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -2835,6 +2873,8 @@ def _live_regen_error_report():
 
 
 # ★ 多模块检测每题界面级证据 → 审查结果区（无脚本也能展示 AI 通过/不通过）
+_SCRIPT_CACHE = {}  # ★ 脚本解析缓存 {docx名: script_questions}，避免每题重复解析100题
+
 def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None):
     """把 engine.py 每题收集的 5 维界面证据（题型/题干/选项/音频/作答）
     映射成前端六维卡片字段写入 _inspection_state["questions"]。
@@ -2933,6 +2973,65 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
     if dims["audio"] is None:
         reasons["audio"] = "非听力题，无需检查"
 
+    # ★ 2026-08-25 新增：App 实际题干 ↔ 脚本题干 匹配校验（口语训练核心需求：
+    #   txt 流程第8步"答案与关键词是否正确/听力材料是否正确"→ 每道小题必须核对
+    #   App 显示的题干是否与脚本一致，如"第1大题第1小题脚本=then，App 也必须显示 then"）
+    try:
+        _docx_cur = (_GLOBAL_DOCX_MAP or {}).get(_current_module_name, "")
+        if _docx_cur and stem_text and stem_text not in ("(无题干文字)", "(无)"):
+            _docx_path_cur = PROJECT_ROOT / "uploads" / _docx_cur
+            if _docx_path_cur.exists():
+                # ★ 脚本解析缓存（每题调用一次，100题脚本重复解析太慢）
+                if _docx_cur not in _SCRIPT_CACHE:
+                    from src.review_agent import ReviewAgent, ReviewConfig
+                    _agent_cur = ReviewAgent(ReviewConfig(
+                        docx_path=str(_docx_path_cur), unit=0, screenshot_dir="", verbose=False))
+                    _SCRIPT_CACHE[_docx_cur] = _agent_cur.script_questions
+                _sq_list = _SCRIPT_CACHE[_docx_cur]
+                # ★ 按 (unit, big, stage_idx) 定位脚本小题（口语训练结构）
+                _u_cur = _inspection_state.get("unit", 0)
+                try:
+                    _u_cur = int(str(_u_cur).split("-")[0])
+                except Exception:
+                    _u_cur = 0
+                _sq_cur = None
+                if big and _u_cur:
+                    for _s in _sq_list:
+                        if _s.unit == _u_cur and _s.big == big and _s.stage_idx == qidx:
+                            _sq_cur = _s
+                            break
+                if not _sq_cur:
+                    for _s in _sq_list:
+                        if _s.global_idx == qidx:
+                            _sq_cur = _s
+                            break
+                if _sq_cur:
+                    _script_stem = (getattr(_sq_cur, "stem", "") or "").strip()
+                    _script_rec = (getattr(_sq_cur, "recording", "") or "").strip()
+                    if _script_stem:
+                        # ★ 相似度比对（App 提取文字可能带噪音，用包含/相似而非全等）
+                        _app_stem = stem_text.strip()
+                        _ok = (_script_stem in _app_stem) or (_app_stem in _script_stem)
+                        if not _ok:
+                            import difflib as _dl
+                            _ratio = _dl.SequenceMatcher(None, _script_stem, _app_stem).ratio()
+                            _ok = _ratio >= 0.85
+                        if not _ok:
+                            dims["stem"] = False   # ★ mismatch 优先：脚本比对不通过 → 题干不通过
+                            reasons["stem"] = (f"❌ 题干与脚本不符：App 显示「{_app_stem[:60]}」，"
+                                               f"脚本应为「{_script_stem[:60]}」（位置：第{big}大题·第{qidx}小题）")
+                        else:
+                            # ★ 通过也写比对原因（检查人员知道这题已核对过脚本）
+                            if dims["stem"] is not False:
+                                dims["stem"] = True
+                                reasons["stem"] = f"✅ 题干与脚本一致（脚本：{_script_stem[:50]}，App：{stem_text[:50]}）"
+                    if _script_rec and dims["audio"] is None:
+                        # ★ 听力材料（脚本 recording）与 App 实际内容：本题无音频证据可查，
+                        #   但脚本有听力材料 → 提示检查人员（不判不通过，缺截图）
+                        reasons["audio"] = f"脚本听力材料「{_script_rec[:60]}」，需连手机核对 App 听力内容"
+    except Exception:
+        pass
+
     # ★ 综合判定：可查维度数（非None）≥3 且 无任何不通过 → 通过
     checked = [d for d in dims.values() if d is not None]
     failed = [d for d in dims.values() if d is False]
@@ -2973,7 +3072,14 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
             _auto_shot = ""
 
     total = len(_inspection_state.get("questions", {})) + 1
-    qid = f"auto-Q{qidx:03d}"
+    # ★ 2026-08-25 修复：口语训练"第N大题·第M小题"结构下，不同大题的小题号重复
+    #   （每个大题都有小题1-5）→ 旧 qid "auto-Q{小题号}" 会被后面大题的同号小题覆盖，
+    #   只剩最后一大题。改为 "auto-Q{大题:02d}-{小题:02d}" 保证每题唯一；
+    #   无 big（听力专项/单元自检等）保持旧格式 auto-Q{idx:03d}（与 summary 统计兼容）。
+    if big:
+        qid = f"auto-Q{big:02d}-{qidx:02d}"
+    else:
+        qid = f"auto-Q{qidx:03d}"
 
     # ★ 描述文字：让检查人员知道题目大概内容和位置
     # ★ 描述文字：让检查人员知道题目大概内容和位置
@@ -4571,6 +4677,8 @@ def _run_llm_script_review(module: str, docx: str, version: str, unit, stage: st
         ))
         # ★ 单元不匹配提示：脚本不含所选单元（用户实测"单元根本没脚本"，
         #   静默显示"0题"误导人）→ 明确日志：脚本实际覆盖哪些单元
+        # ★ 2026-08-25 修复：部分覆盖也要提示！旧逻辑只看 script_questions 是否为空
+        #   （全不匹配才提示），选 U4+U8 而脚本只有 U6-U10 时，U4 不在范围被静默忽略。
         if not agent.script_questions:
             _units_ok = sorted(u for u in getattr(agent, "script_units", set()) if u > 0)
             _units_want = normalize_units(_u)
@@ -4579,6 +4687,17 @@ def _run_llm_script_review(module: str, docx: str, version: str, unit, stage: st
                      f"（该单元无脚本覆盖，跳过 LLM 脚本审查，仅基础完整性）")
             log_msg(f"ℹ {module} {_note}", "info")
             return
+        # ★ 部分覆盖提示：所选单元里只有部分被脚本覆盖（如选 4,8 脚本只有 8）
+        _units_want2 = normalize_units(_u)
+        _units_ok2 = set(getattr(agent, "script_units", set()))
+        if _units_want2:
+            _missing = sorted(u for u in _units_want2 if u not in _units_ok2)
+            if _missing:
+                log_msg(
+                    f"ℹ {module} 所选单元 {sorted(_units_want2)} 中，"
+                    f"脚本「{docx}」未覆盖: {_missing}"
+                    f"（脚本实际单元: {sorted(u for u in _units_ok2 if u > 0) or '未解析到'}；"
+                    f"未覆盖单元仅做基础完整性检查）", "info")
         # ★ 不传 screenshots：自动化过程只有答错截图，旧截图与本次题目对不上会误导 LLM 判定
         #   → 统一走 LLM 脚本审查（_review_script_llm：脚本信息 → LLM 六维判定，理由具体有说服力）
         results = agent.review(screenshots={})
@@ -4611,8 +4730,14 @@ def api_modules_run():
         return jsonify({"error": "已有任务在运行"}), 409
 
     # 清空审查结果区（避免上次任务的题目残留）
+    # ★ 2026-08-25 修复：必须同步清空磁盘文件 data/inspection_state.json！
+    #   旧逻辑只清内存 _inspection_state["questions"]，磁盘仍保留上次运行的题
+    #   （如五年级口语训练20题+4不通过），而 /api/errors/summary 读的是磁盘 →
+    #   用户跑"三年级未上线0题"却显示"不通过4/20"（日志0题/前端旧数据矛盾）。
+    #   快速检查入口(1247行)就是先清内存再 _save_inspection_state() 写盘，此处对齐。
     _inspection_state["questions"] = {}
     _inspection_state["current_question_idx"] = 0
+    _save_inspection_state()
 
     data = request.get_json() or {}
     version = (data.get("version") or "湘少版").strip()

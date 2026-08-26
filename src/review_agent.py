@@ -679,7 +679,10 @@ class ReviewAgent:
         r.knowledge_check = self._verify_knowledge(q)
 
         # overall：与 _qreview_to_state 判定一致（有 False → 不通过；checked 全 True → 通过；否则 None）
-        checked = [c for c in (r.stem_check, r.content_check, r.answer_check) if c.method != "skip"]
+        # ★ 2026-08-25 修复：uncertain（REVIEW/待审）与 skip 一样不计入 checked，
+        #   否则"朗读单词"这类无选项题 LLM 合理 REVIEW → passed=False → 整体误判不通过
+        checked = [c for c in (r.stem_check, r.content_check, r.answer_check)
+                   if c.method not in ("skip", "uncertain")]
         if checked:
             if any(c.passed is False for c in checked):
                 r.overall_passed = False
@@ -1151,6 +1154,12 @@ class ReviewAgent:
             result.details = parts[:10]
             result.passed = (verdict == "PASS" and len(lang) == 0)
             result.score = 0.3 if (verdict == "REJECT" or len(lang) > 3) else (0.7 if (verdict == "REVIEW" or len(lang) > 0) else 1.0)
+            # ★ 2026-08-25 修复：REVIEW=信息不足（如朗读单词题只有单词无选项，LLM
+            #   合理无法核对）→ 标 uncertain（未检），下游 _cr 转 None，不误判不通过。
+            #   原实现 method 为空串，_qreview_to_state._cr 无法识别 → 当 False 处理，
+            #   导致"题干/选项都过、得分100"却综合判定不通过。
+            if verdict == "REVIEW":
+                result.method = "uncertain"
         except Exception as e:
             result.passed = True
             result.score = 0.7

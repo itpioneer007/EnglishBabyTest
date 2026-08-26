@@ -515,6 +515,20 @@ def _answer_big_question(d, big_idx=0):
                                    "expected": "当前作答小题的题干",
                                    "actual": stem,
                                    "diff": f"{_sub_label}题干：{stem}"})
+                # ★ 2026-08-25 修复"日志刷屏"：同大题第2-N小题 skip_stem=True 时，
+                #   evidence 只剩固定的 题型/选项/音频/作答，每题一模一样 → 前端日志
+                #   反复追加相同证据卡。压缩策略：
+                #   - 保留有差异的（小题题干已插入，若有异常项保留）
+                #   - 过滤"通用通过"项（选项=口语题无需选项、音频=无需小喇叭、
+                #     作答元素存在），它们每道口语小题都相同，无信息量
+                if not _is_first_of_big:
+                    _ok_diff_kw = ("无需选项", "无需检查小喇叭", "作答元素存在")
+                    _ev = [e for e in _ev if e.get("field") == "小题题干"
+                           or e.get("type") in ("text_mismatch", "error", "warning")
+                           or not any(k in (e.get("diff") or "") for k in _ok_diff_kw)]
+                    # 后续小题仅剩小题题干 → 只发一行日志不附证据卡（题干已含在消息里）
+                    if len(_ev) == 1 and _ev[0].get("field") == "小题题干":
+                        _ev = []
                 step_log(f"  第{big_idx}大题·第{sub_label}小题（{stem}）完整性检查", "info", _ev)
                 _ev_q = q
                 _last_ev_big = big_idx
@@ -557,6 +571,9 @@ def _answer_big_question(d, big_idx=0):
 def _run_one_unit(d, unit_num, is_retry):
     """跑一个单元的口语训练"""
     print(f"\n  🎯 口语训练 Unit {unit_num}")
+    # ★ 2026-08-25：先切到"单元"tab（三年级上册默认在"全部"tab，只有期末/模拟卷，
+    #   没有 U 单元列表；五年级上册无 tab 栏 → _switch_tab 幂等直接返回）
+    _switch_tab(d, "单元")
     # 找该单元的答题按钮：3 种状态
     #   - 未训练过："开始答题"
     #   - 已训练过（完成）："重新答题"
@@ -667,6 +684,42 @@ def _snapshot_page(d, want_kw=("U1", "U2", "口语", "训练", "开始", "重新
     rids = sorted({r for r in re.findall(r'resource-id="com\.dinoenglish\.yyb:id/([a-z_0-9]+)"', xml)})
     out["rids"] = rids[:8]
     return out
+
+
+def _switch_tab(d, tab_name, timeout=3):
+    """★ 2026-08-25：口语训练模块页顶部有 tab 栏（全部/单元/期末/模拟）。
+
+    不同年级布局不同：
+      - 三年级上册：默认在"全部"tab（显示期末+模拟统测卷，无 U 单元）→
+        必须先点"单元"tab 才有 U1-U10 单元列表（用户实测根因）
+      - 五年级上册：可能无 tab 栏（单元列表直接平铺）
+    此函数幂等：目标 tab 已选中（或页面无 tab 栏）→ 直接返回 True。
+    返回是否成功（或无需切换）。
+    """
+    try:
+        xml = d.dump_hierarchy()
+    except Exception:
+        xml = ""
+    # ① 页面没有 tab 栏（五年级上册平铺布局）→ 无需切换
+    tabs = []
+    for t in ("全部", "单元", "期末", "模拟"):
+        if re.search(rf'text="{t}"', xml):
+            tabs.append(t)
+    if not tabs:
+        return True
+    # ② 目标 tab 已存在且当前选中（selected="true" 或首位）→ 无需点击
+    m = re.search(rf'<node[^>]*text="{tab_name}"[^>]*>', xml)
+    if m and ('selected="true"' in m.group(0) or 'checked="true"' in m.group(0)):
+        return True
+    # ③ 目标 tab 存在但未选中 → 点击
+    el = d(text=tab_name)
+    if el.exists(timeout=timeout):
+        el.click()
+        time.sleep(1.0)
+        print(f"    📑 已切换到 tab: {tab_name}")
+        return True
+    print(f"    ⚠ 页面无 '{tab_name}' tab（当前 tabs: {tabs}）")
+    return False
 
 
 def _after_unit_enter(d):
@@ -831,6 +884,69 @@ def run_module(d, units=None):
     #   练习报告页可能因渲染延迟没检测到 → 这里兜底必发
     step_log(f"✅ 口语训练完成，共{total}题", "success")
     print(f"✅ 口语训练完成: {total} 题, 耗时 {time.time()-t0:.0f}s")
+    return total
+
+
+def run_paper(d, paper_kw="期末", grade="三年级上册"):
+    """★ 2026-08-25 新增：跑口语训练的"期末/模拟"统测卷（考前突破类内容）。
+
+    背景：口语训练模块页有 tab 栏（全部/单元/期末/模拟），期末/模拟 tab 下是
+    统测卷/模考卷（如"期末听说统测卷英语三年级上册（新湘少版）"），每卷一个
+    "开始答题"。这些不是单元训练，单元循环 _run_one_unit 不覆盖 → 单独入口。
+
+    paper_kw: 匹配关键词（"期末" 或 "模拟"），对应 tab 名
+    grade:    目标年级（用于匹配"英语X年级上册"标题）
+    返回答题数（成功进入并作答返回实际题数；失败返回 0）。
+    """
+    t0 = time.time()
+    total = 0
+    print(f"\n📋 口语训练 · {paper_kw}统测卷（{grade}）")
+    # ① 切到对应 tab（期末/模拟）
+    _switch_tab(d, paper_kw)
+    # ② 找该年级的卷子标题行 + 其"开始答题"按钮
+    import re as _re
+    _grade_key = grade.replace("年级", "").replace("上册", "").replace("下册", "")  # "三"
+    _found = False
+    for _ in range(6):
+        elements = (d.xpath('//*[@text!=""]').all() or [])
+        row = None
+        for e in elements:
+            t = (e.text or "").strip()
+            # 卷子标题特征：含"听说统测" + 年级关键词
+            if paper_kw in t and "听说" in t and "英语" in t:
+                if _grade_key in t.replace("年级", ""):
+                    row = e
+                    break
+        if row:
+            row_y = row.bounds[1]
+            for e in elements:
+                t = (e.text or "").strip()
+                if t in ("开始答题", "重新答题", "继续答题"):
+                    if abs(e.bounds[1] - row_y) < 300:
+                        try:
+                            e.click()
+                        except Exception:
+                            d.click((e.bounds[0]+e.bounds[2])//2, (e.bounds[1]+e.bounds[3])//2)
+                        print(f"    ✅ 点击 {t}（{paper_kw}卷: {row.text[:40]}）")
+                        time.sleep(1.2)
+                        _after_unit_enter(d)
+                        _found = True
+                        break
+        if _found:
+            break
+        S_swipe(d, 540, 1800, 540, 600, 0.3); time.sleep(0.4)
+    if not _found:
+        _diag = _snapshot_page(d, want_kw=(paper_kw, "听说", "统测", "模考"), limit=12)
+        print(f"    ❌ 找不到 {grade} 的 {paper_kw} 卷（当前页: {_diag['texts'][:6]}）")
+        try:
+            step_log(f"❌ 口语训练 {paper_kw}卷入口缺失：当前页无「{grade}·{paper_kw}听说统测」标题（可见: {_diag['texts'][:4] or '无'}）", "error")
+        except Exception:
+            pass
+        return 0
+    # ③ 答题（统测卷也是多题循环，复用 _run_unit_questions）
+    total = _run_unit_questions(d, unit_num=0)
+    step_log(f"✅ 口语训练{paper_kw}卷完成，共{total}题", "success")
+    print(f"✅ 口语训练{paper_kw}卷完成: {total} 题, 耗时 {time.time()-t0:.0f}s")
     return total
 
 

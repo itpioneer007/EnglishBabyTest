@@ -54,7 +54,11 @@ def register(app):
 
     @app.route("/api/errors/live-status", methods=["GET"])
     def api_error_live_status():
-        """返回实时报告状态（路径 + 错题数），供前端按钮/提示使用"""
+        """返回实时报告状态（路径 + 错题数），供前端按钮/提示使用
+
+        ★ 2026-08-25 统计口径与 /api/errors/summary 对齐：
+          只统计实际测试的题（auto-Q*），不统计脚本全量审查题（*-脚本-Q*）；
+          且只有严格不通过(False)才算错题（None 未审查不计）。"""
         path = web_server._inspection_state.get("live_report_path", "")
         questions = web_server._inspection_state.get("questions", {})
         # ★ 服务重启后内存空 → 读持久化文件（data/inspection_state.json）
@@ -68,14 +72,20 @@ def register(app):
                 questions = {}
         if not path or not Path(path).exists():
             path = _find_latest_live_report()
+        # ★ 只统计实际测试的题（auto-Q 前缀）；脚本全量审查题（*-脚本-Q*）不计入
+        q_items = list(questions.items()) if isinstance(questions, dict) else [
+            (str(q.get("qid") or f"q{i}"), q) for i, q in enumerate(questions)]
+        tested = [q for _qid, q in q_items
+                  if str(_qid).startswith("auto-Q") or
+                  (str(_qid).startswith("Q") and "脚本-Q" not in str(_qid))]
         failed = sum(
-            1 for q in questions.values()
-            if not q.get("overall_passed", True)
+            1 for q in tested
+            if q.get("overall_passed") is False   # ★ 严格不通过；None(未审查)不计
         )
         return jsonify({
             "path": path if (path and Path(path).exists()) else "",
             "failed": failed,
-            "total": len(questions),
+            "total": len(tested),
             "ready": bool(path and Path(path).exists()),
         })
 

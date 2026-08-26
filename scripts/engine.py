@@ -11,22 +11,97 @@ from common.logger import step_log, should_stop
 from question_types import detect_question_type
 
 
-def _find_control(xml: str, keywords: tuple) -> tuple:
+def _find_control(xml: str, keywords: tuple, rid_pattern: str = None) -> tuple:
     """在 XML 中查找含关键词的控件节点，返回 (found, clickable)
-    - 逐节点匹配 text/content-desc 含任一关键词
-    - ★ 也匹配 resource-id 中的 play/sound/audio/speaker 模式
-      （真实 App 扬声器按钮常是 rid=id/play_box，text/content-desc 为空）
-    - clickable 取该节点是否 clickable="true"
+
+    ★ 2026-08-25：与 common/evidence.py 的增强版同步（#55 修复只改了 evidence.py，
+       engine.py 还是旧版 → 真机口语训练仍误报"麦克风存在但不可点击"）。
+      - 优先匹配 clickable="true" 的节点（避免误命中介绍/标签文本）
+      - 逐节点匹配 text/content-desc 含任一关键词
+      - 也匹配 resource-id 中的 play/sound/audio/speaker/mic/record 模式
+      - rid_pattern 可定制：播放检查传 (play|sound|audio|speaker)，
+        麦克风检查传 (record|mic)，避免"iv_caption_play 播放图标被当麦克风"串检
+      - 命中非 clickable 文本节点时，向上/向外查找包含该节点的 clickable 父容器
+        （如口语训练 record_btn 容器内含 "点击录音" 文本）
+      - 跳过系统状态栏/通知栏节点（com.android.systemui 含子串 "mic" 会误命中）
     """
+    xml = xml or ""
+    if rid_pattern is None:
+        rid_pattern = r'resource-id="[^"]*(play|sound|audio|speaker|mic|record)[^"]*"'
+    _rid_re = re.compile(rid_pattern)
+
+    def _is_system(tag: str) -> bool:
+        return "com.android.systemui" in tag or 'package="android"' in tag
+
+    # 先收集所有 clickable 节点 bounds，用于后续"包含关系"判定
+    _clickables = []
     for m in re.finditer(r'<node[^>]*>', xml):
         tag = m.group(0)
+        if _is_system(tag) or 'clickable="true"' not in tag:
+            continue
+        b = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+        if not b:
+            continue
+        _clickables.append((int(b.group(1)), int(b.group(2)), int(b.group(3)), int(b.group(4)), tag))
+
+    def _contained_by_clickable(x1, y1, x2, y2, margin=20):
+        """判断某个区域是否被某个 clickable 节点包含（或中心落在其中）。"""
+        cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+        for bx1, by1, bx2, by2, tag in _clickables:
+            if (bx1 - margin <= cx <= bx2 + margin and by1 - margin <= cy <= by2 + margin) or \
+               (bx1 <= x1 and by1 <= y1 and bx2 >= x2 and by2 >= y2):
+                return True
+        return False
+
+    # 第一轮：只找 clickable=true 的节点（避免误命中介绍文案等非控件文本）
+    for m in re.finditer(r'<node[^>]*>', xml):
+        tag = m.group(0)
+        if _is_system(tag) or 'clickable="true"' not in tag:
+            continue
         for kw in keywords:
             if kw in tag:
-                clickable = 'clickable="true"' in tag
-                return True, clickable
-        if re.search(r'resource-id="[^"]*(play|sound|audio|speaker)[^"]*"', tag):
-            clickable = 'clickable="true"' in tag
-            return True, clickable
+                return True, True
+        if _rid_re.search(tag):
+            return True, True
+    # 第二轮：兜底找含关键词/rid 的节点（含 clickable=false 的），并尝试找外部 clickable 容器
+    nodes = list(re.finditer(r'<node[^>]*>', xml))
+    for idx, m in enumerate(nodes):
+        tag = m.group(0)
+        if _is_system(tag):
+            continue
+        hit = False
+        for kw in keywords:
+            if kw in tag:
+                hit = True
+                break
+        if not hit and _rid_re.search(tag):
+            hit = True
+        if not hit:
+            continue
+        clickable = 'clickable="true"' in tag
+        b = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+        if b and not clickable:
+            bx1, by1, bx2, by2 = map(int, b.groups())
+            # 2.1 向上/向外找包含自己的 clickable 容器（口语训练 record_btn 容器）
+            if _contained_by_clickable(bx1, by1, bx2, by2):
+                clickable = True
+            # 2.2 容器内子节点可点击 → 也视为可点击（仅限容器类节点）
+            if not clickable:
+                _leaf = re.search(r'class="android\.widget\.(TextView|ImageView|Button|ImageButton)"', tag)
+                if not _leaf:
+                    for m2 in nodes[idx + 1:]:
+                        t2 = m2.group(0)
+                        b2 = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', t2)
+                        if not b2:
+                            continue
+                        x1, y1, x2, y2 = map(int, b2.groups())
+                        if x1 >= bx1 and y1 >= by1 and x2 <= bx2 and y2 <= by2:
+                            if 'clickable="true"' in t2:
+                                clickable = True
+                                break
+                        else:
+                            break  # 超出容器范围 = 非子节点
+        return True, clickable
     return False, False
 
 
@@ -894,8 +969,10 @@ def _answer_loop(d, config, module_name):
                         "play_btn", "audio", "sound", "▶", "play_box")
             MIC_KWS = ("麦克风", "录音", "record", "mic", "开始作答",
                        "mic_box", "start_record")
-            play_found, play_clickable = _find_control(_xml, PLAY_KWS)
-            mic_found, mic_clickable = _find_control(_xml, MIC_KWS)
+            play_found, play_clickable = _find_control(
+                _xml, PLAY_KWS, rid_pattern=r'resource-id="[^"]*(play|sound|audio|speaker)[^"]*"')
+            mic_found, mic_clickable = _find_control(
+                _xml, MIC_KWS, rid_pattern=r'resource-id="[^"]*(record|mic)[^"]*"')
             if is_listening:
                 if play_found:
                     ev.append({"field": "音频", "type": "text_ok" if play_clickable else "text_mismatch",
