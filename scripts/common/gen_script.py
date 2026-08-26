@@ -167,10 +167,9 @@ class QuestionCollector:
         self.module = module
         self.version = version or "湘少版"
         self.grade = grade or "五年级上册"
-        # ★ 可生成脚本的模块白名单（用户确认）：只有这些模块的题目有明确题干+
-        #   选项+答案（无录音原文依赖）→ 能生成脚本解析；
-        #   听力专项/口语训练/语音评测 无录音原文 → 不能生成脚本
-        self.gen_allowed = module in ("单元自检", "巧记单词", "知识过关")
+        # ★ 改造方案：取消白名单，所有模块都生成脚本。
+        #   听音题用 ASR 补 recording，图片题用视觉模型补内容，跟读题用 speaker_word + recording。
+        self.gen_allowed = True
         # 保存目录：项目根/gen_scripts（默认，scripts/common/gen_script.py 上三级）；可传 save_root 覆盖
         self.save_root = save_root or os.path.join(
             os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "gen_scripts")
@@ -200,15 +199,18 @@ class QuestionCollector:
             speaker_word: ★ 2026-08-26 扬声器播放的单词（ASR 识别，听音题用，放题干后展示）
         """
         stem = (stem or "").strip()
-        # ★ 图片题（选项为图片）可能无题干文字但截图可见题目要求 →
-        #   有截图时不完全跳过，记录到 img_questions 单独处理
-        if (not stem or stem in ("(无题干文字)", "(无)", "听录音", "听录音，选择正确答案")):
+        answer = (answer or "").strip()
+        recording = (recording or "").strip()
+        # ★ 改造方案：放宽跳过条件——只有题干、答案、录音原文都为空才跳过。
+        #   听音题有 recording 即可收集，跟读题有 speaker_word 可收集，图片题有截图可补选项。
+        if not stem and not answer and not recording:
+            # 图片题：无题干但有截图 → 仍然记录（finish_unit 用视觉模型识别补全）
             if image_path and os.path.exists(image_path):
                 self.questions.append({
                     "qno": int(qno) if str(qno).isdigit() else qno,
                     "stem": stem, "options": [], "answer": str(answer).strip(),
                     "qtype": qtype or "", "unit": int(unit) if str(unit).isdigit() else unit,
-                    "recording": (recording or "").strip(),
+                    "recording": recording,
                     "knowledge": "", "big": big,
                     "image_path": image_path,
                     "time": datetime.now().strftime("%H:%M:%S"),
@@ -287,10 +289,8 @@ class QuestionCollector:
         """单元答完：把收集到的题写成脚本 docx（模板格式）。
         返回生成的文件路径；无题可写返回 None。
         """
-        # ★ 模块白名单拦截：听力专项/口语训练/语音评测 无录音原文，不生成脚本
-        if not self.gen_allowed:
-            print(f"  ⏭ {self.module} 不在脚本生成白名单（听力专项/口语训练/语音评测无录音原文），跳过")
-            return None
+        # ★ 改造方案：取消白名单拦截，所有模块都生成脚本
+        #   （听音题用 ASR 补 recording，图片题用视觉模型补内容，跟读题扬声器识别）
         if not self.questions:
             print(f"  ⚠ 单元 {unit} 无可生成解析的题目（{self.skipped_no_stem} 题无题干跳过）")
             return None

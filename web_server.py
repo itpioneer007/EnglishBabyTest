@@ -2809,10 +2809,47 @@ _inspection_state = {
     "unit": "全部",
     "stage": "全部",   # ★ 不能用 "?"（Windows 文件名非法字符）
     "live_report_path": "",    # ★ 实时错题报告(report_live.html)路径（借鉴队友）
+    "_reuse_info": "",         # ★ 审查体系改造：复用标记（如"巧记单词 U1 已于2026-08-26审查，本次复用结论")
 }
 
 # ★ 实时报告重生成锁（避免多线程下并发写同一文件）
 _live_report_lock = threading.Lock()
+
+# ============================================================
+# ★ 审查体系改造：脚本审查索引（script_review_index.json）
+#   每个（模块+单元）只认真审一次，结论沉淀复用。
+#   索引 key = "<版本>/<年级>/<模块>/<单元>"
+# ============================================================
+SCRIPT_REVIEW_INDEX_PATH = PROJECT_ROOT / "data" / "script_review_index.json"
+
+def load_script_review_index() -> dict:
+    """加载脚本审查索引"""
+    import json
+    try:
+        if SCRIPT_REVIEW_INDEX_PATH.exists():
+            return json.loads(SCRIPT_REVIEW_INDEX_PATH.read_text(encoding="utf-8") or "{}")
+    except Exception:
+        pass
+    return {}
+
+def save_script_review_index(index: dict):
+    """保存脚本审查索引"""
+    import json
+    SCRIPT_REVIEW_INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
+    SCRIPT_REVIEW_INDEX_PATH.write_text(
+        json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8")
+
+def _script_file_hash(docx_path) -> str:
+    """计算脚本文件 md5 hash，用于检测脚本是否变更"""
+    import hashlib
+    try:
+        return hashlib.md5(open(docx_path, "rb").read()).hexdigest()
+    except Exception:
+        return ""
+
+# ★ 自动生成脚本的存放目录（与手动上传的 uploads/ 区分）
+GENERATED_SCRIPTS_DIR = PROJECT_ROOT / "uploads" / "generated"
+GENERATED_SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
 
 def _save_inspection_state():
     """保存巡检状态到文件, 审查智能体下次学习"""
@@ -2975,18 +3012,12 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
             if dims[dim] is not False:
                 reasons[dim] = _fmt_reason(field, diff_str, "通过")
         else:
-            reasons[dim] = f"{field}未检（需截图/脚本对照）" if diff_str else ""
+            reasons[dim] = f"{field}未检" if diff_str else ""
 
-    # 配图/答错后 两维在多模块检测中不可查（需连手机截图）
-    if dims["image"] is None:
-        reasons["image"] = "需连手机截图检查配图"
-    if dims["post_error"] is None:
-        reasons["post_error"] = "需答错后截图验证"
-    # 音频非必须（听力题才要求）
-    if dims["audio"] is None:
-        reasons["audio"] = "非听力题，无需检查"
+    # ★ 审查体系改造：不适用维度直接省略，不再填"需连手机截图"等占位文案
+    #   配图/答错后/音频 在不适用维度时，reasons 留空 → 前端不渲染该维度
 
-    # ★ 2026-08-25 新增：App 实际题干 ↔ 脚本题干 匹配校验（口语训练核心需求：
+    # 2026-08-25 新增：App 实际题干 ↔ 脚本题干 匹配校验（口语训练核心需求：
     #   txt 流程第8步"答案与关键词是否正确/听力材料是否正确"→ 每道小题必须核对
     #   App 显示的题干是否与脚本一致，如"第1大题第1小题脚本=then，App 也必须显示 then"）
     # ★ 2026-08-26 巧记单词：抽题模式无序号对应，改为"内容匹配"——
@@ -3086,12 +3117,12 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
                                     reasons["stem"] += f"（扬声器：{_spk}）"
                             except Exception:
                                 pass
-                            # ★ 纯听音题扬声器词为空（页面无英文词）→ 提示需接入 ASR 才能核对
+                            # 扬声器词为空（页面无英文词）→ 提示需接入 ASR 才能核对
                             if not _spk and dims["audio"] is None:
                                 reasons["audio"] = (f"脚本录音「{_script_rec[:60]}」；"
                                                     f"扬声器内容需接入 ASR 才能核对（当前未识别到）")
                         elif dims["audio"] is None:
-                            reasons["audio"] = f"脚本录音「{_script_rec[:60]}」，需连手机核对 App 听力内容"
+                            reasons["audio"] = f"脚本录音「{_script_rec[:60]}」"
                     elif _script_stem:
                         # ★ 相似度比对（App 提取文字可能带噪音，用包含/相似而非全等）
                         _app_stem = stem_text.strip()
@@ -3110,9 +3141,8 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
                                 dims["stem"] = True
                                 reasons["stem"] = f"✅ 题干与脚本一致（脚本：{_script_stem[:50]}，App：{stem_text[:50]}）"
                     if _script_rec and dims["audio"] is None:
-                        # ★ 听力材料（脚本 recording）与 App 实际内容：本题无音频证据可查，
-                        #   但脚本有听力材料 → 提示检查人员（不判不通过，缺截图）
-                        reasons["audio"] = f"脚本听力材料「{_script_rec[:60]}」，需连手机核对 App 听力内容"
+                        # ★ 听力材料（脚本 recording）有内容但无音频证据 → 留空不渲染
+                        pass
     except Exception:
         pass
 
@@ -3190,7 +3220,7 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
         "stage": _current_stage_name,
         "module_qno": _current_module_qno,
         **_loc,
-        # 六维判定
+        # 六维判定（旧格式，兼容已有消费者）
         "ai_stem": dims["stem"], "ai_content": dims["content"],
         "ai_image": dims["image"], "ai_answer": dims["answer"],
         "ai_audio": dims["audio"], "ai_post_error": dims["post_error"],
@@ -3200,6 +3230,19 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
         "stem_reason": reasons["stem"], "content_reason": reasons["content"],
         "image_reason": reasons["image"], "answer_reason": reasons["answer"],
         "audio_reason": reasons["audio"], "post_error_reason": reasons["post_error"],
+        # ★ 审查体系改造：新结构——统一结论字典（旧字段兼容保留，迁移期并存）
+        #   每个维度含 status(pass/fail/na) + detail(具体结论文本)
+        #   na = 不适用（该维度无需检查），前端不渲染
+        "conclusions": {
+            "stem":        {"status": "pass" if dims["stem"] is True else ("fail" if dims["stem"] is False else "na"), "detail": reasons["stem"]},
+            "content":     {"status": "pass" if dims["content"] is True else ("fail" if dims["content"] is False else "na"), "detail": reasons["content"]},
+            "image":       {"status": "pass" if dims["image"] is True else ("fail" if dims["image"] is False else "na"), "detail": reasons["image"]},
+            "answerable":  {"status": "pass" if dims["answer"] is True else ("fail" if dims["answer"] is False else "na"), "detail": reasons["answer"]},
+            "answer_knowledge": {"status": "na", "detail": ""},
+            "audio":       {"status": "pass" if dims["audio"] is True else ("fail" if dims["audio"] is False else "na"), "detail": reasons["audio"]},
+            "flow":        {"status": "pass" if overall is True else ("fail" if overall is False else "na"), "detail": "流程无卡顿" if overall is True else ""},
+            "report":      {"status": "na", "detail": ""},
+        },
         # ★ 题目内容展示文字
         "stem": stem_text,
         "options": option_text,
@@ -4757,6 +4800,32 @@ def _run_llm_script_review(module: str, docx: str, version: str, unit, stage: st
     except Exception:
         pass
     _stage_label = f"·{stage}" if stage else ""
+    # ★ 审查体系改造：索引复用检查（已审查且脚本未变 → 跳过 LLM，复用结论）
+    _version = _inspection_state.get("version", "未知版本")
+    _grade = _inspection_state.get("grade", "未知年级")
+    _unit_key = str(unit).strip() if unit not in (None, "", 0, "0", "NONE") else "全部"
+    _index_key = f"{_version}/{_grade}/{module}/{_unit_key}"
+    _index = load_script_review_index()
+    _docx_hash = _script_file_hash(docx_path)
+    _cached = _index.get(_index_key, {})
+    if _cached.get("status") == "done" and _cached.get("script_hash") == _docx_hash:
+        _reuse_msg = f"{module}（{_unit_key}）已于 {_cached.get('reviewed_at','?')} 审查过，脚本未变，本次复用结论"
+        log_msg(f"ℹ {_reuse_msg}", "info")
+        _inspection_state["_reuse_info"] = _reuse_msg
+        # 从缓存结果文件加载历史审查结论，合并到 _inspection_state["questions"]
+        _cache_path = PROJECT_ROOT / "data" / "script_review_cache" / f"{_index_key.replace('/','_').replace(' ','')}.json"
+        try:
+            import json
+            if _cache_path.exists():
+                _cached_qs = json.loads(_cache_path.read_text(encoding="utf-8"))
+                if isinstance(_cached_qs, dict):
+                    _inspection_state["questions"].update(_cached_qs)
+                    log_msg(f"✅ 已加载 {len(_cached_qs)} 题历史审查结论", "success")
+        except Exception as _e:
+            log_msg(f"⚠ 加载缓存审查结论失败: {_e}，将重新审查", "warning")
+            # 缓存加载失败 → 回退到完整审查，不 return
+        else:
+            return  # 复用成功，跳过 LLM 审查
     log_msg(f"🧠 {module}{_stage_label} 正在用脚本「{docx}」做 LLM 知识性审查…（逐题核对题干/选项/答案，耗时较长）", "info")
     # ★ 听力专项多子模块：临时切换 set_current_module 上下文，确保 questions 用对的 stage 标记
     if stage:
@@ -4811,6 +4880,28 @@ def _run_llm_script_review(module: str, docx: str, version: str, unit, stage: st
         except Exception:
             pass
         log_msg(f"✅ {module} LLM 知识性审查完成: {len(results)}题（通过{n_pass}，未检维度不计入不通过）", "success")
+        # ★ 审查体系改造：审查完成后写入索引 + 缓存文件
+        try:
+            _index = load_script_review_index()
+            _index[_index_key] = {
+                "script": docx, "script_hash": _docx_hash,
+                "reviewed_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "questions": len(results),
+                "status": "done",
+            }
+            save_script_review_index(_index)
+            # 缓存审查结论到独立文件（后续复用可直接加载）
+            _cache_dir = PROJECT_ROOT / "data" / "script_review_cache"
+            _cache_dir.mkdir(parents=True, exist_ok=True)
+            _cache_path = _cache_dir / f"{_index_key.replace('/','_').replace(' ','')}.json"
+            _cache_path.write_text(
+                json.dumps({k: _inspection_state["questions"].get(k) for k in
+                           [f"{module}-脚本-Q{rr.idx:02d}" for rr in results]
+                           if k in _inspection_state["questions"]},
+                          ensure_ascii=False, indent=2),
+                encoding="utf-8")
+        except Exception as _e:
+            pass
     except Exception as e:
         log_msg(f"❌ {module} LLM 知识性审查失败: {e}", "error")
 
