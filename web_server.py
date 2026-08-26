@@ -239,7 +239,8 @@ def detect_screen_resolution(adb_serial: str = ""):
     """通过 ADB 检测手机实际分辨率，更新缩放比"""
     global _detected_res, _scale_x, _scale_y
     try:
-        adb_path = r"C:\Users\bunana\AppData\Local\Microsoft\WinGet\Packages\Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe\platform-tools\adb.exe"
+        # ★ 跨机器自动定位 adb（复用 ADBController 的探测逻辑，不写死任何用户路径）
+        adb_path = ADBController._find_adb()
         cmd = [adb_path]
         if adb_serial:
             cmd.extend(["-s", adb_serial])
