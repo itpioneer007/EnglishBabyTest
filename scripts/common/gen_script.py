@@ -122,6 +122,9 @@ def _extract_ui_question(xml, answer="", qtype_hint=""):
     _merged = []
     for t in stem_nodes:
         t = re.sub(r"[（(]\s*共\d+分\s*[）)]", "", t).strip()  # 清洗分值
+        # ★ 2026-08-26 清洗题干前缀题号进度（如 "13/32 选择各组中不同类的一项" →
+        #   "选择各组中不同类的一项"）。App 常把题号进度和题干放同一 TextView。
+        t = re.sub(r"^\s*\d+\s*[/／]\s*\d+\s*", "", t).strip()
         if not t:
             continue
         if any(t == s or t in s or s in t for s in _merged):
@@ -201,6 +204,9 @@ class QuestionCollector:
         stem = (stem or "").strip()
         answer = (answer or "").strip()
         recording = (recording or "").strip()
+        # ★ 2026-08-26 题干兜底清洗：去掉题号进度前缀（"13/32 选择..." → "选择..."）。
+        #   _extract_ui_question 已处理，这里兜底（防其它来源传入带前缀题干）。
+        stem = re.sub(r"^\s*\d+\s*[/／]\s*\d+\s*", "", stem).strip()
         # ★ 改造方案：放宽跳过条件——只有题干、答案、录音原文都为空才跳过。
         #   听音题有 recording 即可收集，跟读题有 speaker_word 可收集，图片题有截图可补选项。
         if not stem and not answer and not recording:
@@ -234,9 +240,29 @@ class QuestionCollector:
         opts = [str(o).strip() for o in (options or []) if str(o).strip()]
         # 清洗选项：去掉多余空白（"A.  sport" → "A. sport"）
         opts = [re.sub(r"\s+", " ", o) for o in opts]
+        # ★ 2026-08-26 选项自动补字母编号：若选项无字母前缀（如 ["went","visited","stay"]）
+        #   补成 ["A. went","B. visited","C. stay"]，这样答案字母(A/B/C)才能与选项对号。
+        #   否则脚本显示"选项：went visited stay / 正确答案：A"完全对不上。
+        _opts_normalized = []
+        for _i, _o in enumerate(opts):
+            if re.match(r"^[A-F][.、．]\s*", _o):
+                _opts_normalized.append(_o)
+            else:
+                _opts_normalized.append(f"{chr(65+_i)}. {_o}")
+        opts = _opts_normalized
+        # ★ 答案归一化：answer 若是选项内容（如 "went"）而非字母(A/B/C)，转成对应字母
+        #   （LLM 判定时返回的可能是选项内容；点击字母时已是字母，保留原样）
+        _ans_clean = (answer or "").strip()
+        if _ans_clean and len(_ans_clean) <= 40 and not re.match(r"^[A-F]$", _ans_clean.upper()):
+            for _i, _o in enumerate(opts):
+                _text = re.sub(r"^[A-F][.、．]\s*", "", _o).strip()
+                if _ans_clean.lower() in _text.lower() or _text.lower() in _ans_clean.lower():
+                    _ans_clean = chr(65 + _i)
+                    break
+            # 未匹配到明确字母 → 保留原答案（可能是拼音/单词内容），不强行改
         self.questions.append({
             "qno": int(qno) if str(qno).isdigit() else qno,
-            "stem": stem, "options": opts, "answer": str(answer).strip(),
+            "stem": stem, "options": opts, "answer": _ans_clean,
             "qtype": qtype or "", "unit": int(unit) if str(unit).isdigit() else unit,
             "recording": (recording or "").strip(),
             "speaker_word": (speaker_word or "").strip(),  # ★ 扬声器识别词（听音题）
@@ -377,8 +403,20 @@ class QuestionCollector:
             # 题干（完整内容：指令+具体内容，如"请找出与下面选项不符的一项"）
             _add_line(f"题干：{q['stem']}", size=11, space_after=2)
             _add_line(f"位置：{self._loc_str(q)}", size=11, space_after=2)
-            _add_line(f"选项：{'　　'.join(q['options']) if q['options'] else '（无文字选项）'}", size=11, space_after=2)
-            _add_line(f"正确答案：{q['answer']}", size=11, space_after=2)
+            # ★ 选项带字母编号展示（如 "A. went　　B. visited　　C. stay"）
+            _add_line(f"选项：{'　　'.join(q['options']) if q['options'] else '（无文字选项）'}",
+                      size=11, space_after=2)
+            # ★ 答案：优先给出字母 + 对应选项内容（让检查人一眼对上）
+            _ans = (q['answer'] or "").strip()
+            _ans_opt = ""
+            if _ans and re.match(r"^[A-F]$", _ans.upper()):
+                _idx = ord(_ans.upper()) - 65
+                if 0 <= _idx < len(q['options']):
+                    _ans_opt = re.sub(r"^[A-F][.、．]\s*", "", q['options'][_idx]).strip()
+            _ans_line = f"正确答案：{_ans}"
+            if _ans_opt:
+                _ans_line += f"（{_ans_opt}）"
+            _add_line(_ans_line, size=11, space_after=2)
             _add_line(f"知识点：{q['knowledge'] or self._auto_knowledge(q)}", size=11, space_after=10)
         doc.save(path)
         print(f"  ✅ 生成脚本: {path}（{len(self.questions)} 题，跳过无题干 {self.skipped_no_stem}）")

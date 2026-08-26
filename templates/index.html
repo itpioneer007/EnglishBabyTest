@@ -3374,6 +3374,59 @@
           .slice(0, 120);
       }
 
+      // ★ 2026-08-26 通用通过项过滤：题库里每道题都一样的检查结果（作答元素存在/
+      //   音频控件可点击/流程无卡顿/提取到N条文字 等）不算"结论"，卡片标题行不展示，
+      //   否则每张卡片都是同一句话，检查人员看不出区别。
+      function isGenericPass(detail) {
+        if (!detail) return true;
+        const g = [
+          "作答元素存在",
+          "作答元素:",
+          "音频控件",
+          "扬声器/播放",
+          "播放标识",
+          "流程无卡顿",
+          "流程无",
+          "提取到",
+          "条文字",
+          "可作答",
+          "选项",
+          "检测到",
+          "个选项",
+          "题干文字",
+          "已识别",
+          "通过",
+        ];
+        return g.some((k) => detail.includes(k));
+      }
+      // 从结论里剥掉通用噪音，只保留有信息量的（含脚本/扬声器/比对/不符/缺失/题干等关键词）
+      function meaningfulDetail(detail) {
+        if (!detail) return "";
+        if (isGenericPass(detail)) return "";
+        // 含具体判定的关键词才保留（脚本比对/扬声器内容/不符/错配/缺失/题干一致等）
+        const meaningful = [
+          "脚本",
+          "扬声器",
+          "不符",
+          "不一致",
+          "错配",
+          "缺失",
+          "缺",
+          "题干一致",
+          "题干与脚本",
+          "未找到",
+          "无",
+          "遗漏",
+          "错误",
+          "正确",
+          "答案",
+          "听力",
+          "recording",
+          "对照",
+        ];
+        return meaningful.some((k) => detail.includes(k)) ? detail : "";
+      }
+
       function updQ(f) {
         const qs = f.questions || {},
           ids = Object.keys(qs).sort(),
@@ -3452,6 +3505,14 @@
     </details>`;
         }
         // 4) 按模块/阶段分组渲染
+        // ★ 2026-08-26 修复卡片自动收回：pollInspect 每2s重渲染 questionList，
+        //   <details> 的 open 会被重置为初始 cardOpen → 用户手动展开几秒又收回。
+        //   渲染前记录当前已打开的 qc_ 集合，渲染时保留它们。
+        const openSet = new Set(
+          [...document.querySelectorAll("#questionList details.q-card-new[open]")].map(
+            (el) => el.id,
+          ),
+        );
         const groupKey = (qid) => {
           const s = String(qid),
             q = qs[qid];
@@ -3515,15 +3576,22 @@
                     });
                   }
                   // 结论式标题行
+                  // ★ 2026-08-26 突出每道题特征：优先显示题干摘要 + 有信息量的结论；
+                  //   过滤"作答元素存在/音频控件可点击/流程无卡顿"这类每道题都一样的通用项。
                   let conclusionLine = "";
+                  const stemBrief = cleanStem(q.stem).slice(0, 30);
                   if (pa === true) {
-                    // 通过：展示通过维度的详情摘要
-                    const dets = passDets
-                      .filter((d) => d.length < 50)
+                    // 通过：只保留有信息量的结论（脚本比对/扬声器/题干一致等）
+                    const meaningful = passDets
+                      .map((d) => meaningfulDetail(d))
+                      .filter(Boolean)
                       .slice(0, 2);
-                    conclusionLine = dets.length
-                      ? ` · ${dets.join(" · ")}`
-                      : " · 全部通过";
+                    const core = meaningful.length
+                      ? meaningful.join(" · ")
+                      : "";
+                    conclusionLine = stemBrief
+                      ? ` · ${stemBrief}${core ? " · " + core : ""}`
+                      : ` · ${core || "通过"}`;
                   } else if (pa === false) {
                     // 不通过：展示第一个不通过维度的原因
                     if (failDets.length) {
@@ -3531,6 +3599,9 @@
                     } else {
                       conclusionLine = " · ❌ 存在不通过项";
                     }
+                  } else {
+                    // 未审
+                    conclusionLine = stemBrief ? ` · ${stemBrief}` : "";
                   }
                   // 截图（不通过题才展示）
                   let shotHtml = "";
@@ -3542,9 +3613,16 @@
                     ? `<div class="q-reasons">${failDets.map((d) => `<div class="q-reason-line"><b>${d.key}:</b> ${escHtml(d.detail)}</div>`).join("")}</div>`
                     : "";
                   // 通过维度的详情（折叠，默认展开失败题）
-                  const passDetailHtml = passDets.length
-                    ? `<div class="q-pass-details">${passDets.map((d) => `<div class="q-pass-line">✅ ${escHtml(d)}</div>`).join("")}</div>`
-                    : "";
+                  // ★ 2026-08-26 过滤通用通过项（作答元素存在/流程无卡顿等），
+                  //   只展示有信息量的结论（脚本比对/扬声器/题干一致/分值），突出差异
+                  const passDetailHtml = (() => {
+                    const meaningful = passDets
+                      .map((d) => meaningfulDetail(d))
+                      .filter(Boolean);
+                    return meaningful.length
+                      ? `<div class="q-pass-details">${meaningful.map((d) => `<div class="q-pass-line">✅ ${escHtml(d)}</div>`).join("")}</div>`
+                      : "";
+                  })();
                   // 人工标注
                   const actHtml = q.human_label
                     ? `<span class="done-tag">已标注: ${q.human_label}${q.human_note ? " · " + q.human_note : ""}</span>`
@@ -3568,8 +3646,12 @@
                   if (q.score_info) {
                     contentHtml += `<div class="q-opts" style="color:#92400e">分值: ${escHtml(q.score_info)}</div>`;
                   }
-                  // 卡面折叠状态：不通过题默认展开，通过题默认折叠
-                  const cardOpen = pa === false ? "open" : "";
+                  // 卡面折叠状态：★ 用户手动打开过的保留 open，未打开按状态默认
+                  //   （不通过题默认展开，通过题默认折叠）；沿用 openSet 保住用户操作
+                  const cardOpen =
+                    openSet.has("qc_" + qid) || (!openSet.size && pa === false)
+                      ? "open"
+                      : "";
                   return `<details class="q-card-new" id="qc_${qid}" ${cardOpen}>
       <summary class="q-head-new ${pa === false ? "fail" : unrev ? "pending" : "pass"}">
         <div class="qnum">Q${qnum}</div>

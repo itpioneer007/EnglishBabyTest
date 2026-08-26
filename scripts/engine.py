@@ -1652,68 +1652,88 @@ def _handle_word_fill(d, config):
     print(f"    选词填空题，处理中...")
     step_log("📝 选词填空：点击空位→选词→检查", "step")
 
-    # 空位定义：短文区的 CheckBox（text='' 是空位；checked=false=未填，true=已填）
-    #   ★ 短文可滚动 → 不能固定 y 范围，排除顶部(状态栏<200)和底部导航(>2250)即可
+    # ★ 2026-08-26 空位精确识别（重写，实测）：真正的选词空位 = resource-id 含
+    #   select_tv 的 CheckBox（text='' = 未填；text=单词 = 已填）。之前误把序号节点
+    #   (new_tv_sort) 或短文小块当空位 → 点错位置不弹选词面板 → 死循环。
+    #   ★ 实测（阅读短文选词填空）：空位编号 new_tv_sort(text=1..5) + 空位输入框 select_tv
+    #     (CheckBox,text='')，必须点 select_tv(输入框) 才能激活选词面板！
     def _find_slots():
         xml = d.dump_hierarchy()
         slots = []
-        for m in re.finditer(r'<node[^>]*CheckBox[^>]*>', xml):
+        # ① 首选：select_tv（空位输入框 CheckBox）
+        for m in re.finditer(r'<node\b[^>]*>', xml):
             b = m.group(0)
+            rid = re.search(r'resource-id="([^"]*)"', b)
             bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', b)
-            if not bm:
+            if not (rid and bm):
+                continue
+            rid_s = rid.group(1)
+            if not re.search(r'(select_tv|select|_sel)', rid_s, re.I):
                 continue
             x1, y1, x2, y2 = int(bm.group(1)), int(bm.group(2)), int(bm.group(3)), int(bm.group(4))
-            if y1 < 200 or y2 > 2250:   # 排除顶部状态栏/底部导航
+            if y1 < 200 or y2 > 2250:
                 continue
-            # 空位 CheckBox 的 text 为空（无单词）；已填的显示单词
             tm = re.search(r'text="([^"]*)"', b)
-            txt = (tm.group(1).strip() if tm else '')
-            checked = 'checked="true"' in b
-            # 未填 = checked=false 且 text 空（或有 tv_sort 序号）
-            slots.append(((x1+x2)//2, (y1+y2)//2, checked, txt))
-        # 未填优先，按 y 排序
-        slots.sort(key=lambda s: (s[2], s[1]))
-        return slots
-
-    # 选词栏单词：点击空位后弹出的英文单词（排除短文正文 question_title_tv + 空位 select_tv）
-    #   ★ 短文可滚动 → y 范围放宽（150-2250），靠"非question_title_tv + 非短文词"区分
-    def _find_word_panel(exclude_texts):
-        xml = d.dump_hierarchy()
-        words = []
+            txt = tm.group(1).strip() if tm else ''
+            # ★ 已填判定：只看 text 是否有单词。checked=true 只是"当前激活的空位"，
+            #   不代表已填（实测：点空位激活时 checked=true 但 text=''，填词后 text=单词）。
+            has_content = bool(txt)  # 填过 = text 是单词
+            slots.append(((x1 + x2) // 2, (y1 + y2) // 2, has_content, txt))
+        if slots:
+            # 未填优先，按 y 排序
+            slots.sort(key=lambda s: (s[2], s[1]))
+            return slots
+        # ② 无 select_tv（旧题/方框空位）→ 回退：找含序号节点 nearby 的空位，或 CheckBox 空位
         for m in re.finditer(r'<node[^>]*>', xml):
             b = m.group(0)
-            tm = re.search(r'text="([^"]{2,30})"', b)
-            if not tm:
-                continue
-            txt = tm.group(1).strip()
-            if not re.search(r'[A-Za-z]', txt):   # 必须含英文
-                continue
-            if txt in exclude_texts:              # 排除短文已有词
-                continue
-            if 'question_title_tv' in b:          # 排除短文正文
-                continue
-            if 'select_tv' in b:                  # 排除空位本身（已填单词的空位）
-                continue
+            cls = re.search(r'class="([^"]*)"', b)
             bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', b)
-            if not bm:
+            if not (cls and bm):
                 continue
             x1, y1, x2, y2 = int(bm.group(1)), int(bm.group(2)), int(bm.group(3)), int(bm.group(4))
-            if y1 < 150 or y2 > 2250:             # 排除顶部/底部导航
+            if y1 < 200 or y2 > 2250:
                 continue
-            if len(txt) > 25:
-                continue
-            checked = 'checked="true"' in b
-            words.append((txt, checked, (x1+x2)//2, (y1+y2)//2, y1))
-        words.sort(key=lambda w: w[4])
-        return words
+            cname = cls.group(1)
+            if 'CheckBox' in cname:
+                tm = re.search(r'text="([^"]*)"', b)
+                txt = tm.group(1).strip() if tm else ''
+                slots.append(((x1 + x2) // 2, (y1 + y2) // 2, bool(txt), txt))
+        return slots
 
+    # ★ 2026-08-26 重构：选词填空与"方框排序"同构（用户指示）——
+    #   排序题 = 点方框激活 → 循环点底部序号按钮(1,2,3..，点一个消耗一个)；
+    #   选词填空 = 点空位激活 → 循环点底部单词按钮(点一个消耗一个)。
+    #   复用排序题模式B的"动态检测底部按钮 + 点完重新检测 + 栏空即完成"逻辑，
+    #   只是底部按钮从"序号"换成"单词(select_btn)"。
+
+    # ① 动态检测底部单词按钮容器（对齐排序题 _find_num_btns 的检测思路）
+    #   ★ 实测：单词是 select_btn(TextView,clickable=false)，但父容器 clickable=true——
+    #     与排序题序号按钮同构。点一个单词 → 填进空位 → 单词栏整体上移(用户说的"选项框上移")，
+    #     容器不消失 → 完成判定用"空位填满"，不用"栏空"。
+    #   单词按钮特征：y 1500-2250、clickable=true、宽 100-400（同排序题序号按钮结构）
+    def _find_word_btns():
+        btns = []
+        try:
+            for e in (d.xpath('//*[@clickable="true"]').all() or []):
+                b = e.bounds
+                w = b[2] - b[0]
+                if S_h(d, 1500) < b[1] < S_h(d, 2250) and 100 < w < 400:
+                    btns.append(((b[0] + b[2]) // 2, (b[1] + b[3]) // 2))
+        except Exception:
+            pass
+        # 按 (y, x) 排序（左上优先），与排序题一致
+        btns.sort(key=lambda t: (t[1], t[0]))
+        return btns
+
+    # ② 点第一个空位激活（选词面板/单词栏出现在底部）
     def _wait_stable(timeout=3.0, interval=0.3):
         """等待页面稳定（连续两次 dump 一致），用户要求'点击到不会变化再继续'"""
         try:
             _a = d.dump_hierarchy()
             time.sleep(interval)
             _b = d.dump_hierarchy()
-            return _a == _b
+            if _a == _b:
+                return True
         except Exception:
             return True
         t0 = time.time()
@@ -1728,61 +1748,79 @@ def _handle_word_fill(d, config):
                 pass
         return False
 
-    # ── 循环填所有空位 ──
-    # ★ 收集短文正文已有词（question_title_tv 中），选词栏单词排除这些（防误点正文）
-    def _collect_short_texts():
+    _slots0 = _find_slots()
+    _empty0 = [s for s in _slots0 if not s[2]]
+    if _empty0:
         try:
-            _xml = d.dump_hierarchy()
-            return set(re.findall(r'question_title_tv[^>]*text="([^"]{1,25})"', _xml)
-                       + re.findall(r'text="([^"]{1,25})"[^>]*question_title_tv', _xml))
-        except Exception:
-            return set()
-    _short_words = _collect_short_texts()
-    _max_rounds = 20
-    for _round in range(_max_rounds):
-        slots = _find_slots()
-        # ★ 未填 = checked=false 且 text 空（填过的空位 checked=false 但 text=单词，如 fifty）
-        empty = [s for s in slots if not s[2] and not s[3]]
-        if not empty:
-            break   # 全部填完
-        cx, cy = empty[0][0], empty[0][1]
-        # ① 点击空位激活选词栏
-        try:
-            d.click(cx, cy)
+            d.click(_empty0[0][0], _empty0[0][1])
+            print(f"    → 点第一个空位激活 ({_empty0[0][0]},{_empty0[0][1]})")
         except Exception:
             pass
-        # ★ 等选词栏出现（用户关键：点击到稳定不变化再继续）——轮询等新单词出现
-        time.sleep(1.2)
-        for _w in range(4):
-            _xml_w = d.dump_hierarchy()
-            _panel = _find_word_panel(_short_words)
-            if _panel:
-                break
-            time.sleep(0.8)
-        _wait_stable()
-        # ② 找选词栏单词并点一个（优先未选的）
-        words = _panel if '_panel' in dir() else _find_word_panel(_short_words)
-        if not words:
-            print(f"    ⚠ 空位({cx},{cy})点击后无选词栏出现，可能是已填/布局变化")
+        time.sleep(1.0)
+
+    # ③ 循环点单词按钮（★ 对齐排序题模式A的"已点集合去重"）：
+    #   实测：每个单词容器对应一个固定单词，点过它（词填进空位）后再点无效。
+    #   必须用 clicked_keys 记录已点容器，依次点【不同】的容器（如 mooncakes→tea→moon...），
+    #   直到空位填满 或 没有新容器可点。
+    #   单词栏每次点词后整体上移(y 1877→1689)，容器 bounds 变化 → 用"相对位置+序号"去重不可靠，
+    #   用"空位已填数"判断该容器是否已点（每点一个不同词 = 空位+1）。
+    _clicked_cnt = 0
+    _last_filled = -1  # 上次循环已填空位数（防抖：点后无变化说明该容器已失效，跳过）
+    for _round in range(15):
+        _slots_now = _find_slots()
+        _empty_now = [s for s in _slots_now if not s[2]]
+        _filled_now = len(_slots_now) - len(_empty_now)
+        if not _empty_now:
+            break  # 空位全满 = 完成
+        # 点单词栏第一个按钮
+        btns = _find_word_btns()
+        if not btns:
+            print(f"    ⚠ 单词栏未识别（可能已填完或布局异常）")
             break
-        target = None
-        for w in words:
-            if not w[1]:   # 未选中优先
-                target = w
-                break
-        if target is None and words:
-            target = words[0]
+        # 找"当前可点"的容器：优先第一个；若上次点它空位没变（已失效），按序找下一个
+        target = btns[0]
+        if _filled_now == _last_filled:
+            # 上一个容器点了没效果（已失效）→ 尝试下一个容器
+            _tried = []
+            for _b in btns[1:]:
+                if _b in _tried:
+                    continue
+                _tried.append(_b)
+                try:
+                    d.click(_b[0], _b[1])
+                    time.sleep(0.8)
+                    _slots_c = _find_slots()
+                    _em_c = [s for s in _slots_c if not s[2]]
+                    if len(_slots_c) - len(_em_c) > _filled_now:
+                        _clicked_cnt += 1
+                        print(f"    → 选词{_clicked_cnt} @({_b[0]},{_b[1]})")
+                        _last_filled = len(_slots_c) - len(_em_c)
+                        break
+                except Exception:
+                    pass
+            if _tried and len(_tried) == len(btns) - 1 and _clicked_cnt == 0:
+                print(f"    ⚠ 所有单词容器均无效果，可能已填完")
+            continue
         try:
-            d.click(target[2], target[3])
+            d.click(target[0], target[1])
+            _clicked_cnt += 1
+            print(f"    → 选词{_clicked_cnt} @({target[0]},{target[1]})")
+            _last_filled = _filled_now
         except Exception:
             pass
-        # ③ 等单词选中/空位更新稳定（用户关键要求：不变化再继续）
-        time.sleep(1.2)
-        _wait_stable()
-        print(f"    空位{_round+1} → 选词 {target[0]}")
-        step_log(f"  ✏ 选词: {target[0]}", "info")
-    else:
-        print(f"    ⚠ 选词填空 {_max_rounds} 轮未填完，可能选词栏异常")
+        # 等单词填进空位（布局变化/上移稳定）
+        for _w in range(5):
+            time.sleep(0.5)
+            _slots_chk = _find_slots()
+            _em_chk = [s for s in _slots_chk if not s[2]]
+            if not _em_chk:
+                break  # 已填满
+            _filled_chk = len(_slots_chk) - len(_em_chk)
+            if _filled_chk > _filled_now:
+                _last_filled = _filled_chk
+                break  # 填上了 → 继续
+    if _clicked_cnt == 0:
+        print(f"    ⚠ 未点到任何单词（单词栏未识别），尝试兜底点击检查")
     _wait_stable()
 
     # ── 点"检查" ──

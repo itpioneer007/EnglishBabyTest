@@ -4421,6 +4421,9 @@ def api_unit_run():
 
     data = request.get_json() or {}
     units = data.get("units", [1])
+    # ★ 2026-08-26：年级/版本从请求读取（默认继承主页当前），不再写死五年级——用户切到六上后可测六上卷
+    _g = data.get("grade", "") or ""
+    _v = data.get("version", "") or ""
 
     def _run():
         _register_task_thread()  # 记录线程 id，供"立即停止"注入异常
@@ -4435,14 +4438,15 @@ def api_unit_run():
             d = _connect_device()
             log_msg("设备已连接")
 
-            # 关广告 + 确认年级
+            # 关广告 + 确认年级（仅当请求传了 grade 才切换；默认继承当前，不强制）
             for _ in range(3):
                 dismiss_global_popups(d)
             close_ad(d)
-            ok = ensure_grade(d, "五年级上册", "湘少版")
-            log_msg("年级确认: 湘少版 五年级上册" if ok else "⚠ 年级切换失败，继续尝试")
+            if _g:
+                ok = ensure_grade(d, _g, _v or "湘少版")
+                log_msg(f"年级确认: {_v or '湘少版'} {_g}" if ok else "⚠ 年级切换失败，继续尝试")
 
-            q = run_module(d)
+            q = run_module(d, units=units)
             log_msg(f"✅ 单元自检完成: {q} 题")
             set_done()
         except SystemExit:

@@ -267,11 +267,10 @@ def _answer_loop(d, max_q=200):
                 return
             from common.gen_script import _extract_ui_question
             _qi = _extract_ui_question(_xml_src)
-            # ★ 听音题直接跳过（题干含"听"字：听词汇/听句子/听对话/听录音），
-            #   不调 LLM 判定答案（避免无用功），add() 内部也会二次过滤
             _stem0 = (_qi["stem"] or "").strip()
-            if not _stem0 or "听" in _stem0:
-                return
+            # ★ 2026-08-26 不再因"听"字跳过：单元自检含听力题（题干可见），
+            #   也应收集进脚本（allow_listen=True 让 add() 放行听音题）。
+            #   仅当题干空且无答案时才不收集（add() 内部兜底）。
             _ans = _opt or ""
             # 若未提供答案（填空/排序等），用 LLM 判定（题目内容可见时可靠）
             if not _ans and _stem0:
@@ -279,7 +278,7 @@ def _answer_loop(d, max_q=200):
                     from src.reviewer_common import LLMClient
                     _opt_str = " ".join(_qi["options"]) if _qi["options"] else "（无选项）"
                     _llm_ans = (LLMClient.from_config().ask(
-                        f"五年级英语题，题干：{_stem0}，选项：{_opt_str}。"
+                        f"六年级英语题，题干：{_stem0}，选项：{_opt_str}。"
                         f"请直接回答正确答案是哪个选项（只输出选项内容，不要解释）") or "").strip()
                     if _llm_ans and len(_llm_ans) < 40:
                         _ans = _llm_ans
@@ -287,7 +286,8 @@ def _answer_loop(d, max_q=200):
                     pass
             if _stem0 and _ans:
                 _coll.add(qno=q, stem=_stem0, options=_qi["options"],
-                          answer=_ans, qtype=_qi["qtype"] or "单元自检", unit=_cur_unit)
+                          answer=_ans, qtype=_qi["qtype"] or "单元自检", unit=_cur_unit,
+                          allow_listen=True)
         except Exception:
             pass
 
@@ -363,9 +363,15 @@ def _answer_loop(d, max_q=200):
         _has_letter = bool(re.search(r'text="[TFABCDE]"', xml0))
         _fill_hint = any(kw in xml0 for kw in
                          ('填空', '补全', '每空', '填写', '填词', '完成小短文'))
-        # ★ 选词填空优先：题干含"选词"且页面有 tv_sort 空位结构 → 用选词专用处理
-        #   （选词填空不是打字输入，是点空位→选词栏→点单词；用户确认流程）
-        _word_fill_hint = ('选词' in xml0) and ('tv_sort' in xml0) and not _has_edittext
+        # ★ 选词填空优先：题干含"选词/方框/选词填空"且无 EditText → 用选词专用处理
+        #   ★ 2026-08-26 放宽触发条件：不依赖 'tv_sort'（部分题目空位用别的方式标识，
+        #     如 LinearLayout 方框/图片），仅凭"选词/从方框选择/选择单词填入"即可进入
+        #     ，避免落到"未知题型"导致答失败。_handle_word_fill 内部再按实际结构识别空位。
+        _word_fill_hint = (
+            any(kw in xml0 for kw in ('选词填空', '选词', '从方框中选择', '选择单词填入',
+                                      '单词填入', '方框中选择'))
+            and not _has_edittext
+        )
         if _word_fill_hint:
             from engine import _handle_word_fill
             if _handle_word_fill(d, {}):
