@@ -1765,8 +1765,14 @@ def api_errors_summary():
 
 @app.route("/api/versions/available")
 def api_versions_available():
-    """可用版本列表 = 预设湘鲁版本 + 知识库中的版本（含湘少版等），去重"""
-    preset = ["新湘鲁五上", "新湘鲁五下", "新湘鲁六上", "新湘鲁六下"]
+    """可用版本列表 = App 实际展示的5个2024审定版本（真机 2026-08-26 确认），
+    + 知识库中可能存在的其他版本（兜底），去重"""
+    # ★ 2026-08-26：App 当前只展示这5个版本（带2024审定），preset 改为完整版本名
+    #   旧 preset "新湘鲁五上"等拆分形式已停用（与 App 实际版本不一致）
+    preset = [
+        "湘少版(2024审定)", "湘鲁版(2024审定)", "人教版(PEP)(2024审定)",
+        "教科版(2024审定)", "教研版(2024审定)",
+    ]
     versions = list(preset)
     try:
         from src.knowledge_base import KnowledgeBase
@@ -2924,6 +2930,12 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
             if _sc:
                 _inspection_state["_last_score_info"] = _sc
             continue
+        # ★ 2026-08-26 扬声器播放内容（听音题）：存到状态供脚本比对/题干后展示
+        if field == "扬声器":
+            _spk = (e.get("actual") or "").strip()
+            if _spk:
+                _inspection_state["_last_speaker_word"] = _spk
+            continue
         # 题型识别 → 只更新 question_type
         if field == "题型":
             diff = e.get("diff") or ""
@@ -2977,6 +2989,32 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
     # ★ 2026-08-25 新增：App 实际题干 ↔ 脚本题干 匹配校验（口语训练核心需求：
     #   txt 流程第8步"答案与关键词是否正确/听力材料是否正确"→ 每道小题必须核对
     #   App 显示的题干是否与脚本一致，如"第1大题第1小题脚本=then，App 也必须显示 then"）
+    # ★ 2026-08-26 巧记单词：抽题模式无序号对应，改为"内容匹配"——
+    #   ① 题干类型一致：App 题干（如"听录音选释义"）在脚本同单元能找到同类题型
+    #   ② 内容一致：App 关键词/选项/录音词 在脚本该题型下能找到对应单词
+    def _script_match_qiaoji(_sq_list, _u_cur):
+        """巧记单词内容匹配：返回 (匹配到的脚本题 or None, 相似度)。
+        匹配策略：按 App 题干在脚本同单元找最相似题。
+          - ratio ≥ 0.6 → 同题型，返回该题（上层写"✅题干类型一致"）
+          - ratio < 0.6 → 无同类题（App 题型/题干与脚本不符），返回 None（上层报不通过）
+        """
+        import difflib as _dl
+        _app_all = (stem_text + " " + option_text).strip()
+        _cands = [s for s in _sq_list if _u_cur and s.unit == _u_cur]
+        if not _cands:
+            _cands = _sq_list
+        _best, _best_ratio = None, 0.0
+        for s in _cands:
+            _ss = (getattr(s, "stem", "") or "").strip()
+            if not _ss:
+                continue
+            _r = _dl.SequenceMatcher(None, _ss[:20], stem_text[:20]).ratio() if stem_text else 0.0
+            if _r > _best_ratio:
+                _best_ratio, _best = _r, s
+        if _best is not None and _best_ratio >= 0.6:
+            return _best, _best_ratio
+        return None, _best_ratio
+
     try:
         _docx_cur = (_GLOBAL_DOCX_MAP or {}).get(_current_module_name, "")
         if _docx_cur and stem_text and stem_text not in ("(无题干文字)", "(无)"):
@@ -2989,27 +3027,72 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
                         docx_path=str(_docx_path_cur), unit=0, screenshot_dir="", verbose=False))
                     _SCRIPT_CACHE[_docx_cur] = _agent_cur.script_questions
                 _sq_list = _SCRIPT_CACHE[_docx_cur]
-                # ★ 按 (unit, big, stage_idx) 定位脚本小题（口语训练结构）
+                # ★ 当前单元号
                 _u_cur = _inspection_state.get("unit", 0)
                 try:
                     _u_cur = int(str(_u_cur).split("-")[0])
                 except Exception:
                     _u_cur = 0
-                _sq_cur = None
-                if big and _u_cur:
-                    for _s in _sq_list:
-                        if _s.unit == _u_cur and _s.big == big and _s.stage_idx == qidx:
-                            _sq_cur = _s
-                            break
-                if not _sq_cur:
-                    for _s in _sq_list:
-                        if _s.global_idx == qidx:
-                            _sq_cur = _s
-                            break
+                # ★ 巧记单词：内容匹配（无序号，按题型+内容找）
+                _qiaoji_ratio = 0.0
+                if _current_module_name == "巧记单词":
+                    _sq_cur, _qiaoji_ratio = _script_match_qiaoji(_sq_list, _u_cur)
+                    if _sq_cur is None:
+                        # ★ 题干类型与脚本不符（App 题型在脚本中找不到同类）
+                        #   → 题干维度不通过，原因写清楚（用户要求：App看图填单词但脚本听录音填单词）
+                        dims["stem"] = False
+                        _script_types = sorted({getattr(s, "type_2", "") or "未知"
+                                                for s in (_sq_list if _u_cur else _sq_list)
+                                                if getattr(s, "unit", 0) == _u_cur and (getattr(s, "type_2", "") or "") not in ("", "/")})[:5]
+                        reasons["stem"] = (f"❌ 题型与脚本不符：App 题干「{stem_text[:40]}」在脚本中无同类题"
+                                           f"（脚本该单元题型: {_script_types or '未知'}）")
+                        _sq_cur = None
+                else:
+                    _sq_cur = None
+                    # ★ 按 (unit, big, stage_idx) 定位脚本小题（口语训练结构）
+                    if big and _u_cur:
+                        for _s in _sq_list:
+                            if _s.unit == _u_cur and _s.big == big and _s.stage_idx == qidx:
+                                _sq_cur = _s
+                                break
+                    if not _sq_cur:
+                        for _s in _sq_list:
+                            if _s.global_idx == qidx:
+                                _sq_cur = _s
+                                break
                 if _sq_cur:
                     _script_stem = (getattr(_sq_cur, "stem", "") or "").strip()
                     _script_rec = (getattr(_sq_cur, "recording", "") or "").strip()
-                    if _script_stem:
+                    if _current_module_name == "巧记单词":
+                        # ★ 巧记单词匹配成功：题干类型一致
+                        if dims["stem"] is not False:
+                            dims["stem"] = True
+                            reasons["stem"] = (f"✅ 题干类型与脚本一致（脚本同类题「{_script_stem[:40]}」，"
+                                               f"App：「{stem_text[:40]}」）")
+                        # ★ 2026-08-26 扬声器播放内容 ↔ 脚本 recording 对比（ASR）
+                        #   扬声器词 = 从题干后提取的英文单词（_last_speaker_word，由模块写入）
+                        _spk = _inspection_state.get("_last_speaker_word", "")
+                        if _script_rec:
+                            try:
+                                from common.asr import compare_against_script
+                                _cmp = compare_against_script(_spk, _script_rec)
+                                _audio_reason = _cmp.get("reason", "")
+                                # 扬声器内容 append 到题干原因后（用户要求：放题干后面展示）
+                                if _cmp.get("consistent") is False and dims["audio"] is not False:
+                                    dims["audio"] = False
+                                if dims["audio"] is None and _audio_reason:
+                                    reasons["audio"] = _audio_reason
+                                if dims["stem"] is not False and _spk:
+                                    reasons["stem"] += f"（扬声器：{_spk}）"
+                            except Exception:
+                                pass
+                            # ★ 纯听音题扬声器词为空（页面无英文词）→ 提示需接入 ASR 才能核对
+                            if not _spk and dims["audio"] is None:
+                                reasons["audio"] = (f"脚本录音「{_script_rec[:60]}」；"
+                                                    f"扬声器内容需接入 ASR 才能核对（当前未识别到）")
+                        elif dims["audio"] is None:
+                            reasons["audio"] = f"脚本录音「{_script_rec[:60]}」，需连手机核对 App 听力内容"
+                    elif _script_stem:
                         # ★ 相似度比对（App 提取文字可能带噪音，用包含/相似而非全等）
                         _app_stem = stem_text.strip()
                         _ok = (_script_stem in _app_stem) or (_app_stem in _script_stem)
@@ -4655,6 +4738,24 @@ def _run_llm_script_review(module: str, docx: str, version: str, unit, stage: st
     if not docx_path.exists():
         log_msg(f"❌ 脚本文件不存在: {docx}（请在页面上传脚本）", "error")
         return
+    # ★ 2026-08-26 修复：后端也校验【脚本文件名 vs 模块名】是否匹配！
+    #   前端单模块手动脚本兜底曾直接绑 reviewDocx 下拉的脚本（不校验模块名）→
+    #   用户测"巧记单词"却拿到"听力专项U6"脚本做 LLM 审查（模块和脚本毫无关系）。
+    #   这里做最终防线：文件名不含本模块关键词 → 视为无匹配脚本，仅基础完整性。
+    try:
+        _mod_kws = {
+            "听力专项": ("听力专项", "听力"),
+            "口语训练": ("口语", "朗读"),
+            "单元自检": ("单元自检", "单元检测"),
+            "知识过关": ("知识过关", "知识", "重点词汇", "重点句型"),
+            "巧记单词": ("巧记", "单词"),
+            "语音评测": ("语音评测", "语音"),
+        }.get(module, (module,))
+        if not any(k in docx for k in _mod_kws):
+            log_msg(f"ℹ {module}：脚本「{docx}」不是{module}模块的脚本，无匹配脚本 → 仅做基础完整性检查", "info")
+            return
+    except Exception:
+        pass
     _stage_label = f"·{stage}" if stage else ""
     log_msg(f"🧠 {module}{_stage_label} 正在用脚本「{docx}」做 LLM 知识性审查…（逐题核对题干/选项/答案，耗时较长）", "info")
     # ★ 听力专项多子模块：临时切换 set_current_module 上下文，确保 questions 用对的 stage 标记
@@ -4682,11 +4783,10 @@ def _run_llm_script_review(module: str, docx: str, version: str, unit, stage: st
         #   （全不匹配才提示），选 U4+U8 而脚本只有 U6-U10 时，U4 不在范围被静默忽略。
         if not agent.script_questions:
             _units_ok = sorted(u for u in getattr(agent, "script_units", set()) if u > 0)
-            _units_want = normalize_units(_u)
-            _note = (f"脚本「{docx}」不含所选单元 {sorted(_units_want) if _units_want else '全部'}！"
-                     f"脚本实际单元: {_units_ok if _units_ok else '未解析到'}"
-                     f"（该单元无脚本覆盖，跳过 LLM 脚本审查，仅基础完整性）")
-            log_msg(f"ℹ {module} {_note}", "info")
+            # ★ 2026-08-26 精简提示：用户期望直接说"无覆盖脚本"即可，
+            #   不再罗列脚本名/期望单元/实际单元等细节（检查人员只需要知道"没得审"）
+            log_msg(f"ℹ {module}：无覆盖所选单元的脚本 → 跳过 LLM 脚本审查，仅基础完整性"
+                    f"（脚本实际单元: {_units_ok if _units_ok else '未解析到'}）", "info")
             return
         # ★ 部分覆盖提示：所选单元里只有部分被脚本覆盖（如选 4,8 脚本只有 8）
         _units_want2 = normalize_units(_u)
@@ -4694,11 +4794,8 @@ def _run_llm_script_review(module: str, docx: str, version: str, unit, stage: st
         if _units_want2:
             _missing = sorted(u for u in _units_want2 if u not in _units_ok2)
             if _missing:
-                log_msg(
-                    f"ℹ {module} 所选单元 {sorted(_units_want2)} 中，"
-                    f"脚本「{docx}」未覆盖: {_missing}"
-                    f"（脚本实际单元: {sorted(u for u in _units_ok2 if u > 0) or '未解析到'}；"
-                    f"未覆盖单元仅做基础完整性检查）", "info")
+                # ★ 2026-08-26 精简提示：只说哪些单元没覆盖（去掉脚本名/细节）
+                log_msg(f"ℹ {module}：单元 {_missing} 无覆盖脚本，仅做基础完整性检查", "info")
         # ★ 不传 screenshots：自动化过程只有答错截图，旧截图与本次题目对不上会误导 LLM 判定
         #   → 统一走 LLM 脚本审查（_review_script_llm：脚本信息 → LLM 六维判定，理由具体有说服力）
         results = agent.review(screenshots={})

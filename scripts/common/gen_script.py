@@ -180,7 +180,8 @@ class QuestionCollector:
 
     # ------------------------------------------------------------
     def add(self, qno, stem="", options=None, answer="", qtype="",
-            unit=0, recording="", knowledge="", big=None, image_path=""):
+            unit=0, recording="", knowledge="", big=None, image_path="",
+            allow_listen=False, speaker_word=""):
         """收集一道题。仅当有题干（非纯听音）才保留，否则跳过。
 
         Args:
@@ -194,6 +195,9 @@ class QuestionCollector:
             knowledge: 知识点（可选，LLM 生成或留空）
             big: 大题号（口语训练等"第N大题"定位用）
             image_path: 图片题截图路径（★ 选项为空但有截图时，finish_unit 用视觉模型识别补全）
+            allow_listen: ★ 2026-08-26 是否允许收集听音题（巧记单词传 True——
+              听音选释义题题干+扬声器识别词+选项都应进解析脚本；听力专项/口语训练仍 False）
+            speaker_word: ★ 2026-08-26 扬声器播放的单词（ASR 识别，听音题用，放题干后展示）
         """
         stem = (stem or "").strip()
         # ★ 图片题（选项为图片）可能无题干文字但截图可见题目要求 →
@@ -216,12 +220,13 @@ class QuestionCollector:
         #   "听词汇/听句子/听对话/听录音" 全是听力题，题目实质在音频里，
         #   脚本里没有可解析的题干文字，跳过不做脚本审查
         #   （保留含"听"的非听音词：如"听说读写"等极少数情况由下方白名单保护）
+        # ★ 2026-08-26 allow_listen=True（巧记单词）：听音题也收集——
+        #   题干 + 选项 + 扬声器识别词(speaker_word) + recording 一并进解析脚本，
+        #   这样听音选释义题也能生成脚本且能核对扬声器内容
         _LISTEN_WHITELIST = ("听说读写", "听力理解能力", "听说")
-        if "听" in stem and not any(w in stem for w in _LISTEN_WHITELIST):
-            self.skipped_no_stem += 1
-            return
-        # 兜底：英语 Listen/listen 开头（"Listen and choose"等）
-        if re.match(r"^\s*(Listen|listen|Listening)\b", stem):
+        _is_listen = ("听" in stem and not any(w in stem for w in _LISTEN_WHITELIST)) or \
+            bool(re.match(r"^\s*(Listen|listen|Listening)\b", stem))
+        if _is_listen and not allow_listen:
             self.skipped_no_stem += 1
             return
         opts = [str(o).strip() for o in (options or []) if str(o).strip()]
@@ -232,6 +237,7 @@ class QuestionCollector:
             "stem": stem, "options": opts, "answer": str(answer).strip(),
             "qtype": qtype or "", "unit": int(unit) if str(unit).isdigit() else unit,
             "recording": (recording or "").strip(),
+            "speaker_word": (speaker_word or "").strip(),  # ★ 扬声器识别词（听音题）
             "knowledge": (knowledge or "").strip(),
             "big": big,
             "time": datetime.now().strftime("%H:%M:%S"),

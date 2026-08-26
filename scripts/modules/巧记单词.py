@@ -293,6 +293,61 @@ def _enter_level(d, level_no):
     return True
 
 
+def _extract_speaker_from_feedback(xml) -> str:
+    """★ 2026-08-26 首选方案：从【答错反馈页】提取扬声器播放的单词。
+
+    真机实测（听音选释义题）：答错后反馈页出现「文字解析 / 听力内容：new」——
+    App 自己把扬声器播放的单词写出来了！这是最可靠、无需 ASR 的扬声器内容来源。
+
+    格式：<node resource-id=".../analysis_tv" text="听力内容：new&#10;"/>
+    提取结果：'new'（句子场景 'My father is a worker.' → 小写整句）
+    """
+    try:
+        # ① 直接匹配 "听力内容：xxx" 文本（含 &#10; 换行实体）
+        m = re.search(r'text="听力内容[:：]\s*([A-Za-z0-9\s\'\-]+)', xml)
+        if m:
+            _w = m.group(1).strip()
+            if len(_w) >= 1:
+                return _w.lower()
+        # ② 兜底：找 analysis_tv 节点内的文本再匹配
+        m2 = re.search(r'analysis_tv[^>]*text="([^"]*)"', xml)
+        if m2:
+            t = m2.group(1)
+            mm = re.search(r'听力内容[:：]\s*([A-Za-z0-9\s\'\-]+)', t)
+            if mm and len(mm.group(1).strip()) >= 1:
+                return mm.group(1).strip().lower()
+    except Exception:
+        pass
+    return ""
+
+
+def _speaker_word_of(xml) -> str:
+    """从答题页 XML 提取扬声器播放的单词（听音题）。
+
+    听音选释义题：扬声器播放一个英文单词（如 new），选项是中文释义。
+    ⚠ 纯听音选释义题页面【无英文单词】（选项是中文释义）→ _speaker_word_of 返回空，
+      这是正常现象——必须接入 ASR(audio转文本) 才能拿到真正的扬声器单词。
+    本函数仅对"页面含英文单词"的题（如跟读题/选项带英文）兜底。
+    ★ 接入 ASR 后：asr_transcribe(音频) 优先，_speaker_word_of 只作兜底。
+    ★ 2026-08-26：答错反馈页的"听力内容：xxx"是最可靠来源，见 _extract_speaker_from_feedback。
+    """
+    try:
+        _en_words = re.findall(r"[A-Za-z]{2,}", " ".join(
+            t for t in re.findall(r'text="([^"]+)"', xml)))
+        # ★ 2026-08-26 增加词性标注过滤：跟读题页面显示"new / adj. 新来的；新的"，
+        #   adj/n/v/adv 等词性标注会被误提取为单词
+        _filter = ("check", "next", "submit", "listen", "original", "play",
+                   "skip", "retry", "again", "finish", "complete",
+                   "adj", "n", "v", "adv", "prep", "conj", "pron", "num", "art")
+        _cands = [w for w in _en_words
+                  if w.lower() not in _filter and len(w) >= 2
+                  and not w.lower().isdigit()]
+        # 纯听音选释义题选项全中文 → 无英文候选，正常返回空（等 ASR）
+        return (_cands[-1].lower() if _cands else "")
+    except Exception:
+        return ""
+
+
 def _answer_loop(d, max_q=20):
     """答题循环（模拟运行填充题型细节）：
     已知流程：
@@ -301,25 +356,88 @@ def _answer_loop(d, max_q=20):
       → 再答 → 检查 → 二次答错 → 「跳过」→ 下一题
     - 答对：检查 → 直接下一题
     - 最后一题：检查 → 「提交」
+    ★ 2026-08-26 修复题数记录：以 App 页面 N/M（如"第1关 1/15"）为准记录当前题号，
+      答错重做同一题（重新答题）不重复计数；无进度文本时才回退本地计数。
     """
     q = 0
     retry_count = 0  # 当前题答错次数
     idle = 0  # 连续空转计数（防空转死循环）
-    _ev_q = -1  # 已发证据卡的题号（每题只发一次）
+    _ev_q = -1  # 已发证据卡的题号（每题只发一次，按 App 实际题号）
+    _last_progress = 0  # 上一次读取到的 App 进度题号（防重复发卡）
+    _no_question_logged = False  # 无试题关卡是否已记过提示（只记一次）
     while True:
+        # ★ 从 App 页面读取进度 N/M（"第1关 1/15" / "1/15" / "15/15"）
+        _cur_progress = 0
+        _total_progress = 0
+        try:
+            _xml_prog = d.dump_hierarchy()
+            m = re.search(r'第?\d+\s*关\s*(\d+)/(\d+)', " ".join(
+                t for t in re.findall(r'text="([^"]+)"', _xml_prog)))
+            if m:
+                _cur_progress = int(m.group(1))
+                _total_progress = int(m.group(2))
+            else:
+                m2 = re.search(r'(\d+)/(\d+)', " ".join(
+                    t for t in re.findall(r'text="([^"]+)"', _xml_prog)))
+                if m2:
+                    _cur_progress = int(m2.group(1))
+                    _total_progress = int(m2.group(2))
+        except Exception:
+            pass
+        # ★ 以 App 实际题号为准（答错重做同一题时 _cur_progress 不变 → 不重复计数）
+        _cur_q = _cur_progress if _cur_progress > 0 else q + 1
         # ★ 每题界面级完整性检查证据（题型/题干/选项/音频/作答）→ 前端证据卡
-        if q != _ev_q:
+        #   按 App 实际题号去重（答错重做同一题不再重复发卡）
+        if _cur_q != _ev_q and _cur_progress > 0:
             try:
                 _xml_ev = d.dump_hierarchy()
-                step_log(f"  第{q+1}题 完整性检查", "info",
-                         collect_ui_evidence(_xml_ev, qtype="巧记单词"))
-                _ev_q = q
+                # ★ 2026-08-26 扬声器播放内容：优先用反馈页提取的（"听力内容：new"，
+                #   最可靠），其次页面英文单词兜底；追加到证据卡（题干后展示）
+                _ev = collect_ui_evidence(_xml_ev, qtype="巧记单词")
+                _fb_spk_cached = getattr(_answer_loop, "_last_fb_spk", "") or ""
+                _spk = _fb_spk_cached or _speaker_word_of(_xml_ev)
+                if _spk:
+                    _ev.append({"field": "扬声器", "type": "info",
+                                "expected": "听音题扬声器播放的单词",
+                                "actual": _spk, "diff": f"扬声器播放：{_spk}"})
+                step_log(f"  第{_cur_q}题 完整性检查", "info", _ev)
+                _ev_q = _cur_q
             except Exception:
                 pass
         # ★ 停止检查：web_server 收到停止请求 → 中断
         if should_stop():
             step_log("⏹ 收到停止请求，中断当前模块", "warning")
             return q
+        # ★ 2026-08-26 无试题关卡识别：进入关卡后若页面没有任何答题元素
+        #   （提交/检查/下一题/选项/录音/填字母），且无 N/M 进度 → 该关未出好题，
+        #   只记录一句提示，不走每题证据卡刷屏，直接跳出关卡继续下一关。
+        try:
+            _xml_st = d.dump_hierarchy()
+            _st_txts = " ".join(t for t in re.findall(r'text="([^"]+)"', _xml_st))
+            _has_answer_elm = any(k in _st_txts for k in (
+                "提交", "检查", "下一题", "跳过", "重新答题", "原音", "点击录音",
+                "马上闯关", "字母", "补全"))
+            _has_progress = bool(re.search(r'\d+/\d+', _st_txts))
+            # 无试题特征：既无答题元素也无进度，且出现"没有试题/暂无/无题"类文案
+            _no_q_txt = any(k in _st_txts for k in ("没有试题", "暂无题目", "暂无数", "无题", "敬请期待", "正在开发"))
+            if _no_q_txt:
+                if not _no_question_logged:
+                    step_log(f"⚠ 本关无试题（页面：{_st_txts[:40]}），跳过本关继续下一关", "warning")
+                    _no_question_logged = True
+                # 返回已完成的题数（0），跳出关卡
+                return q
+            if not _has_answer_elm and not _has_progress and _cur_progress == 0:
+                # 首轮可能仍在 loading/浏览页，给几次机会；连续多次无答题元素才判无试题
+                _no_answer_frames = getattr(_answer_loop, "_no_answer_frames", 0) + 1
+                _answer_loop._no_answer_frames = _no_answer_frames
+                if _no_answer_frames >= 6:
+                    step_log(f"⚠ 本关进入后未出现答题元素（可能未出好题），跳过本关（当前页：{_st_txts[:40]}）", "warning")
+                    _answer_loop._no_answer_frames = 0
+                    return q
+            else:
+                _answer_loop._no_answer_frames = 0
+        except Exception:
+            pass
         # 提交（关卡完成）→ 唯一正常退出
         if d(text="提交").exists(timeout=0.15):
             try:
@@ -328,20 +446,33 @@ def _answer_loop(d, max_q=20):
                 pass
             print(f"    ✅ 提交！关卡完成")
             time.sleep(0.8)
-            return q
-        # ★ 题目解析收集：有题干的题收集（含"听"录音题/无题干自动跳过）
+            # ★ 2026-08-26：以 App 实际题号（_cur_progress）为准返回完成题数，
+            #   答错重做不计入（_cur_progress 未变）
+            return max(_cur_progress, q) if _cur_progress else q
+        # ★ 题目解析收集：有题干的题收集（含听音题——巧记单词 allow_listen=True）
+        #   ★ 2026-08-26：听音选释义题（题干含"听"）之前被跳过，现在也收集，
+        #     题干 + 选项 + 扬声器识别词(speaker_word) + recording 一并进解析脚本
         try:
             if _coll is not None:
                 from common.gen_script import _extract_ui_question
+                from common.asr import asr_transcribe
                 _xml_q = d.dump_hierarchy()
                 _qi = _extract_ui_question(_xml_q)
                 _stem_q = (_qi["stem"] or "").strip()
-                if _stem_q and "听" not in _stem_q:
+                # ★ 扬声器单词：优先用反馈页提取的（"听力内容：xxx"，最可靠），
+                #   其次页面英文单词兜底，最后 ASR（未接入返回空）
+                _fb_spk_cached = getattr(_answer_loop, "_last_fb_spk", "") or ""
+                _speaker_word = _fb_spk_cached or _speaker_word_of(_xml_q)
+                if _stem_q:
                     _m_opt = re.search(r'text="([TFABCDE])"', _xml_q)
                     _ans_q = _m_opt.group(1) if _m_opt else ""
                     if _ans_q:
-                        _coll.add(qno=q+1, stem=_stem_q, options=_qi["options"],
-                                  answer=_ans_q, qtype="巧记单词", unit=_cur_unit)
+                        # ★ 2026-08-26：qno 用 App 实际题号（_cur_q），避免答错重做重复记；
+                        #   allow_listen=True 让听音题也进脚本
+                        _coll.add(qno=_cur_q, stem=_stem_q, options=_qi["options"],
+                                  answer=_ans_q, qtype="巧记单词", unit=_cur_unit,
+                                  recording=_speaker_word, speaker_word=_speaker_word,
+                                  allow_listen=True)
         except Exception:
             pass
         # 弹窗处理：退出确认弹窗（带"温馨提示"标题才是真弹窗；正常答题页的
@@ -372,6 +503,11 @@ def _answer_loop(d, max_q=20):
             time.sleep(0.6)
             retry_count = 0
             idle = 0
+            # ★ 新题清除上一题的扬声器缓存（防串题）
+            try:
+                _answer_loop._last_fb_spk = ""
+            except Exception:
+                pass
             continue
         # 跳过（二次答错）
         if d(text="跳过").exists(timeout=0.15):
@@ -384,11 +520,31 @@ def _answer_loop(d, max_q=20):
             retry_count = 0
             q += 1
             idle = 0
-            idle = 0
+            # ★ 新题清除上一题的扬声器缓存（防串题）
+            try:
+                _answer_loop._last_fb_spk = ""
+            except Exception:
+                pass
             continue
-        # 重新答题（一次答错）
+        # 重新答题（一次答错）→ ★ 反馈页有「听力内容：xxx」= 扬声器播放的单词
         if d(text="重新答题").exists(timeout=0.15):
             try:
+                # ★ 2026-08-26 从反馈页提取扬声器单词（App 自己显示"听力内容：new"），
+                #   补发一条带"扬声器"字段的证据卡 → web_server 与脚本 recording 对比
+                _xml_fb = d.dump_hierarchy()
+                _fb_spk = _extract_speaker_from_feedback(_xml_fb)
+                if _fb_spk:
+                    # ★ 缓存供同题重做时证据卡使用
+                    _answer_loop._last_fb_spk = _fb_spk
+                    try:
+                        _fb_ev = collect_ui_evidence(_xml_fb, qtype="巧记单词")
+                        _fb_ev.append({"field": "扬声器", "type": "info",
+                                       "expected": "听音题扬声器播放的单词",
+                                       "actual": _fb_spk, "diff": f"扬声器播放：{_fb_spk}"})
+                        step_log(f"  第{_cur_q}题 检查（扬声器内容）", "info", _fb_ev)
+                        print(f"    🔊 扬声器内容: {_fb_spk}")
+                    except Exception:
+                        pass
                 d(text="重新答题").click()
             except Exception:
                 pass
