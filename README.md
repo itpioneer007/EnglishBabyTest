@@ -1,3 +1,11 @@
+
+
+# src/ — C 同学：错误溯源与报告导出模块
+
+> 本目录是「英语宝模块检测智能体」项目里 **C 同学** 负责的全部源码。
+> 职责：把 A/B 同学跑完检测后产出的错题数据，转成**红框截图 + 错误文件夹 + 网页/CSV 报告 + 邮件**。
+
+
 # 英语宝模块检测系统
 
 基于 **ADB + uiautomator2** 的英语宝 APP 自动化检测工具。
@@ -12,11 +20,25 @@
 | **Web 控制面板** | 一键启动任一模块，日志实时显示 |
 | **多分辨率适配** | 所有坐标按屏幕比例动态换算，任意手机可用 |
 | **题型智能分流** | 按题目文字自动识别题型并调用对应处理逻辑 |
+
 | **错题溯源与报告** | 每道错题溯源到 维度/原因/建议 + 红框截图 + 网页/CSV/邮件报告（同学C 模块） |
+
 
 ---
 
 ## 一、环境要求
+
+
+| 文件 | 分工 | 干什么 |
+|---|---|---|
+| `trace_engine.py` | **C1 + C2** | 溯源数据引擎（算错因/建议/坐标）+ 用 Pillow 画红框 |
+| `error_collector.py` | **C3** | 遍历所有题，把错题整理成 `errors/{版本}_{单元}/{模块}/{题号}/` 分层文件夹 |
+| `report_exporter.py` | **C4** | 生成网页报告（全貌 + 仅错误）和 CSV 汇总表 |
+| `email_sender.py` | **C5** | 把报告通过邮件发给老师 |
+
+
+> 另外还有 `routes/`（溯源 API、导出 API 蓝图）属于 C 同学，在上级目录 `英语宝模块检测/routes/`；本目录只放上面 4 个核心引擎。
+
 
 - Python 3.10+
 - ADB（Android Platform Tools，已加入 `PATH`）
@@ -26,15 +48,35 @@
 ## 二、依赖
 
 ```bash
+
+pip install pillow        # trace_engine / error_collector 用
+
+cd 英语宝模块检测
+pip install -r requirements.txt
+pip install uiautomator2
+
 cd 英语宝模块检测
 pip install -r requirements.txt
 pip install uiautomator2
 pip install pillow        # 同学C 的 trace_engine / error_collector 用（红框标注）
+
 ```
 
 `email_sender.py` 只用 Python 标准库 `smtplib`，无需额外安装。
 
+
+> ⚠️ 这些文件用 `from src.xxx import ...` 互相引用，所以运行时要保证**项目根目录**（`英语宝模块检测/`）在 Python 路径里。本地测试用根目录的 `run_report.py` 即可。
+
+---
+
+## 四、本地运行（测试用）
+
+在项目根目录执行：
+```bash
+python run_report.py
+
 ## 三、运行
+
 
 ### 运行 Web 面板（推荐）
 
@@ -63,6 +105,9 @@ python modules/语音评测.py     # 语音评测
 ## 四、目录结构
 
 ```
+- `ai_*` 为 `False` → 该项不通过，记一条错误；`null` → 未检查（当通过）；`True` → 通过。
+- qid 格式：`教材-模块-单元-题号`（模块可省略，省略时模块列留空）。
+
 英语宝模块检测/
 ├── web_server.py                 # Web 控制面板（Flask，唯一启动入口）
 ├── config.yaml                   # 配置（设备/APP）
@@ -199,6 +244,10 @@ d.press("back")             # 收起键盘
 
 ---
 
+<<<<<<< HEAD
+*构建于 2026年8月 · WorkBuddy + ADB + uiautomator2*
+>>>>>>> 11ce51b981aa79e22a84830a9389d04342ca3b13
+=======
 ## 附：同学C · 错误溯源与报告导出模块
 
 > 职责：把检测跑完后产出的错题数据，转成**红框截图 + 错误文件夹 + 网页/CSV 报告 + 邮件**。
@@ -279,3 +328,4 @@ class EmailSender:                                   # 邮件
 ---
 
 *构建于 2026年8月 · WorkBuddy + ADB + uiautomator2*
+>>>>>>> c0c0e7b31289b3145e75a9adc6dfbd4707049627
