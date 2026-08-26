@@ -269,13 +269,16 @@ def sc_xy(xy: tuple) -> tuple:
 
 def scale_all_coords():
     """原地缩放所有坐标字典，使之适配当前手机分辨率"""
-    global MODULE_COORDS, TABS, SETTINGS_ICON, AD_CLOSE
+    global MODULE_COORDS, TABS, SETTINGS_ICON, AD_CLOSE, MODULE_PATTERNS
     if _scale_x == 1.0 and _scale_y == 1.0:
         return
     MODULE_COORDS = {k: sc_xy(v) for k, v in MODULE_COORDS.items()}
     TABS = {k: sc_xy(v) for k, v in TABS.items()}
     SETTINGS_ICON = sc_xy(SETTINGS_ICON)
     AD_CLOSE = sc_xy(AD_CLOSE)
+    # ★ 修复：MODULE_PATTERNS 中的坐标也需要缩放
+    MODULE_PATTERNS = {k: (v[0], v[1], sc_xy(v[2]) if v[2] else None)
+                       for k, v in MODULE_PATTERNS.items()}
     print(f"  [坐标缩放] 所有坐标已缩放 ({REFERENCE_RES[0]}x{REFERENCE_RES[1]} -> {_detected_res})")
 
 
@@ -699,7 +702,7 @@ def run_login_task():
         update_progress(4, 6, "点击登录")
         # 先按 exact 尝试
         if not adb.click_element(text="登录", exact=True):
-            adb.tap(540, 1232)  # fallback: 登录按钮已知坐标
+            adb.tap(*sc(540, 1232))  # fallback: 登录按钮已知坐标
         time.sleep(3)
 
         log_msg("处理协议弹窗...")
@@ -798,7 +801,7 @@ def run_full_task(version: str, grade: str, modules: list):
         # 2. 关广告
         cur += 1
         log_msg(f"{cur}/{total} 关广告")
-        adb.tap(540, 1821)
+        adb.tap(*AD_CLOSE)
         time.sleep(1)
 
         # 3. 登录 (仅当需要时)
@@ -813,11 +816,11 @@ def run_full_task(version: str, grade: str, modules: list):
             adb.click_element(text="登录", exact=True)
             time.sleep(2)
             if adb.wait_for_element(text="同意", timeout=3):
-                adb.tap(540, 1550)
+                adb.tap(*sc(540, 1550))
                 time.sleep(1.5)
         else:
             log_msg(f"  已登录, 跳过", "success")
-        adb.tap(540, 1821)
+        adb.tap(*AD_CLOSE)
         time.sleep(1)
 
         # 4. 切版本 (仅当需要时)
@@ -835,8 +838,8 @@ def run_full_task(version: str, grade: str, modules: list):
         if on_correct_version:
             log_msg(f"  已是 {version}, 跳过切换", "success")
         else:
-            adb.tap(972, 2220); time.sleep(2)
-            adb.tap(1000, 170); time.sleep(1.5)
+            adb.tap(*TABS["我"]); time.sleep(2)
+            adb.tap(*SETTINGS_ICON); time.sleep(1.5)
             adb.click_element(text="个人信息", exact=True); time.sleep(1.5)
             adb.click_element(text="英语所学教材版本", exact=True); time.sleep(1.5)
             adb.click_element(text=version, exact=True); time.sleep(1.5)
@@ -846,14 +849,14 @@ def run_full_task(version: str, grade: str, modules: list):
         log_msg(f"{cur}/{total} 返回首页")
         for _ in range(3):
             adb.press_back(); time.sleep(1)
-        adb.tap(108, 2233); time.sleep(3)
-        adb.tap(540, 1821); time.sleep(1)
+        adb.tap(*TABS["英语"]); time.sleep(3)
+        adb.tap(*AD_CLOSE); time.sleep(1)
 
         # 6. 选年级
         if grade:
             cur += 1
             log_msg(f"{cur}/{total} 选择年级: {grade}")
-            adb.tap(346, 275); time.sleep(1.5)
+            adb.tap(*sc(346, 275)); time.sleep(1.5)
 
             found = False
             for attempt in range(4):
@@ -865,13 +868,13 @@ def run_full_task(version: str, grade: str, modules: list):
                         found = True
                         break
                 if found: break
-                adb.swipe(540, 1700, 540, 900, 300); time.sleep(1)
+                adb.swipe(*sc(540, 1700), *sc(540, 900), 300); time.sleep(1)
 
             # 关闭弹窗
             adb.press_back(); time.sleep(1)
             adb.press_back(); time.sleep(1)
-            adb.tap(108, 2233); time.sleep(3)
-            adb.tap(540, 1821); time.sleep(1)
+            adb.tap(*TABS["英语"]); time.sleep(3)
+            adb.tap(*AD_CLOSE); time.sleep(1)
 
         # 7. 稳定
         cur += 1
@@ -890,7 +893,7 @@ def run_full_task(version: str, grade: str, modules: list):
                 log_msg(f"  ⏬ 滚动到 {module}")
                 found_deep = False
                 for scroll_step in range(5):
-                    adb.swipe(200, 1600, 200, 1200, 400)
+                    adb.swipe(*sc(200, 1600), *sc(200, 1200), 400)
                     time.sleep(1)
                     elements = adb.dump_ui()
                     for e in elements:
@@ -916,7 +919,7 @@ def run_full_task(version: str, grade: str, modules: list):
 
             cur += 1
             adb.press_back(); time.sleep(1.5)
-            adb.tap(540, 1821); time.sleep(1)
+            adb.tap(*AD_CLOSE); time.sleep(1)
 
         log_msg(f"✅ 完成! {version} {grade} {len(modules)}模块", "success")
         adb.screenshot("99_complete.png")
@@ -1025,7 +1028,7 @@ def run_grade_scan_task():
             cur += 1
             log_msg(f"6/{total} 选择年级: {grade}")
             update_progress(cur, total, f"选择年级: {grade}")
-            adb.tap(346, 275)
+            adb.tap(*sc(346, 275))
             time.sleep(3)
 
             # 动态查找年级文字（支持滚动）
@@ -1041,14 +1044,14 @@ def run_grade_scan_task():
                 if found:
                     break
                 # 没找到，滚屏
-                adb.swipe(540, 1700, 540, 900, 300)
+                adb.swipe(*sc(540, 1700), *sc(540, 900), 300)
                 time.sleep(2)
 
             if not found:
                 log_msg(f"  ⚠ 未找到年级 \"{grade}\"", "warning")
             time.sleep(3)
             # 关闭弹窗（点左上角）
-            adb.tap(108, 100)
+            adb.tap(*sc(108, 100))
             time.sleep(1)
             adb.screenshot("03_grade_selected.png")
 
@@ -1070,7 +1073,7 @@ def run_grade_scan_task():
             if module in DEEP_MODULES:
                 log_msg(f"  ⏬ 滚动到深度模块 {module}")
                 for _ in range(2):
-                    adb.swipe(540, 1900, 540, 600, 500)
+                    adb.swipe(*sc(540, 1900), *sc(540, 600), 500)
                     time.sleep(2)
                 # 重新读取位置 (滚动后坐标可能变)
                 elements = adb.dump_ui()
@@ -1134,16 +1137,16 @@ def run_inspect_loop():
         log_msg("启动APP")
         adb.launch_app(config.app.package)
         time.sleep(4)
-        adb.tap(540, 1821)  # 关广告
+        adb.tap(*AD_CLOSE)  # 关广告
         time.sleep(0.5)
-        adb.tap(108, 2233)  # 英语tab
+        adb.tap(*TABS["英语"])  # 英语tab
         time.sleep(3)
-        adb.tap(540, 1821)
+        adb.tap(*AD_CLOSE)
 
         # 2. 滚到单元自检
         log_msg("滚动到单元自检")
         for i in range(4):
-            adb.swipe(200, 1600, 200, 1200, 400)
+            adb.swipe(*sc(200, 1600), *sc(200, 1200), 400)
             time.sleep(0.5)
             elements = adb.dump_ui()
             for e in elements:
@@ -1153,7 +1156,7 @@ def run_inspect_loop():
             if any('单元自检' in (e.text or '') for e in elements):
                 break
         time.sleep(3)
-        adb.tap(540, 1821)
+        adb.tap(*AD_CLOSE)
 
         # 3. 等加载 + 点AI检测去答题
         log_msg("进入AI检测")
@@ -1166,9 +1169,9 @@ def run_inspect_loop():
         time.sleep(5)
 
         # 4. 关规则弹窗 + 开始答题
-        adb.tap(540, 1578)
+        adb.tap(*sc(540, 1578))
         time.sleep(0.5)
-        adb.tap(554, 2116)
+        adb.tap(*sc(554, 2116))
         time.sleep(10)
 
         # 5. 逐题巡检
@@ -1212,9 +1215,9 @@ def run_inspect_loop():
             time.sleep(1)
 
             # 连点两次底部按钮 (检查→下一题)
-            adb.tap(540, 2174)
+            adb.tap(*sc(540, 2174))
             time.sleep(1.5)
-            adb.tap(540, 2174)
+            adb.tap(*sc(540, 2174))
             time.sleep(1.5)
 
             if cur >= 40:
@@ -1471,20 +1474,20 @@ def run_inspect_questions_task():
         time.sleep(2)
         sp.run(['C:/Users/bunana/AppData/Local/Microsoft/WinGet/Packages/Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe/platform-tools/adb.exe', '-s', config.device.serial, 'shell', 'am', 'start', '-n', 'com.dinoenglish.yyb/.base.SplashActivity'])
         time.sleep(5)
-        adb.tap(540, 1821)  # 关启动广告
+        adb.tap(*AD_CLOSE)  # 关启动广告
         time.sleep(3)
-        adb.tap(948, 1821)  # 关可能的第二个
+        adb.tap(*sc(948, 1821))  # 关可能的第二个
         time.sleep(2)
 
         # 2. 滚到专项突破底部 → 单元自检
         log_msg("滚动到单元自检...")
-        adb.tap(108, 2233)  # 英语tab
+        adb.tap(*TABS["英语"])  # 英语tab
         time.sleep(5)
         for _ in range(2):
-            adb.swipe(540, 1500, 540, 800, 400)
+            adb.swipe(*sc(540, 1500), *sc(540, 800), 400)
             time.sleep(2)
         # 小幅调整
-        adb.swipe(540, 1500, 540, 1100, 400)
+        adb.swipe(*sc(540, 1500), *sc(540, 1100), 400)
         time.sleep(2)
 
         # 动态找 单元自检
@@ -1498,17 +1501,17 @@ def run_inspect_questions_task():
 
         # 3. 点 AI检测的 去答题
         log_msg("点 AI检测 去答题...")
-        adb.tap(870, 756)
+        adb.tap(*sc(870, 756))
         time.sleep(6)
 
         # 4. 关规则弹窗
         log_msg("关闭训练规则弹窗...")
-        adb.tap(540, 1578)
+        adb.tap(*sc(540, 1578))
         time.sleep(2)
 
         # 5. 点开始答题
         log_msg("点开始答题...")
-        adb.tap(554, 2116)
+        adb.tap(*sc(554, 2116))
         time.sleep(8)  # AI生成题目
 
         # 6. 逐题巡检
@@ -1569,7 +1572,7 @@ def run_inspect_questions_task():
                         pass
 
             # 假设"下一题"按钮在右下角 (约 950, 1700~1900)
-            adb.tap(960, 1850)
+            adb.tap(*sc(960, 1850))
             time.sleep(2)
 
             # 检查是否还在题目页 (有 X/40)
@@ -2149,7 +2152,7 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
                 has_main = any('英语' in (e.text or '') for e in elements)
                 if has_main:
                     break  # 已在APP首页
-                adb.tap(900, 2200)  # 教程页"下一步"通常在右下
+                adb.tap(*sc(900, 2200))  # 教程页"下一步"通常在右下
                 time.sleep(1.5)
         record_step("1.5关闭教程", "done", "")
 
@@ -2179,22 +2182,22 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
                     break
             if not found_close:
                 # 只在屏幕顶部边缘点击, 绝不到底部(会触发HOME)
-                adb.tap(540, 40)
+                adb.tap(*sc(540, 40))
                 time.sleep(0.5)
-                adb.tap(540, 80)
+                adb.tap(*sc(540, 80))
             time.sleep(1)
         record_step("2.关闭广告", "done", "")
 
         # 3. 确保在英语tab + 检查是否跑到了"消息"页
         record_step("3.英语Tab", "running", "")
-        adb.tap(108, 2233)
+        adb.tap(*TABS["英语"])
         time.sleep(1.5)
         elements = adb.dump_ui()
         if any('消息' in (e.text or '') and e.center[1] < 300 for e in elements):
             log_msg("⚠ 进入了消息页, 按返回", "warning")
             adb.press_back()
             time.sleep(2)
-            adb.tap(108, 2233)
+            adb.tap(*TABS["英语"])
             time.sleep(1.5)
         record_step("3.英语Tab", "done", "")
 
@@ -2283,10 +2286,10 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
                             break
                 if found:
                     break
-                adb.swipe(540, 1500, 540, 1000, 300)
+                adb.swipe(*sc(540, 1500), *sc(540, 1000), 300)
                 time.sleep(1)
             if not found:
-                adb.tap(414, 1700)
+                adb.tap(*sc(414, 1700))
             time.sleep(3)
             record_step("4.专项突破", "done", "")
 
@@ -2308,7 +2311,7 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
                             break
                 if found_module:
                     break
-                adb.swipe(540, 1600, 540, 600, 500)
+                adb.swipe(*sc(540, 1600), *sc(540, 600), 500)
                 time.sleep(1)
             if not found_module:
                 log_msg(f"  ⚠ 未找到模块 '{module_name}', 尝试搜索全部文本", "warning")
@@ -2377,7 +2380,7 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
                         break
             if not found_grade:
                 log_msg(f"  ⚠ 未找到 {target_kw}, 尝试兜底", "warning")
-                adb.tap(540, 1200)
+                adb.tap(*sc(540, 1200))
             time.sleep(3)
         elif version_already_set:
             log_msg(f"  版本一致, 跳过选择")
@@ -2408,7 +2411,7 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
                 break
             # 没找到, 向下滚动
             if scroll_attempt < 5:
-                adb.swipe(540, 1800, 540, 500, 400)  # 大幅下滚
+                adb.swipe(*sc(540, 1800), *sc(540, 500), 400)  # 大幅下滚
                 time.sleep(0.8)
                 elements = adb.dump_ui()
         # 兜底: 模糊匹配 (针对Unit数字小但文本格式不同)
@@ -2442,7 +2445,7 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
                 found_unit = True
         else:
             log_msg(f"  ⚠ 没找到 Unit {unit} 文本", "warning")
-            adb.tap(540, 1400)
+            adb.tap(*sc(540, 1400))
         time.sleep(4)
 
         # 8. 现在应该在阶段选择页 (基础巩固/综合进阶/难点突破)
@@ -2501,9 +2504,9 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
             if not found_btn:
                 # 可能已经进入题目但还没加载, 或弹窗挡住了
                 # 尝试点屏幕底部中间 (有些APP的确认在底部)
-                adb.tap(540, 2100)
+                adb.tap(*sc(540, 2100))
                 # 关可能存在的弹窗
-                adb.tap(540, 1800)
+                adb.tap(*sc(540, 1800))
             time.sleep(2)
 
         # 再多等一会儿, 确保题目渲染完成
@@ -2561,7 +2564,7 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
                         found_next = True
                         break
                 if not found_next:
-                    adb.tap(540, 2100)  # 底部兜底
+                    adb.tap(*sc(540, 2100))  # 底部兜底
                 time.sleep(1.5)
                 continue
 
@@ -2708,7 +2711,7 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
                         found_option = True
                         break
             if not found_option:
-                adb.tap(540, 800)
+                adb.tap(*sc(540, 800))
             time.sleep(1.5)
 
             # 找"检查"按钮, 点它
@@ -2724,7 +2727,7 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
                         break
                 if found_check:
                     break
-                adb.tap(540, 2100)
+                adb.tap(*sc(540, 2100))
                 time.sleep(0.5)
             time.sleep(1.5)
 
@@ -3784,7 +3787,7 @@ def api_grades():
 
     try:
         # 确保在主页，打开年级选择弹窗
-        adb.tap(346, 275)  # 切换器
+        adb.tap(*sc(346, 275))  # 切换器
         time.sleep(3)
 
         elements = adb.dump_ui()
