@@ -375,16 +375,23 @@ def _handle_sort_question(d, config):
     step_log("🔢 检测到排序题，开始处理…", "step")
 
     # ── 先区分两种子题型 ──
-    # 图片排序特征：y 700-1900 有宽度 300-700 的图片卡片
-    # （排除全屏大容器 宽>800，那是句子排序的整块布局）
-    has_big_image = False
+    # ★ 2026-08-30 修复：图片排序定位用 img_sort_btn 节点（App 给图片加的特定 rid），
+    #   不再用"宽度 300-700"模糊匹配——后者会把序号圆圈/干扰元素误当图片，导致
+    #   模式A 点到错误元素（用户实测"点完①就点⑤"）
     big_images = []
-    for e in (d.xpath('//*[@clickable="true"]').all() or []):
-        b = e.bounds
-        w = b[2] - b[0]
-        if S_h(d, 700) < b[1] < S_h(d, 1900) and 300 < w < 700:
-            has_big_image = True
+    try:
+        for e in d.xpath('//*[contains(@resource-id,"img_sort_btn")]').all() or []:
             big_images.append(e)
+    except Exception:
+        pass
+    if not big_images:
+        # 兜底：用 clickable + 大尺寸启发式（兼容旧版 App）
+        for e in (d.xpath('//*[@clickable="true"]').all() or []):
+            b = e.bounds
+            w = b[2] - b[0]
+            if S_h(d, 700) < b[1] < S_h(d, 1900) and 300 < w < 700:
+                big_images.append(e)
+    has_big_image = bool(big_images)
 
     if has_big_image:
         # ── 模式A：图片排序 ── 直接点图片，序号自动填充

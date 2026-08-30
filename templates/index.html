@@ -3462,9 +3462,15 @@
             qs[id].overall_passed === null ||
             qs[id].overall_passed === undefined,
         ).length;
+        // ★ 2026-08-30 修复：按 (模块·stage) 分组展示各自动态题数
+        //   （用户要求：测了听力专项·练习+测试，总览要分开展示，不能只显示单一总数字）
+        const modsTotal = f._modules_total || {};
+        const modRows = Object.keys(modsTotal).map((k) =>
+          `<span class="mod-row"><b>${escHtml(k)}</b> ${modsTotal[k]} 题</span>`
+        ).join('  ');
         const overviewHtml = `<div class="review-overview">
     <div class="review-overview-title">本次审查 <b>${t}</b> 题：通过 <b class="pass">${aipa}</b> ／ 不通过 <b class="fail">${aifa}</b> ／ 未审 <b class="skip">${nOpt}</b></div>
-    <div class="review-overview-sub">人工标注 <b>${lb}</b> 题 · 反馈准确率 <b>${$("fbAccuracy") ? $("fbAccuracy").textContent : "—"}</b></div>
+    <div class="review-overview-sub">${modRows ? '分模块：' + modRows : ''}　人工标注 <b>${lb}</b> 题 · 反馈准确率 <b>${$("fbAccuracy") ? $("fbAccuracy").textContent : "—"}</b></div>
   </div>`;
         // 3) 不通过题清单（折叠区，默认展开）
         const failIds = ids.filter((id) => qs[id].overall_passed === false);
@@ -3646,12 +3652,9 @@
                   if (q.score_info) {
                     contentHtml += `<div class="q-opts" style="color:#92400e">分值: ${escHtml(q.score_info)}</div>`;
                   }
-                  // 卡面折叠状态：★ 用户手动打开过的保留 open，未打开按状态默认
-                  //   （不通过题默认展开，通过题默认折叠）；沿用 openSet 保住用户操作
-                  const cardOpen =
-                    openSet.has("qc_" + qid) || (!openSet.size && pa === false)
-                      ? "open"
-                      : "";
+                  // 卡面折叠状态：★ 失败题永远默认展开（用户期望，否者过几秒就刷新被收起）
+                  //   + 用户手动展开过的（openSet）保留 → 防止 pollInspect 每2s重渲染把卡片收起
+                  const cardOpen = (pa === false) || openSet.has("qc_" + qid) ? "open" : "";
                   return `<details class="q-card-new" id="qc_${qid}" ${cardOpen}>
       <summary class="q-head-new ${pa === false ? "fail" : unrev ? "pending" : "pass"}">
         <div class="qnum">Q${qnum}</div>

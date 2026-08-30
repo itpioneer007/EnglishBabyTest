@@ -3136,8 +3136,11 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
                             _ok = _ratio >= 0.85
                         if not _ok:
                             dims["stem"] = False   # ★ mismatch 优先：脚本比对不通过 → 题干不通过
+                            # ★ 2026-08-30 修复：big=None（听力专项等无大题概念）时只显示"第N题"，
+                            #   不渲染"第None大题·第N小题"
+                            _pos = f"第{big}大题·第{qidx}小题" if big else f"第{qidx}题"
                             reasons["stem"] = (f"❌ 题干与脚本不符：App 显示「{_app_stem[:60]}」，"
-                                               f"脚本应为「{_script_stem[:60]}」（位置：第{big}大题·第{qidx}小题）")
+                                               f"脚本应为「{_script_stem[:60]}」（位置：{_pos}）")
                         else:
                             # ★ 通过也写比对原因（检查人员知道这题已核对过脚本）
                             if dims["stem"] is not False:
@@ -3189,6 +3192,17 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
             _auto_shot = ""
 
     total = len(_inspection_state.get("questions", {})) + 1
+    # ★ 2026-08-30 修复：按 (模块·stage) 维护题数，total 改为"各模块总题数"列表渲染，
+    #   而非单一总数字（用户要求"测了听力专项的练习+测试，总览要分开展示各自动态题数"）
+    _mod_key = f"{_current_module_name or '未知'}{'·' + _current_stage_name if _current_stage_name else ''}"
+    _mods_total = _inspection_state.setdefault("_modules_total", {})
+    # 每题只在首次 evidence 时 +1（用 qid 去重防重复）
+    _qid = f"auto-Q{qidx:03d}"  # 先粗略 qid 做去重 key
+    if big:
+        _qid = f"auto-Q{big:02d}-{qidx:02d}"
+    if not _inspection_state.get("_seen_qids", set()).__contains__(_qid + "@" + _mod_key):
+        _mods_total[_mod_key] = _mods_total.get(_mod_key, 0) + 1
+        _inspection_state.setdefault("_seen_qids", set()).add(_qid + "@" + _mod_key)
     # ★ 2026-08-25 修复：口语训练"第N大题·第M小题"结构下，不同大题的小题号重复
     #   （每个大题都有小题1-5）→ 旧 qid "auto-Q{小题号}" 会被后面大题的同号小题覆盖，
     #   只剩最后一大题。改为 "auto-Q{大题:02d}-{小题:02d}" 保证每题唯一；
@@ -5021,13 +5035,20 @@ def api_modules_run():
             #   模块间 _back_to_home 切主页继续下一模块；LLM 审查经 on_module_done 回调
             global _GLOBAL_DOCX_MAP
             _GLOBAL_DOCX_MAP = docx_map or {}
+            # ★ 2026-08-30 修复：合并同模块的脚本匹配日志为一条（练习+测试同模块只打一次），
+            #   避免用户测听力专项·练习+·测试时看到 2 条相同"有匹配脚本"日志
+            _logged_mod = set()
             def _on_module_done(_mod, _res):
                 _docx = (docx_map or {}).get(_mod, "")
+                _stage = (_res or {}).get("stage", "")
+                if _mod in _logged_mod:
+                    return  # 同模块只打一次（不再按 stage 重复）
+                _logged_mod.add(_mod)
                 if not _docx:
                     log_msg(f"🔍 {_mod} 无匹配脚本 → 仅基础完整性检查", "info")
                     return
-                _stage = (_res or {}).get("stage", "")
-                log_msg(f"📖 {_mod}{'·' + _stage if _stage else ''} 有匹配脚本「{_docx}」→ 自动化后追加 LLM 知识性审查", "info")
+                _stage_txt = f"（{_stage}）" if _stage else ""
+                log_msg(f"📖 {_mod}{_stage_txt} 有匹配脚本「{_docx}」→ 自动化后追加 LLM 知识性审查", "info")
                 # ★ 修复模块间卡顿：LLM 审查改异步线程，不阻塞 run_all 的模块循环
                 #   （原同步调用：听力专项完成后在主页面卡几分钟等逐题 LLM 审查，
                 #     审查完才继续口语训练 → 用户实测"主页卡好久"）

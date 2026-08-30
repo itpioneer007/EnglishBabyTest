@@ -264,6 +264,38 @@ def _test_answer_loop(d, max_q=45):
                 xml_now = d.dump_hierarchy() if d else ""
             else:
                 break
+        # ★ 2026-08-30 修复：过渡页/大题封面误识别为答题页（用户反馈 Q11 "听句子"题
+        #   页面只有"分值:10分 + 继续答题(1S)"按钮，没真正题目内容，但旧逻辑发了证据卡
+        #   → 审查卡显示"音频控件未检测到/选项未检测到"，加大检查人员工作量）
+        #   判断：页面有"继续答题"/"开始答题"按钮 OR 仅有"分值"且无任何作答元素 → 过渡页
+        if "继续答题" in xml_now or "开始答题" in xml_now or "测试题目选题" in xml_now:
+            _is_transition = True
+        else:
+            # 有分值但没题目内容（无字母选项/CheckBox/EditText/录音按钮/序号按钮）→ 过渡页
+            _has_score = "分值" in xml_now
+            _has_no_q_elm = (
+                not re.search(r'text="[TFABCDE]"', xml_now)
+                and "EditText" not in xml_now
+                and "CheckBox" not in xml_now
+                and "点击录音" not in xml_now and "原音" not in xml_now
+                and "img_sort_btn" not in xml_now
+                and "排序" not in xml_now
+            )
+            _is_transition = _has_score and _has_no_q_elm
+        if _is_transition:
+            # 过渡页：跳过 evidence 收集（不计数 +1，避免污染题数）
+            if "继续答题" in xml_now:
+                d(textContains="继续答题").click()
+                time.sleep(0.5)
+            elif "开始答题" in xml_now:
+                # 试卷封面"开始答题"→ 点进入（避免空转退出）
+                try:
+                    d(text="开始答题").click(); time.sleep(0.8)
+                except Exception:
+                    pass
+            _idle = 0
+            continue
+
         # ★ 反馈浮层消失后再发 evidence（用户实测：旧逻辑循环开头 dump，可能 dump 到
         #   反馈页"恭喜你，答对了"，题干就提取不到题目而是反馈文字 → 证据卡"未提取到题干文字"）
         if q != _ev_q:
