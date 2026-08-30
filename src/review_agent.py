@@ -250,10 +250,19 @@ class ReviewAgent:
             screenshots = self._scan_screenshots()
 
         self.results = []
-        for q in self.script_questions:
+        _total = len(self.script_questions)
+        for _i, q in enumerate(self.script_questions, 1):
             shot = screenshots.get(q.global_idx, "")
             r = self._review_one(q, shot)
             self.results.append(r)
+
+            # ★ 进度心跳：让用户知道仍在进行，不是卡死
+            if _total >= 10 and (_i == 1 or _i % 10 == 0 or _i == _total):
+                try:
+                    from common.logger import log_msg
+                    log_msg(f"⏳ 脚本审查进行中 {_i}/{_total}…", "info")
+                except Exception:
+                    print(f"  ⏳ 脚本审查进行中 {_i}/{_total}…")
 
             if self.cfg.verbose:
                 icon = "✅" if r.overall_passed else "❌"

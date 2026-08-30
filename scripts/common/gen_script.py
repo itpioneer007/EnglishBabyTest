@@ -338,9 +338,17 @@ class QuestionCollector:
             return None
         # ★ 知识点用大模型生成（每题一次调用，串行；该年级知识点有说服力）
         print(f"  🧠 正在为 {len(self.questions)} 题生成知识点解析（LLM）…")
-        for q in self.questions:
+        _total_q = len(self.questions)
+        for _gi, q in enumerate(self.questions, 1):
             if not q.get("knowledge"):
                 q["knowledge"] = self._llm_knowledge(q)
+            # ★ 进度心跳：逐题调 LLM 耗时久，定期提示避免误以为卡死
+            if _total_q >= 10 and (_gi == 1 or _gi % 10 == 0 or _gi == _total_q):
+                try:
+                    from common.logger import log_msg
+                    log_msg(f"⏳ 脚本生成进行中 {_gi}/{_total_q}…", "info")
+                except Exception:
+                    print(f"  ⏳ 脚本生成进行中 {_gi}/{_total_q}…")
         # ★ 图片题识别补全：选项为空但有截图 → 视觉模型识别图片内容 → 补全选项/答案
         #   （用户需求：图片题脚本只有"A./B."占位无法核对 → 识别截图填内容）
         _img_qs = [q for q in self.questions
