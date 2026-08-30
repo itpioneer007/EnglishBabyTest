@@ -31,34 +31,40 @@ QUESTION_TYPES = [
             "排序", "按顺序", "排序题", "给句子排序",
             "将句子排成", "排成正确的顺序", "按正确顺序排列",
             "连词成句",           # 听力专项·点单词组成句子
-            "给图片排序",
+            "给图片排序", "组成一段通顺的对话", "通顺的对话",
         ],
         "dom_features": None,
         "handler": "_handle_sort_question",
-        "note": "图片排序/方框排序/圆圈排序/连词成句（内部区分）",
+        "note": "图片排序/方框排序/圆圈排序/连词成句（内部区分）★ 30题'给下列句子排序，组成一段通顺的对话'：直接点句子→序号自动排（_handle_sentence_sort）",
     },
-    # ── 优先级 2：匹配题 ──
+    # ── 优先级 2：匹配题（含字母连线）──
     {
         "name": "match_questions",
         "priority": 2,
         "keywords": [
             "匹配", "配对", "为人物选择", "选择正确的描述",
+            "字母连线", "大小写字母连线", "连线", "将下列", "与对应的小写",
         ],
-        "dom_features": None,
+        "dom_features": {
+            # ★ 字母连线题: 左右两列多行可点节点（左右各 2+ 个 y 聚类、x 明显分两列）
+            "two_column_clickable": True,
+        },
         "handler": "_handle_match_question",
-        "note": "人物-字母匹配 / 人物-图片匹配（字母延迟出现时自动重试）",
+        "note": "人物-字母匹配 / 字母延迟出现时自动重试 / 字母连线（左右点配对）",
     },
-    # ── 优先级 3：选词填空 ──
+    # ── 优先级 3：选词填空（+ 看图选词 复用同一处理）──
     {
         "name": "select_fill_questions",
         "priority": 3,
         "keywords": [
             "选词填空", "选词", "听音选词",
             "从方框中选择", "选择正确的单词填空",
+            "看图选词", "看图片选词", "选择对应的单词", "看图选择对应的单词",
+            "选择正确的图片", "看图选",
         ],
         "dom_features": None,  # 关键词已足够特征
         "handler": "_handle_select_fill",
-        "note": "句子中嵌空格框(select_tv) + 底部词库(select_btn)，点空格 → 点词填入",
+        "note": "句子中嵌空格框(select_tv) + 底部词库(select_btn)或顶部图片，点空格 → 点词/图填入",
     },
     # ── 优先级 4：补全题（键盘注入）──
     {
@@ -116,6 +122,48 @@ def _has_letter_options(xml: str) -> bool:
     return any(f'text="{c}"' in xml for c in ("A", "B", "T", "F"))
 
 
+def _has_two_column_clickable(xml: str) -> bool:
+    """★ 字母连线题特征：左右两列各 2+ 个可点节点（x 明显分两列、y 范围接近）
+
+    判定：筛 clickable 节点（x 中心点），按 x 聚成两簇，
+    每簇 2+ 个点、x 中心差 > 200、y 中心差 < 300。
+    """
+    import re as _re
+    nodes = []
+    for m in _re.finditer(r'<node[^>]*clickable="true"[^>]*>', xml):
+        tag = m.group(0)
+        bm = _re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+        if not bm:
+            continue
+        x1, y1, x2, y2 = map(int, bm.groups())
+        # 排除顶部/底部导航与全屏容器
+        if y1 < 200 or y2 > 2250 or (x2 - x1) > 500 or (y2 - y1) > 500:
+            continue
+        # 排除极小可点节点（圆圈等噪点）
+        if (x2 - x1) < 50 or (y2 - y1) < 50:
+            continue
+        nodes.append(((x1 + x2) // 2, (y1 + y2) // 2))
+    if len(nodes) < 4:
+        return False
+    # 按 x 聚成两簇
+    nodes.sort()
+    left, right = [nodes[0]], [nodes[-1]]
+    for n in nodes[1:-1]:
+        (left if abs(n[0] - sum(p[0] for p in left) / len(left)) <
+                  abs(n[0] - sum(p[0] for p in right) / len(right)) else right).append(n)
+    if len(left) < 2 or len(right) < 2:
+        return False
+    lx_avg = sum(p[0] for p in left) / len(left)
+    rx_avg = sum(p[0] for p in right) / len(right)
+    if abs(rx_avg - lx_avg) < 200:
+        return False
+    ly_avg = sum(p[1] for p in left) / len(left)
+    ry_avg = sum(p[1] for p in right) / len(right)
+    if abs(ly_avg - ry_avg) > 300:
+        return False
+    return True
+
+
 def _has_multi_letter_groups(xml: str) -> bool:
     """页面是否有 2+ 组字母选项（阅读多小题特征）：字母按 y 聚类"""
     opts = []
@@ -155,6 +203,10 @@ def detect_question_type(xml: str) -> str:
                     continue
             if df.get("multi_letter_groups"):
                 if not _has_multi_letter_groups(xml):
+                    continue
+            if df.get("two_column_clickable"):
+                # ★ 字母连线题特征：左右两列各 2+ 个可点节点（x 明显分两列、y 范围接近）
+                if not _has_two_column_clickable(xml):
                     continue
             if df.get("has_all"):
                 if not all(ft in xml for ft in df["has_all"]):

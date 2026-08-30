@@ -64,6 +64,55 @@ USER_READ_TIMEOUT = 15
 # ============================================================
 # 入口：主页 → 语音评测（继承主页版本，必要时内部切版本/年级）
 # ============================================================
+def _find_voice_card(d, xml=None):
+    """★ 2026-08-30 动态定位语音评测卡片（不再写死 y）：
+
+    语音评测 = 「专项突破」标题下方 root_layout 卡片行的【最右一张】。
+    ★ 实测各年级：六上 3 张卡(右=语音评测)；三上 3 张卡(x 203/540/876，右=语音评测)。
+    """
+    import re as _re
+    if xml is None:
+        try:
+            xml = d.dump_hierarchy()
+        except Exception:
+            return None
+    # ① 收集所有 root_layout 单卡（排除全屏包裹层）
+    all_cards = []
+    for m in _re.finditer(
+        r'resource-id="[^"]*root_layout"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
+        xml,
+    ):
+        x1, y1, x2, y2 = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+        w, h = x2 - x1, y2 - y1
+        if w > 900 or h > 350:
+            continue
+        all_cards.append(((x1 + x2) // 2, (y1 + y2) // 2, y1))
+    # ② 找"专项突破"标题上方 400px 内的卡片行
+    m_sec = _re.search(r'text="专项突破"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml)
+    if m_sec:
+        sec_y = int(m_sec.group(2))
+        row = [c for c in all_cards if sec_y - 400 < c[2] < sec_y - 50]
+        if len(row) >= 2:
+            row.sort(key=lambda c: c[0])
+            return (row[-1][0], row[-1][1])  # 最右一张
+    # ③ 回退：所有卡片按 y 聚类，取 y 最大那行（底部一行）的最右卡
+    rows = {}
+    for c in sorted(all_cards, key=lambda c: c[2]):
+        placed = False
+        for ky in rows:
+            if abs(ky - c[2]) < 100:
+                rows[ky].append(c)
+                placed = True
+                break
+        if not placed:
+            rows[c[2]] = [c]
+    if rows:
+        bottom = rows[max(rows)]
+        bottom.sort(key=lambda c: c[0])
+        return (bottom[-1][0], bottom[-1][1])
+    return None
+
+
 def _enter_voice_eval(d, expected_grade="", expected_version=""):
     """主页 → 语音评测（文字+图片标签，点击文字/图片均可进入）
     ★ 新版（2026-08-23）：语音评测从主页继承当前版本/年级——
@@ -98,9 +147,16 @@ def _enter_voice_eval(d, expected_grade="", expected_version=""):
             pass
         time.sleep(0.5)
     if not _clicked:
-        # 兜底：老版本图片卡坐标
-        print("  → 未找到语音评测文字，尝试图片卡坐标")
-        d.click(*VOICE_CARD)
+        # 兜底：动态定位"专项突破"标题下方卡片行的最右一张（语音评测=右侧卡）
+        #   ★ 2026-08-30 修复：不同年级布局不同（六上 y≈1357、三上 y≈1965），
+        #     不能再写死 VOICE_CARD 坐标（三上会点到广告）。
+        _card = _find_voice_card(d)
+        if _card:
+            print(f"  → 动态定位语音评测卡片 {_card}")
+            d.click(*_card)
+        else:
+            print(f"  → 未找到语音评测卡片，使用兜底坐标 {VOICE_CARD}")
+            d.click(*S(d, *VOICE_CARD))
         _clicked = True
     time.sleep(2.5)
     # 应用锁拦截（点语音评测偶发触发 OPPO 应用锁）

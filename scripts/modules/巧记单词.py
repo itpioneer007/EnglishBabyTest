@@ -75,29 +75,72 @@ def _resolve_units(units, default_units):
 
 
 def _find_qiaoji_card(d, xml=None):
-    """在教材精学行（y≈1250-1450）动态定位中间那张巧记单词卡片中心坐标。
-    教材精学行有 3 张 root_layout 图片卡（无文字），巧记单词是中间一张（x 中心≈540）。
-    返回 (x, y) 设备或 None。
+    """★ 2026-08-30 重写（动态定位，不再写死 y 范围）：
+
+    巧记单词 = 「专项突破」标题下方那行 root_layout 图片卡里的【中间一张】。
+    ★ 不同年级布局差异实测：
+      - 六上：教材精学行 y≈1250-1450（3张卡，巧记单词=中间），专项突破在下方
+      - 三上：教材精学行 y 1458-1762（2张卡：课本学习），专项突破行 y 1888-2043
+        （3张卡：卡1=知识类目录 / 卡2=巧记单词 / 卡3=语音评测）
+    ★ 定位策略：找"专项突破"标题文字 → 取其上方最近的 root_layout 卡片行 →
+      该行按 x 排序取中间一张（3张时=第2张；2张时=第1张）。
+      找不到"专项突破" → 回退：找所有 root_layout 行里 y 最小且卡片数>=3 的那行。
     """
     if xml is None:
         try:
             xml = d.dump_hierarchy()
         except Exception:
             return None
-    cards = []
+    # ① 收集所有 root_layout 卡片（含 y 范围）
+    all_cards = []
     for m in re.finditer(
         r'resource-id="[^"]*root_layout"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
         xml,
     ):
         x1, y1, x2, y2 = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
-        # 仅取教材精学行（卡片 y 在 1250-1450 范围）
-        if 1250 < y1 < 1450:
-            cards.append(((x1 + x2) // 2, (y1 + y2) // 2))
-    if not cards:
-        return None
-    # 取 x 中心最接近屏幕中线（540）的卡片 = 中间那张
-    cards.sort(key=lambda p: abs(p[0] - 540))
-    return cards[0]
+        # 排除全屏大容器（宽>900 且高>300 的行容器是包裹层，非单卡）
+        w, h = x2 - x1, y2 - y1
+        if w > 900 or h > 350:
+            continue
+        all_cards.append(((x1 + x2) // 2, (y1 + y2) // 2, y1))
+
+    # ② 找"专项突破"标题，取其上方的卡片行
+    m_sec = re.search(r'text="专项突破"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml)
+    if m_sec:
+        sec_y = int(m_sec.group(2))  # 标题 top y
+        # 该标题上方 350px 内的卡片（同行的卡片 y 中心应接近）
+        row_cards = [c for c in all_cards if sec_y - 400 < c[2] < sec_y - 50]
+        if len(row_cards) >= 2:
+            row_cards.sort(key=lambda c: c[0])
+            # 3张 → 中间；2张 → 第1张（中间偏左）；多张 → 中间
+            idx = len(row_cards) // 2 if len(row_cards) >= 3 else 0
+            if len(row_cards) == 2:
+                # 2张卡时取 x 更接近 540 的那张（中间位置）
+                row_cards.sort(key=lambda c: abs(c[0] - 540))
+                return (row_cards[0][0], row_cards[0][1])
+            return (row_cards[idx][0], row_cards[idx][1])
+
+    # ③ 回退：所有卡片按 y 聚类成行，取 y 最小且 >=3 张的行（教材精学行）
+    rows = {}
+    for c in sorted(all_cards, key=lambda c: c[2]):
+        placed = False
+        for ky in rows:
+            if abs(ky - c[2]) < 100:
+                rows[ky].append(c)
+                placed = True
+                break
+        if not placed:
+            rows[c[2]] = [c]
+    for ky in sorted(rows):
+        if len(rows[ky]) >= 3:
+            cards = sorted(rows[ky], key=lambda c: c[0])
+            return (cards[len(cards) // 2][0], cards[len(cards) // 2][1])
+    # ④ 终极兜底：找 y 1300-2200 中间那张卡
+    mid_cards = [c for c in all_cards if 1300 < c[2] < 2200]
+    if mid_cards:
+        mid_cards.sort(key=lambda c: abs(c[0] - 540))
+        return (mid_cards[0][0], mid_cards[0][1])
+    return None
 
 
 def _enter_qiaoji(d, expected_grade="", expected_version=""):

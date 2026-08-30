@@ -466,10 +466,43 @@ def _handle_sort_question(d, config):
         """检测底部序号按钮位置。
         序号按钮特征：y 1680-2200、宽 200-300、x 起点为 0 或 242 的倍数（不是 58）
         ★ 关键：x 起点 58 是句子方框，必须排除！
+        ★ 2026-08-30 修复（30题"给句子排序"实测）：序号按钮是 CheckBox text=1/2/3/4
+          （y 1485-1611、宽 114），旧的"y1680-2200 宽200-300"启发式完全不匹配
+          → 走了终极兜底 5 等分点错位置(y2040 底部手势区)。
+          ★ 新策略：优先 dump 精确找 text=纯数字 1-9 的可点节点（y 400-2200），
+          这些就是序号按钮；找不到才回退旧启发式。
         ★ dump 找不到时（图片绘制的序号按钮）→ 坐标兜底：
           在底部大区域（y>1700 宽>800）5 等分估算序号按钮位置
         """
+        import re as _re
         btns = []
+        # ① 首选：dump 找 text=纯数字(1-9) 的可点击节点（序号按钮；含 CheckBox/LinearLayout 容器）
+        try:
+            _xml_n = d.dump_hierarchy()
+            for m in _re.finditer(r'<node[^>]*text="([1-9])"[^>]*>', _xml_n):
+                tag = m.group(0)
+                bm = _re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+                if not bm:
+                    continue
+                x1, y1, x2, y2 = int(bm.group(1)), int(bm.group(2)), int(bm.group(3)), int(bm.group(4))
+                w = x2 - x1
+                # 序号按钮：宽度 60-350（排除全屏/大图/极小噪点）、y 400-2200（排除状态栏/导航）
+                if S_h(d, 400) < y1 < S_h(d, 2200) and 60 <= w <= 350:
+                    # 排除句子方框（text=句子本身带数字？）→ 序号节点宽度窄（<200 通常）
+                    btns.append(((x1 + x2) // 2, (y1 + y2) // 2, x1, y1, int(m.group(1))))
+        except Exception:
+            pass
+        # 去重（同坐标容器+子节点可能重复）
+        _uniq = {}
+        for b in btns:
+            _uniq[(b[0], b[1])] = b
+        btns = list(_uniq.values())
+        if btns:
+            # 按序号 1,2,3... 排序（序号按钮通常按序排列）
+            btns.sort(key=lambda t: t[4])
+            return btns
+
+        # ② 旧启发式（无数字文本时）：clickable + y 1680-2200 + 宽 200-300
         for e in (d.xpath('//*[@clickable="true"]').all() or []):
             b = e.bounds
             w = b[2] - b[0]
@@ -478,7 +511,7 @@ def _handle_sort_question(d, config):
             if S_h(d, 1680) < b[1] < S_h(d, 2200) and 200 < w < 300 and b[0] != 58:
                 cx = (b[0] + b[2]) // 2
                 cy = (b[1] + b[3]) // 2
-                btns.append((cx, cy, b[0], b[1]))
+                btns.append((cx, cy, b[0], b[1], 0))
         # 按 y 然后 x 排序（左上优先）
         btns.sort(key=lambda t: (t[1], t[0]))
 
@@ -494,7 +527,7 @@ def _handle_sort_question(d, config):
                         area_y = (b[1] + b[3]) // 2 + 30
                         step = (area_x2 - area_x1) // 10
                         for i in range(5):
-                            btns.append((area_x1 + step * (2 * i + 1), area_y, 0, 0))
+                            btns.append((area_x1 + step * (2 * i + 1), area_y, 0, 0, i + 1))
                         break
             except Exception:
                 pass
@@ -504,7 +537,7 @@ def _handle_sort_question(d, config):
                 w = d.window_size()[0]
                 step = w // 10
                 for i in range(5):
-                    btns.append((step * (2 * i + 1), int(h * 0.85), 0, 0))
+                    btns.append((step * (2 * i + 1), int(h * 0.85), 0, 0, i + 1))
         return btns
 
     # 点 1-5 序号：每次动态检测序号栏，序号栏空了（全部填完）才停止。
@@ -584,7 +617,11 @@ def _get_qno(d):
 
 
 def _handle_sentence_sort(d, config):
-    """处理「句子圆圈排序题」（听录音，给句子排序）
+    """处理「句子圆圈排序题」（听录音/直接给句子排序）
+
+    ★ 用户申明（2026-08-30）：这类题【直接点击每个句子，序号自动排上】——
+      不点方框、不点底部序号按钮！每点一个句子 → 自动分配当前最小序号(1,2,3...)，
+      全部句子点完 → 出现「检查」。
 
     ★ 与空方框排序题的区别（防混淆）：
       - 句子圆圈排序题：句子前面是「圆圈」（待填序号），**没有底部序号按钮**，
@@ -595,6 +632,8 @@ def _handle_sentence_sort(d, config):
 
     识别特征：有 ≥3 个整行句子 LinearLayout（宽 > 800，y 700-1900）。
     注意：**没有底部序号按钮**（点击句子自动填），这是与空方框题的最大区别。
+    ★ 实例（30题"给下列句子排序，组成一段通顺的对话"）：4 个句子 CheckBox
+      （text='Good morning, Peter.' 等，宽 936，y 682-1384），点句子自动排号。
     """
     import time
     print(f"    📝 句子圆圈排序题：直接按顺序点击句子（序号自动填入）")
@@ -796,6 +835,105 @@ def _handle_match_question(d, config):
             return True
         time.sleep(0.5)
 
+
+def _handle_match_connect(d, config):
+    """处理「字母/图片连线题」（左右点配对连线）
+
+    ★ 与 _handle_match_question 的区别（防混淆）：
+      - 匹配题(人物+字母)：1 次点方框激活底部字母输入界面 → 依次点 A-E 字母
+      - 连线题(左右点配对)：左侧 N 个可点节点 + 右侧 N 个可点节点
+        每次点左侧某节点 + 点右侧对应节点 → 形成一对连线，重复 N 次
+        全部连完 → 出"检查"
+
+    识别：question_types.py 的 match_questions 加了 two_column_clickable 特征。
+    """
+    import re as _re
+    print(f"    🔗 字母连线题：左右点配对连线")
+    step_log("🔗 连线题：左右点配对", "step")
+
+    def _collect_two_columns():
+        """从 dump 提取左右两列可点节点（按 x 中位数分两簇）"""
+        try:
+            xml = d.dump_hierarchy()
+        except Exception:
+            return [], []
+        nodes = []
+        for m in _re.finditer(r'<node[^>]*clickable="true"[^>]*>', xml):
+            tag = m.group(0)
+            bm = _re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+            if not bm:
+                continue
+            x1, y1, x2, y2 = map(int, bm.groups())
+            # 排除顶部状态栏/底部导航/全屏容器/极小噪点
+            if y1 < 200 or y2 > 2250 or (x2 - x1) > 500 or (y2 - y1) > 500:
+                continue
+            if (x2 - x1) < 50 or (y2 - y1) < 50:
+                continue
+            nodes.append(((x1 + x2) // 2, (y1 + y2) // 2, x1, y1, x2, y2))
+        if len(nodes) < 4:
+            return [], []
+        # 按 x 分两簇
+        nodes.sort(key=lambda n: n[0])
+        mid = len(nodes) // 2
+        # 找最大间隔作为左右分界
+        max_gap = 0
+        split = mid
+        for i in range(len(nodes) - 1):
+            gap = nodes[i + 1][0] - nodes[i][0]
+            if gap > max_gap:
+                max_gap = gap
+                split = i + 1
+        if max_gap < 150:
+            return [], []
+        left = sorted(nodes[:split], key=lambda n: n[1])
+        right = sorted(nodes[split:], key=lambda n: n[1])
+        return left, right
+
+    # 1. 轮询稳定后收集左右两列（连节点可能需要点一下激活）
+    for _try in range(3):
+        left, right = _collect_two_columns()
+        if len(left) >= 2 and len(right) >= 2 and abs(len(left) - len(right)) <= 1:
+            break
+        time.sleep(0.5)
+    print(f"      左列 {len(left)} 节点 / 右列 {len(right)} 节点")
+    if not left or not right:
+        print(f"    ⚠ 左右列节点识别失败，回退到点 A-E 字母逻辑")
+        # 兜底：复用 _handle_match_question
+        try:
+            return _handle_match_question(d, config)
+        except Exception:
+            return False
+
+    # 2. 依次配对：左[i] → 右[i]（按 y 排序后对应位置）→ 形成 N 对连线
+    paired = 0
+    for i in range(min(len(left), len(right))):
+        lx, ly = left[i][0], left[i][1]
+        rx, ry = right[i][0], right[i][1]
+        try:
+            d.click(lx, ly)
+            print(f"      → 左[{i+1}] ({lx},{ly})")
+            time.sleep(0.3)
+            d.click(rx, ry)
+            print(f"      → 右[{i+1}] ({rx},{ry})")
+            time.sleep(0.35)
+            paired += 1
+        except Exception as e:
+            print(f"      ⚠ 配对 {i+1} 失败: {e}")
+    print(f"    ✅ 已配对 {paired} 对")
+
+    # 3. 出"检查" → 点
+    for _ in range(8):
+        if d(text="检查").exists(timeout=0.8):
+            d(text="检查").click()
+            print(f"    ✅ 连线题完成，点击检查")
+            time.sleep(0.4)
+            if d(text="练习报告").exists(timeout=1.2):
+                d(text="练习报告").click(); time.sleep(0.6)
+            return True
+        time.sleep(0.4)
+    return False
+
+
     # 5. 若检查后答错出现"下一题"→ 点它进入下一题
     if d(text="下一题").exists(timeout=1):
         d(text="下一题").click()
@@ -841,6 +979,8 @@ def _handle_select_fill(d, config):
         """返回 (blanks, word_btns)：
         blanks: [(cx, cy, filled_text, y)] 按 y 排序；filled_text 非空=已填
         word_btns: [(cx, cy, word, y, x)] 词库词
+        ★ 2026-08-30 增强：底部无 select_btn 时（看图选词题型，词选项在顶部
+          以可点图片形式存在），从顶部可点 ImageView 节点收集作为"词选项"
         """
         try:
             xml = d.dump_hierarchy()
@@ -862,12 +1002,32 @@ def _handle_select_fill(d, config):
             cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
             tv = (tm.group(1) if tm else "").strip()
             if ridv.endswith("/select_tv"):
-                # 空格框：可能含已填词文本（text 非空=已填）
                 blanks.append((cx, cy, tv, y1))
             elif ridv.endswith("/select_btn"):
-                # 词库词
                 if tv:
                     word_btns.append((cx, cy, tv, y1, x1))
+        # ★ 兜底：底部无 select_btn 时（看图选词），从顶部可点 ImageView 收集
+        if not word_btns:
+            for m in _re.finditer(r'<node[^>]*>', xml):
+                tag = m.group(0)
+                cls = _re.search(r'class="([^"]*)"', tag)
+                bm = _re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+                if not (cls and bm):
+                    continue
+                cls_s = cls.group(1)
+                x1, y1, x2, y2 = map(int, bm.groups())
+                if (x2 - x1) < 80 or (y2 - y1) < 80:
+                    continue
+                if 'clickable="true"' not in tag:
+                    continue
+                if not (cls_s.endswith("ImageView") or "ImageView" in cls_s):
+                    continue
+                # ★ 顶部图片选项：y < 1500（短文上方的图区，不含底部单词栏）
+                if y1 >= 1500:
+                    continue
+                tm = _re.search(r'text="([^"]*)"', tag)
+                tv = (tm.group(1) if tm else "").strip()
+                word_btns.append(((x1 + x2) // 2, (y1 + y2) // 2, tv or f"img_{x1}_{y1}", y1, x1))
         blanks.sort(key=lambda t: t[3])
         word_btns.sort(key=lambda t: (t[3], t[4]))
         return blanks, word_btns
@@ -1227,9 +1387,31 @@ def _answer_loop(d, config, module_name):
             time.sleep(0.4); _need_dump = True; continue
         elif qtype == "match_questions":
             q += 1  # ★ 匹配题计数（之前遗漏，导致总题数少）
-            step_log(f"📸 第{q}题（匹配题）", "step")
-            step_log(f"  第{q}题 检查", "info", _collect_ui_evidence("匹配题"))
-            _handle_match_question(d, config)
+            # ★ 2026-08-30 区分：字母连线题（左右两列可点） vs 人物-字母匹配题（底部字母栏）
+            #   判断：当前 xml 是否左右两列各 2+ 个可点节点
+            _is_connect = False
+            try:
+                _xml2 = d.dump_hierarchy()
+                _lr_left, _lr_right = [], []
+                for _m in re.finditer(r'<node[^>]*clickable="true"[^>]*>', _xml2):
+                    _t = _m.group(0)
+                    _bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', _t)
+                    if not _bm: continue
+                    _x1,_y1,_x2,_y2 = map(int, _bm.groups())
+                    if _y1 < 200 or _y2 > 2250 or (_x2-_x1) > 500: continue
+                    if (_x2-_x1) < 50 or (_y2-_y1) < 50: continue
+                    (_lr_left if (_x1+_x2)//2 < 540 else _lr_right).append(((_x1+_x2)//2, (_y1+_y2)//2))
+                _is_connect = len(_lr_left) >= 2 and len(_lr_right) >= 2
+            except Exception:
+                pass
+            if _is_connect:
+                step_log(f"📸 第{q}题（字母连线）", "step")
+                step_log(f"  第{q}题 检查", "info", _collect_ui_evidence("字母连线"))
+                _handle_match_connect(d, config)
+            else:
+                step_log(f"📸 第{q}题（匹配题）", "step")
+                step_log(f"  第{q}题 检查", "info", _collect_ui_evidence("匹配题"))
+                _handle_match_question(d, config)
             _idle = 0
             time.sleep(0.4); _need_dump = True; continue
         elif qtype == "select_fill_questions":
@@ -1724,6 +1906,8 @@ def _handle_word_fill(d, config):
         xml = d.dump_hierarchy()
         slots = []
         # ① 首选：select_tv（空位输入框 CheckBox）
+        #   ★ 2026-08-30 精确匹配：必须 endswith select_tv，防止把 select_btn（选项）
+        #     误当空位（select_btn 也含 "select" 字样）
         for m in re.finditer(r'<node\b[^>]*>', xml):
             b = m.group(0)
             rid = re.search(r'resource-id="([^"]*)"', b)
@@ -1731,7 +1915,7 @@ def _handle_word_fill(d, config):
             if not (rid and bm):
                 continue
             rid_s = rid.group(1)
-            if not re.search(r'(select_tv|select|_sel)', rid_s, re.I):
+            if not re.search(r'(select_tv|_tv)$', rid_s, re.I) or 'select_btn' in rid_s:
                 continue
             x1, y1, x2, y2 = int(bm.group(1)), int(bm.group(2)), int(bm.group(3)), int(bm.group(4))
             if y1 < 200 or y2 > 2250:
@@ -1773,14 +1957,39 @@ def _handle_word_fill(d, config):
     #   ★ 实测：单词是 select_btn(TextView,clickable=false)，但父容器 clickable=true——
     #     与排序题序号按钮同构。点一个单词 → 填进空位 → 单词栏整体上移(用户说的"选项框上移")，
     #     容器不消失 → 完成判定用"空位填满"，不用"栏空"。
-    #   单词按钮特征：y 1500-2250、clickable=true、宽 100-400（同排序题序号按钮结构）
+    # ★ 单词按钮特征：y 1500-2250、clickable=true、宽 100-1000（★ 2026-08-30 放宽：
+    #   29题"补全对话"的选项容器宽 964，旧条件 100<w<400 会漏掉 → 误判成填空）
+    # ★ 2026-08-30 二次修复：优先用 dump 正则精确找 select_btn 节点（选项文本元素），
+    #   避免 xpath clickable 容器把【方框】也当成选项（方框容器也 clickable=true 且在
+    #   同 y 区间 → 每轮第二次点击点到方框 → 用户实测"点了两次方框"）
     def _find_word_btns():
         btns = []
+        try:
+            xml = d.dump_hierarchy()
+            # ① 首选：select_btn 节点（text 含英文单词/句子，点其中心即点中选项）
+            for m in re.finditer(r'<node[^>]*resource-id="[^"]*select_btn[^"]*"[^>]*>', xml):
+                b = m.group(0)
+                tm = re.search(r'text="([^"]*)"', b)
+                bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', b)
+                if not (tm and bm):
+                    continue
+                t = tm.group(1).strip()
+                if not re.search(r'[A-Za-z]{2,}', t):
+                    continue
+                x1, y1, x2, y2 = int(bm.group(1)), int(bm.group(2)), int(bm.group(3)), int(bm.group(4))
+                if S_h(d, 1500) < y1 < S_h(d, 2250):
+                    btns.append(((x1 + x2) // 2, (y1 + y2) // 2))
+            if btns:
+                btns.sort(key=lambda t: (t[1], t[0]))
+                return btns
+        except Exception:
+            pass
+        # ② 兜底：xpath clickable 容器（旧逻辑；无 select_btn 的题型才走这里）
         try:
             for e in (d.xpath('//*[@clickable="true"]').all() or []):
                 b = e.bounds
                 w = b[2] - b[0]
-                if S_h(d, 1500) < b[1] < S_h(d, 2250) and 100 < w < 400:
+                if S_h(d, 1500) < b[1] < S_h(d, 2250) and 100 < w < 1000:
                     btns.append(((b[0] + b[2]) // 2, (b[1] + b[3]) // 2))
         except Exception:
             pass
@@ -1820,29 +2029,72 @@ def _handle_word_fill(d, config):
         except Exception:
             pass
         time.sleep(1.0)
+    else:
+        # ★ 2026-08-30：未找到空位 → 题干介绍太长，方框在下方未渲染 → 下滑后重试
+        #   （29题"根据情景补全对话"实测：需下滑才出现 select_tv 空位+select_btn 选项）
+        for _sw in range(4):
+            print(f"    ⏬ 未找到空位，下滑第{_sw+1}次找方框...")
+            S_swipe(d, 540, 1700, 540, 800, 0.4)
+            time.sleep(0.6)
+            _slots0 = _find_slots()
+            _empty0 = [s for s in _slots0 if not s[2]]
+            if _empty0:
+                try:
+                    d.click(_empty0[0][0], _empty0[0][1])
+                    print(f"    → 下滑后点第一个空位激活 ({_empty0[0][0]},{_empty0[0][1]})")
+                except Exception:
+                    pass
+                time.sleep(1.0)
+                break
+            # 下滑后仍没空位 → 先点一次屏幕中部（可能要点大图/激活才出方框）
+            if _sw == 0:
+                try:
+                    d.click(540, 1200)
+                    time.sleep(0.8)
+                except Exception:
+                    pass
+        if not _empty0:
+            print(f"    ⚠ 下滑多次仍未找到空位，尝试直接处理")
 
-    # ③ 循环点单词按钮（★ 对齐排序题模式A的"已点集合去重"）：
-    #   实测：每个单词容器对应一个固定单词，点过它（词填进空位）后再点无效。
-    #   必须用 clicked_keys 记录已点容器，依次点【不同】的容器（如 mooncakes→tea→moon...），
-    #   直到空位填满 或 没有新容器可点。
-    #   单词栏每次点词后整体上移(y 1877→1689)，容器 bounds 变化 → 用"相对位置+序号"去重不可靠，
-    #   用"空位已填数"判断该容器是否已点（每点一个不同词 = 空位+1）。
+    # ③ 循环填词（★ 2026-08-30 改为"每轮点空位+点选项"交替模式）：
+    #   实测两种交互都兼容：
+    #   28题"看图选词"：点第一个空位激活 → 连续点选项自动填后续空位（焦点自动切换）
+    #   29题"补全对话"：每个空位必须单独点击激活，再点选项填入（焦点不自动切换）
+    #   → 统一策略：每轮【点未填空位激活 → 点一个选项】，两种都覆盖。
+    #   选项容器点过(词填进空位)后可能失效 → 用"空位已填数"判断是否点中；
+    #   未点中(空位数没+1) → 按序试下一个选项容器。
     _clicked_cnt = 0
     _last_filled = -1  # 上次循环已填空位数（防抖：点后无变化说明该容器已失效，跳过）
-    for _round in range(15):
+    _swipe_retry = 0    # ★ 2026-08-30：空位滚出屏幕时下滑重试计数
+    for _round in range(20):
         _slots_now = _find_slots()
         _empty_now = [s for s in _slots_now if not s[2]]
         _filled_now = len(_slots_now) - len(_empty_now)
         if not _empty_now:
+            if not _slots_now and _swipe_retry < 3:
+                # ★ 一个空位都检测不到 → 可能被滚出屏幕（题干介绍太长），下滑重试
+                _swipe_retry += 1
+                print(f"    ⏬ 空位不在屏幕内，下滑重试 {_swipe_retry}/3")
+                S_swipe(d, 540, 1700, 540, 800, 0.4)
+                time.sleep(0.7)
+                continue
             break  # 空位全满 = 完成
-        # 点单词栏第一个按钮
+        # ★ 每轮都点未填空位（激活/切换焦点）——兼容"每个方框都要点"的题型
+        _bx, _by = _empty_now[0][0], _empty_now[0][1]
+        try:
+            d.click(_bx, _by)
+            print(f"    → 点空位{_filled_now+1} 激活 ({_bx},{_by})")
+        except Exception:
+            pass
+        time.sleep(0.6)
+        # 点选项栏第一个按钮
         btns = _find_word_btns()
         if not btns:
             print(f"    ⚠ 单词栏未识别（可能已填完或布局异常）")
             break
         # 找"当前可点"的容器：优先第一个；若上次点它空位没变（已失效），按序找下一个
         target = btns[0]
-        if _filled_now == _last_filled:
+        if _filled_now == _last_filled and _last_filled >= 0:
             # 上一个容器点了没效果（已失效）→ 尝试下一个容器
             _tried = []
             for _b in btns[1:]:
