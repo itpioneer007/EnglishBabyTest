@@ -203,7 +203,7 @@ def _wait_page_ready(d, q, wait_s=10):
     return False
 
 
-def _wait_new_ready(d, q, max_wait=2.5):
+def _wait_new_ready(d, q, max_wait=1.8):
     """★ 速度优化：点"检查/下一题"后轮询等待新题就绪，就绪立即返回（不固定 sleep）。
     就绪条件（任一）：
       - 出现"下一题"按钮（答错状态）
@@ -240,7 +240,7 @@ def _wait_new_ready(d, q, max_wait=2.5):
                     return True
         except Exception:
             pass
-        time.sleep(0.5)
+        time.sleep(0.2)
     return False
 
 
@@ -470,9 +470,9 @@ def _answer_loop(d, max_q=200):
                 pass
             time.sleep(0.3)
             # 等"检查"出现并点击
-            for _ in range(8):
+            for _ in range(5):
                 try:
-                    if d(text="检查").exists(timeout=0.1):
+                    if d(text="检查").exists(timeout=0.05):
                         d(text="检查").click()
                         print(f"      → 检查")
                         time.sleep(0.3)

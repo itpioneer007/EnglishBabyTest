@@ -252,7 +252,7 @@ def safe_click(d, text, timeout=3) -> bool:
 def dismiss_global_popups(d):
     for t in GLOBAL_POPUPS:
         try:
-            if d(text=t).exists(timeout=0.15):
+            if d(text=t).exists(timeout=0.05):
                 d(text=t).click()
                 print(f"    🔔 全局弹窗: '{t}'")
                 time.sleep(0.35)
@@ -1346,7 +1346,7 @@ def run_single_module(d, module_name, config):
             print(f"  ❌ 点击入口失败: {_e}")
             return 0
     print(f"  ✅ 已进入 {module_name}")
-    time.sleep(0.8)
+    time.sleep(0.3)
 
     # ★ 系统验证弹窗（点到广告触发）→ 先等它自动消失；持续不退 → back 关闭 + 清广告重试一次
     if applock_blocked(d):
