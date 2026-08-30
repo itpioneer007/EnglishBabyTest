@@ -255,8 +255,64 @@ def _find_active_sub_question(d, xml=None):
         if not t or len(t) < 1:
             continue
         stems.append(t)
-    stem = " / ".join(stems[:2]) if stems else "图片题"
+    if stems:
+        stem = " / ".join(stems[:2])
+    else:
+        # ★ 2026-08-30 无文字题干 → 区分「图片题」与「听音口语题」：
+        #   ① 当前小题容器内有 pic_iv → 图片题：截图交给视觉模型识别，
+        #      用符合小学年级水平的简短英文句子描述图片大意作为题干
+        #   ② 容器内无图片也无文字 → 听音口语题（点喇叭听音跟读），
+        #      明确提示"听音频跟读"，不再误标"图片题"
+        _pic_box = None
+        for pm in re.finditer(
+                r'<node[^>]*resource-id="[^"]*pic_iv"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml):
+            px1, py1, px2, py2 = map(int, pm.groups())
+            if px1 >= ax1 and py1 >= ay1 and px2 <= ax2 and py2 <= ay2:
+                _pic_box = (px1, py1, px2, py2)
+                break
+        if _pic_box:
+            stem = _oral_vision_stem(d, _pic_box, sub_no)
+        else:
+            stem = "听音频跟读"
     return sub_no, total_sub, stem, active
+
+
+# ★ 2026-08-30 口语训练图片题：视觉识别题干缓存（同一小题不重复识别）
+_ORAL_VISION_CACHE = {}
+
+
+def _oral_vision_stem(d, pic_box, sub_no):
+    """图片题：截取当前小题 pic_iv 区域 → 视觉模型识别 → 简短英文句子题干。
+    识别失败/无法调用时回退"图片题"。结果按 (小题号,区域) 缓存，避免重复调用。
+    """
+    _key = (sub_no, pic_box)
+    if _key in _ORAL_VISION_CACHE:
+        return _ORAL_VISION_CACHE[_key]
+    stem = ""
+    try:
+        if d is None:
+            raise RuntimeError("无设备连接（离线解析），跳过视觉识别")
+        img = d.screenshot()
+        im = img.crop(pic_box)
+        _dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "screenshots", "script_imgs")
+        os.makedirs(_dir, exist_ok=True)
+        _p = os.path.join(_dir, f"oral_pic_{sub_no or 0}_{pic_box[1]}.png")
+        im.save(_p)
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+        from src.reviewer_common import LLMClient
+        llm = LLMClient.from_config()
+        prompt = (f"这是中国小学{GRADE_LEVEL}英语口语题的配图。"
+                  "请用符合该年级学生水平的简短英文句子（不超过8个单词）描述图片大意，"
+                  "只输出这个英文句子本身，不要引号、不要任何其他内容。")
+        ans = (llm.ask(prompt, image_path=_p) or "").strip()
+        if ans and "LLM 调用失败" not in ans and len(ans) <= 80:
+            stem = ans
+    except Exception as e:
+        print(f"      ⚠ 图片题视觉识别失败: {e}")
+    stem = stem or "图片题"
+    _ORAL_VISION_CACHE[_key] = stem
+    return stem
 
 
 def _get_big_progress(xml):
