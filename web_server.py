@@ -308,36 +308,36 @@ def _detect_content_dimension(module: str = ""):
     try:
         if not module:
             return
-            # ★ 模块级去重：同一模块的脚本审查只触发一次
-            _cur_stage = ""
-            try:
-                from common.logger import get_current_module as _gcm2
-                _, _cur_stage = _gcm2()
-            except Exception:
-                pass
-            _key = (module, _cur_stage)
-            if _key in _detect_content_invoked:
-                return  # 同一模块同一阶段已审查过 → 跳过（不再因后续"完成"字触发）
-            # ★ 该模块的匹配脚本（多模块检测时 docx_map 已构建；单模块/快速检查无映射则跳过）
-            _docx = (_GLOBAL_DOCX_MAP or {}).get(module, "")
-            if not _docx:
-                return
-            docx_path = PROJECT_ROOT / "uploads" / _docx
-            if not docx_path.exists():
-                return
-            # ★ 按当前模块单元过滤脚本（用户要求：脚本含多单元，只比对所选单元）
-            #   从 _inspection_state 读当前单元（多模块检测启动时记录）
-            # ★ 从 _inspection_state 读当前单元（多模块检测启动时记录）——防御"NONE"/非数字
-            try:
-                _unit_cur = int(str(_inspection_state.get("unit", 0) or 0).split("-")[0])
-            except Exception:
-                _unit_cur = 0
-            from src.review_agent import ReviewAgent, ReviewConfig
-            cfg = ReviewConfig(docx_path=str(docx_path), unit=_unit_cur, screenshot_dir="", verbose=False)
-            agent = ReviewAgent(cfg)
-            if not agent.script_questions: return
-            _detect_content_invoked.add(_key)
-            log_msg(f"📄 {module} 自动补充内容检查 (批量, {_docx}, 单元{_unit_cur or '全部'}, {len(agent.script_questions)}题)", "info")
+        # ★ 模块级去重：同一模块的脚本审查只触发一次
+        _cur_stage = ""
+        try:
+            from common.logger import get_current_module as _gcm2
+            _, _cur_stage = _gcm2()
+        except Exception:
+            pass
+        _key = (module, _cur_stage)
+        if _key in _detect_content_invoked:
+            return  # 同一模块同一阶段已审查过 → 跳过（不再因后续"完成"字触发）
+        # ★ 该模块的匹配脚本（多模块检测时 docx_map 已构建；单模块/快速检查无映射则跳过）
+        _docx = (_GLOBAL_DOCX_MAP or {}).get(module, "")
+        if not _docx:
+            return
+        docx_path = PROJECT_ROOT / "uploads" / _docx
+        if not docx_path.exists():
+            return
+        # ★ 按当前模块单元过滤脚本（用户要求：脚本含多单元，只比对所选单元）
+        #   从 _inspection_state 读当前单元（多模块检测启动时记录）
+        # ★ 从 _inspection_state 读当前单元（多模块检测启动时记录）——防御"NONE"/非数字
+        try:
+            _unit_cur = int(str(_inspection_state.get("unit", 0) or 0).split("-")[0])
+        except Exception:
+            _unit_cur = 0
+        from src.review_agent import ReviewAgent, ReviewConfig
+        cfg = ReviewConfig(docx_path=str(docx_path), unit=_unit_cur, screenshot_dir="", verbose=False)
+        agent = ReviewAgent(cfg)
+        if not agent.script_questions: return
+        _detect_content_invoked.add(_key)
+        log_msg(f"📄 {module} 自动补充内容检查 (批量, {_docx}, 单元{_unit_cur or '全部'}, {len(agent.script_questions)}题)", "info")
         batch = []; qid_map = {}
         # ★ 听力专项多子模块：只审查当前 stage 的题（用户反馈：错题日志错误记录
         #   练习/测试的题——之前不过滤，练习的题也拿测试脚本去比对→脚本错配）
