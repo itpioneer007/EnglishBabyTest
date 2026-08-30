@@ -291,6 +291,11 @@ def get_adb():
 
 
 
+# ★ 2026-08-30 修复脚本审查日志重复：模块级去重 + "完成"字严格匹配
+    #   之前任何消息含"完成"就触发，导致"全部检测完成"也触发了一次重查。改成按
+    #   (模块, 阶段) 维度去重 + 严格"模块完成"正则匹配。
+_detect_content_invoked: set = set()
+_DIM_INVOKED_KW = re.compile(r"^[✅⏹❌]*\s*[A-Za-z0-9一-鿿·（）()]+?\s*完成[:：]")  # 形如"巧记单词 完成："
 def _detect_content_dimension(module: str = ""):
     """自动补充内容检查（LLM 批量知识性审查）
 
@@ -298,29 +303,41 @@ def _detect_content_dimension(module: str = ""):
       - module 为空 → 不比对（无模块上下文）
       - 该模块在 docx_map 中无匹配脚本 → 跳过（仅基础完整性）
       - 有匹配脚本 → 用该模块的脚本比对
+    ★ 2026-08-30 修复：模块级去重（_detect_content_invoked 集合）
     """
     try:
         if not module:
             return
-        # ★ 该模块的匹配脚本（多模块检测时 docx_map 已构建；单模块/快速检查无映射则跳过）
-        _docx = (_GLOBAL_DOCX_MAP or {}).get(module, "")
-        if not _docx:
-            return
-        docx_path = PROJECT_ROOT / "uploads" / _docx
-        if not docx_path.exists():
-            return
-        # ★ 按当前模块单元过滤脚本（用户要求：脚本含多单元，只比对所选单元）
-        #   从 _inspection_state 读当前单元（多模块检测启动时记录）
-        # ★ 从 _inspection_state 读当前单元（多模块检测启动时记录）——防御"NONE"/非数字
-        try:
-            _unit_cur = int(str(_inspection_state.get("unit", 0) or 0).split("-")[0])
-        except Exception:
-            _unit_cur = 0
-        from src.review_agent import ReviewAgent, ReviewConfig
-        cfg = ReviewConfig(docx_path=str(docx_path), unit=_unit_cur, screenshot_dir="", verbose=False)
-        agent = ReviewAgent(cfg)
-        if not agent.script_questions: return
-        log_msg(f"📄 {module} 自动补充内容检查 (批量, {_docx}, 单元{_unit_cur or '全部'}, {len(agent.script_questions)}题)", "info")
+            # ★ 模块级去重：同一模块的脚本审查只触发一次
+            _cur_stage = ""
+            try:
+                from common.logger import get_current_module as _gcm2
+                _, _cur_stage = _gcm2()
+            except Exception:
+                pass
+            _key = (module, _cur_stage)
+            if _key in _detect_content_invoked:
+                return  # 同一模块同一阶段已审查过 → 跳过（不再因后续"完成"字触发）
+            # ★ 该模块的匹配脚本（多模块检测时 docx_map 已构建；单模块/快速检查无映射则跳过）
+            _docx = (_GLOBAL_DOCX_MAP or {}).get(module, "")
+            if not _docx:
+                return
+            docx_path = PROJECT_ROOT / "uploads" / _docx
+            if not docx_path.exists():
+                return
+            # ★ 按当前模块单元过滤脚本（用户要求：脚本含多单元，只比对所选单元）
+            #   从 _inspection_state 读当前单元（多模块检测启动时记录）
+            # ★ 从 _inspection_state 读当前单元（多模块检测启动时记录）——防御"NONE"/非数字
+            try:
+                _unit_cur = int(str(_inspection_state.get("unit", 0) or 0).split("-")[0])
+            except Exception:
+                _unit_cur = 0
+            from src.review_agent import ReviewAgent, ReviewConfig
+            cfg = ReviewConfig(docx_path=str(docx_path), unit=_unit_cur, screenshot_dir="", verbose=False)
+            agent = ReviewAgent(cfg)
+            if not agent.script_questions: return
+            _detect_content_invoked.add(_key)
+            log_msg(f"📄 {module} 自动补充内容检查 (批量, {_docx}, 单元{_unit_cur or '全部'}, {len(agent.script_questions)}题)", "info")
         batch = []; qid_map = {}
         # ★ 听力专项多子模块：只审查当前 stage 的题（用户反馈：错题日志错误记录
         #   练习/测试的题——之前不过滤，练习的题也拿测试脚本去比对→脚本错配）
@@ -482,7 +499,11 @@ def log_msg(msg: str, level: str = "info", evidence: list = None):
         entry["evidence"] = evidence
     task_status["log"].append(entry)
 
-    if any(k in msg for k in ("完成",)):
+    # ★ 2026-08-30 修复重复日志：模块完成才能触发内容补充检查（不是任意"完成"字串）。
+    #   用户实测 14:39:36 "巧记单词 自动补充内容检查 (批量 ...)" 重复2次：一次因为
+    #   "巧记单词 完成：0题" 触发，另一次因为后面的"全部检测完成！..." 误触发了。
+    #   改为:仅"X模块 完成"开头才触发（不会匹配"全部检测完成"）
+    if isinstance(msg, str) and _DIM_INVOKED_KW.match(msg.strip()):
         # ★ 传当前模块：_detect_content_dimension 只在该模块有匹配脚本时比对
         _cm_cur = ""
         try:
@@ -888,24 +909,35 @@ def run_full_task(version: str, grade: str, modules: list):
                 continue
 
             cx, cy = MODULE_COORDS[module]
-            
+
             if module in DEEP_MODULES:
                 log_msg(f"  ⏬ 滚动到 {module}")
                 found_deep = False
+                # ★ 2026-08-30 修复：滚动寻找更稳健——
+                #   1) 找到"教材精学/专项突破"提示才认为进入正确区
+                #   2) 找不到模块时字符串化日志 "未找到模块X,跳过" 含banner标题,便于定位换年级bug
+                _section_banner = ""
                 for scroll_step in range(5):
                     adb.swipe(*sc(200, 1600), *sc(200, 1200), 400)
                     time.sleep(1)
                     elements = adb.dump_ui()
                     for e in elements:
+                        if e.text and '专项突破' in (e.text or ''):
+                            _section_banner = "专项突破"; break
+                        if e.text and '教材精学' in (e.text or ''):
+                            _section_banner = "教材精学"; break
+                    for e in elements:
                         if e.text and e.text.strip() == module:
                             cx, cy = e.center
-                            log_msg(f"    滚{scroll_step+1}次找到 {module}", "success")
+                            log_msg(f"    滚{scroll_step+1}次找到 {module}（{_section_banner or '未标识区'}）", "success")
                             found_deep = True; break
                     if found_deep: break
-                    if not any('专项突破' in (e.text or '') for e in elements):
+                    if not any('专项突破' in (e.text or '') for e in elements) and \
+                       not any('教材精学' in (e.text or '') for e in elements):
+                        # ★ 不在"教材精学/专项突破"两个 banner 下，意味着该年级根本无此模块
                         break
                 if not found_deep:
-                    log_msg(f"    ⚠ 未找到 {module}", "warning")
+                    log_msg(f"    ⚠ 未找到模块「{module}」(年级={grade}, 区={_section_banner or '未识别'}) → 跳过此模块，继续下一个", "warning")
                     continue
 
             cur += 1

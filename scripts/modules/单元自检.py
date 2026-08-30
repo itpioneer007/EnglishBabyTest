@@ -284,6 +284,18 @@ def _answer_loop(d, max_q=200):
                         _ans = _llm_ans
                 except Exception:
                     pass
+            # ★ 2026-08-30 修复：图文匹配/图文选择/图片题——选项为空 + 题干含题型关键词，
+            #   LLM 容易给借口（"请提供图片我才能判"），不应写入脚本答案。
+            #   改为统一的"人工核查（图片题）"标记，让检查员上传截图核查。
+            _PIC_QT_KW = ("图文匹配", "图文选择", "图文判断", "图片题", "图文对话", "看图选")
+            _is_picture_q = (not _qi.get("options")) and any(k in _stem0 for k in _PIC_QT_KW)
+            if _is_picture_q and _ans:
+                # LLM 显然给了"借口 / 套话" → 拒绝写入，避免污染脚本答案
+                if any(k in _ans for k in ("请提供", "发给我", "无法判断", "无法确定", "需要题目", "需要图片")):
+                    _ans = "人工核查（图片题）"
+                else:
+                    # 即使不是借口，无选项题也不强写字母答案
+                    _ans = "人工核查（图片题）"
             if _stem0 and _ans:
                 _coll.add(qno=q, stem=_stem0, options=_qi["options"],
                           answer=_ans, qtype=_qi["qtype"] or "单元自检", unit=_cur_unit,

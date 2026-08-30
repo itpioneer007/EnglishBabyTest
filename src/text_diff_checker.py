@@ -42,10 +42,16 @@ class DiffResult:
 
 
 def _normalize(text: str) -> str:
-    """规范化文本: 去首尾空白/统一换行/去连续空格"""
-    t = text.strip()
-    t = re.sub(r'\s+', ' ', t)          # 连续空白 → 单空格
-    t = t.replace('\r', '').replace('\n', ' ')  # 换行 → 空格
+    """规范化文本: 解码HTML实体 → 去首尾空白/统一换行/去连续空格
+
+    ★ 2026-08-30 修复：uiautomator2 dump 输出的 text 保留 HTML 实体(&#10; / &amp; 等)
+       不解码就被比对/透传到前端，前端 escHtml 把 & 转成 &amp; 会显示成 "&#10;" 字面
+       而非真实换行。在比对前先 html.unescape → 归一化，消除"乱码 #10"
+    """
+    import html as _html
+    t = _html.unescape(text or "").strip()
+    t = re.sub(r'\s+', ' ', t)
+    t = t.replace('\r', '').replace('\n', ' ')
     return t
 
 
@@ -54,8 +60,9 @@ def _extract_ocr_text(screenshot_path: str) -> str:
 
     优先用 uiautomator2 dump_hierarchy 提取文字(已有、最快)。
     若截图不是从当前设备dump的(历史截图),则尝试用AI视觉提取。
-    返回: 所有UI文字用换行连接的字符串
+    返回: 所有UI文字用换行连接的字符串(★ 已 html.unescape 防 &#10; 显示成字面)
     """
+    import html as _html
     screenshot_path = str(screenshot_path)
     # 尝试从同名 .xml dump 读文字
     xml_path = screenshot_path.rsplit('.', 1)[0] + '.xml'
@@ -65,7 +72,7 @@ def _extract_ocr_text(screenshot_path: str) -> str:
                 xml = f.read()
             texts = []
             for m in re.finditer(r'text="([^"]*)"', xml):
-                t = m.group(1).strip()
+                t = _html.unescape(m.group(1)).strip()  # ★ 与 _normalize 对齐：解码 HTML 实体
                 if t:
                     texts.append(t)
             return '\n'.join(texts)

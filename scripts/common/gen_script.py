@@ -61,6 +61,19 @@ KNOWLEDGE_PROMPT_TEMPLATE = (
 )
 
 
+def _unescape_html(s: str) -> str:
+    """解码 uiautomator2 dump 残留的 HTML 实体 (&#10; / &amp; 等)
+    ★ 2026-08-30 修复：题面 short passage 段含短文+多段换行（如"Xu You is kind.&#10;&#10;　　..."）
+       实体渲染到 docx 后会显示成字面 "&#10;"。在所有 _extract_ui_question 入口
+       统一解码一次，后续逻辑不再处理。
+    """
+    try:
+        import html as _html
+        return _html.unescape(s or "")
+    except Exception:
+        return s or ""
+
+
 def _extract_ui_question(xml, answer="", qtype_hint=""):
     """从答题页 XML 提取一道题的（题干/选项/题型），供脚本生成收集。
     - 题干：分级提取——题干节点(question_title_tv/tv_caption/tv_title/tv_stem等)优先，
@@ -90,10 +103,10 @@ def _extract_ui_question(xml, answer="", qtype_hint=""):
         return False
 
     def _node_parts(_block):
-        """从 node 块提取 (text, resource_id)"""
+        """从 node 块提取 (text, resource_id) — ★ 同时 html.unescape 防 &#10; 残留"""
         _mt = re.search(r'text="([^"]*)"', _block)
         _mr = re.search(r'resource-id="([^"]*)"', _block)
-        return (_mt.group(1).strip() if _mt else "",
+        return (_unescape_html(_mt.group(1)).strip() if _mt else "",
                 _mr.group(1) if _mr else "")
 
     # ① 题干：优先题干节点（resource-id 含题干语义）——这些一定是题干文字
@@ -142,7 +155,7 @@ def _extract_ui_question(xml, answer="", qtype_hint=""):
     # ② 选项：字母开头项（A. xx）优先
     opts = []
     for m in re.finditer(r'text="([A-E][.、．]\s*[^"]{1,60})"', xml):
-        t = m.group(1).strip()
+        t = _unescape_html(m.group(1)).strip()
         if t and t not in opts:
             opts.append(t)
     if not opts:
@@ -151,7 +164,7 @@ def _extract_ui_question(xml, answer="", qtype_hint=""):
         for m in re.finditer(
                 r'<node[^>]*resource-id="[^"]*(?:option_cb|option_iv|radio_btn|check_box)[^"]*"[^>]*text="([^"]{1,40})"|'
                 r'<node[^>]*text="([^"]{1,40})"[^>]*resource-id="[^"]*(?:option_cb|option_iv|radio_btn|check_box)[^"]*"', xml):
-            t = (m.group(1) or m.group(2) or "").strip()
+            t = _unescape_html(m.group(1) or m.group(2) or "").strip()
             if t and t not in opts:
                 opts.append(t)
     if not opts:

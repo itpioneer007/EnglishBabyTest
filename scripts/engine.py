@@ -398,8 +398,10 @@ def _handle_sort_question(d, config):
         print(f"    🖼 图片排序（模式A）：直接点图片，序号自动填充")
         step_log("🖼 图片排序：直接点图片，序号自动填", "step")
         clicked_keys = set()
-        # 依次点击所有大图片（每张点一次）
-        for _ in range(len(big_images) + 2):
+        # ★ 2026-08-30 全局最大轮次保护：防死循环（用户实测 14:19 反复刷同一题
+        #   完整性检查/排序题日志）。任何 tab/层级不能再无限循环
+        _MAX_ROUNDS = len(big_images) * 3 + 8
+        for _round in range(_MAX_ROUNDS):
             progress = False
             for elem in big_images:
                 b = elem.bounds
@@ -415,6 +417,10 @@ def _handle_sort_question(d, config):
                 except Exception:
                     pass
             if not progress:
+                break
+            # ★ 限频：超过 max_轮强制跳出（防 dump 抖动把 clicked_keys 弄错）
+            if _round >= len(big_images) * 2 + 5:
+                print(f"    ⚠ 模式A 超过最大轮次 {_MAX_ROUNDS}，强制完成")
                 break
         # 点完所有图片 → 出现"检查" → 点它
         for _ in range(8):
@@ -504,16 +510,35 @@ def _handle_sort_question(d, config):
     # 点 1-5 序号：每次动态检测序号栏，序号栏空了（全部填完）才停止。
     # ★ 关键修复：之前"点一个序号发现检查出现就 break"是错的——点第一个序号后
     #   "检查"就已出现，但必须填满所有序号才能提交，否则会漏答（只填1个就检查）。
-    for target in range(1, 6):
-        # 每次重新检测序号栏（点完序号后该序号被消耗、栏位变化）
+    # ★ 2026-08-30 修复：每个序号点击前记录已点坐标 + 布局稳定，去重防止死循环
+    #   （用户实测"点了 1 和 5"——同一坐标被反复点击 + 序号没消耗导致循环永远停不下来）
+    clicked_btn_keys: set = set()
+    _stuck_count = 0
+    for target in range(1, 8):   # 最多 7 次：5 个序号 + 2 容错
         btns = _find_num_btns()
         if not btns:
             print(f"      → 序号栏已空，第{target-1}个序号填完")
             break
+        # 去重：跳过坐标在已点集合里的（序号没消耗又被找回）
+        _fresh_btn = None
+        for _b in btns:
+            if (_b[2], _b[3]) not in clicked_btn_keys:
+                _fresh_btn = _b
+                break
+        if _fresh_btn is None:
+            _stuck_count += 1
+            if _stuck_count >= 2:
+                print(f"      ⚠ 没有新序号按钮可点，防卡跳出")
+                break
+            # 兜底：仍尝试点第一个（兜底，避免因 dump 抖动漏检）
+            _fresh_btn = btns[0]
+        else:
+            _stuck_count = 0
         try:
-            d.click(btns[0][0], btns[0][1])
-            print(f"      → 点序号{target} @({btns[0][0]},{btns[0][1]})")
-            time.sleep(0.5)
+            d.click(_fresh_btn[0], _fresh_btn[1])
+            clicked_btn_keys.add((_fresh_btn[2], _fresh_btn[3]))
+            print(f"      → 点序号{target} @({_fresh_btn[0]},{_fresh_btn[1]})")
+            time.sleep(0.55)
         except Exception:
             pass
 
@@ -636,7 +661,9 @@ def _handle_sentence_sort(d, config):
 
     # 依次点击句子（每次重检位置，防布局变化）；填到「检查」出现为止
     clicked = 0
-    for target in range(1, 6):
+    # ★ 2026-08-30 全局最大轮次：防死循环（句子可能已自动填但小圆圈坐标重检又出现）
+    _MAX_ROUNDS = 8
+    for target in range(1, _MAX_ROUNDS + 1):
         # 每次重新检测句子位置（点完一个后布局可能微调）
         sentences = _find_sentences()
         if not sentences:
@@ -907,15 +934,20 @@ def _handle_select_fill(d, config):
 
 def _answer_loop(d, config, module_name):
     """答题循环（内部复用），返回题目数。
-    
+
     ★ 性能优化：每轮循环只 dump 一次 XML（≈200ms），后续所有文本判断/坐标获取
       都在内存做字符串匹配，消灭每次循环 ~20 次设备 HTTP 交互（exists/xpath）。
       只在执行 click 改变页面后重新 dump。
+    ★ 2026-08-30 防死循环：当 evidence 触发后 dump 题号（17/36）连续 N 轮未推进
+      （用户实测 18/36 排序题卡死，反复同题刷同一日志），强制跳出避免 CPU 占用
     """
     q = 0
     _idle = 0  # 连续空转计数（无选项且无题型匹配），防倒计时被误计/死循环
     _xml = ""  # 当前 UI 缓存
     _need_dump = True  # 需要在下一轮重新 dump
+    # ★ 2026-08-30 防排序题死循环：连续多轮同一题号未推进 → 视为卡死
+    _last_qno_at = ""  # 上次 dump 提取的题号（如 "18/36"）
+    _stuck_same_qno = 0  # 连续相同题号次数
 
     def _collect_ui_evidence(qtype):
         """每题界面级检查证据（题型/题干/选项/音频/作答）→ 前端证据卡展示"""
@@ -1148,6 +1180,30 @@ def _answer_loop(d, config, module_name):
                                 "screenshot": _wrong_shot}] if _wrong_shot else None)
             time.sleep(0.4); _need_dump = True; continue
 
+        # ★ 防死循环检测：5 轮都用同一题号（如卡在排序题反复点） → 强制跳出
+        if _need_dump:
+            _xml = _dump() if (not _xml or _need_dump) else _xml
+            _need_dump = False
+        _cur_qno = ""
+        for _t in re.findall(r'text="(\d+/\d+)"', _xml):
+            if _t and "/" in _t:
+                _cur_qno = _t
+                break
+        if _cur_qno and _cur_qno == _last_qno_at:
+            _stuck_same_qno += 1
+            if _stuck_same_qno >= 8:
+                # ★ 同一题卡死超 8 轮（约 4-6s）→ 强制退出答这一道题（继续巡检）
+                step_log(f"⚠ 同一题 {_last_qno_at} 已卡 8 轮未推进，强制跳过", "warning")
+                _stuck_same_qno = 0
+                _last_qno_at = ""
+                # 兜底：尝试回退一下，避免累积占用主线程
+                if d(text="下一题").exists(timeout=0.3):
+                    try: d(text="下一题").click()
+                    except Exception: pass
+                time.sleep(0.4); _need_dump = True; continue
+        else:
+            _stuck_same_qno = 0
+            _last_qno_at = _cur_qno
         # 题型识别：基于缓存的字符串匹配（不再调 xpath）
         qtype = _detect_question_type_cached(_xml, config)
         if qtype == "sort_questions":
