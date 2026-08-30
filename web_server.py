@@ -1278,6 +1278,38 @@ def run_quick_inspect_task(docx_file: str = "", unit: int = 0):
         else:
             log_msg("⚡ 未指定脚本，仅截图+推进（选脚本可开启AI六维审查）", "info")
 
+        # ★ 2026-08-30 修复：快速检查优先走"模块真实答题循环"（听力专项 _test_answer_loop），
+        #   废弃的简易"点选项→点按钮x2"逻辑不识别图片选项(卡Q1)/不收集evidence/不设模块上下文。
+        #   判断当前是否听力专项答题页：有题号 X/Y + 题干含"听" + 无封面按钮(去练习/开始答题)
+        try:
+            _els0 = adb.dump_ui(retries=2)
+            _t_all0 = " ".join((e.text or "") for e in _els0)
+            _m_xy0 = re.search(r"(\d+)/(\d+)", _t_all0)
+            _no_cover0 = ("去练习" not in _t_all0 and "开始答题" not in _t_all0
+                          and "重新答题" not in _t_all0)
+            if _m_xy0 and "听" in _t_all0 and _no_cover0:
+                log_msg(f"✅ 检测到听力专项答题页（{_m_xy0.group(0)}），走真实答题循环…", "success")
+                try:
+                    from common.logger import set_current_module
+                    set_current_module("听力专项", "快速检查")
+                    # ★ 同时写 _inspection_state 的 module/stage（_record_module_evidence
+                    #   fallback 读取；线程间 logger 全局偶尔读不到，双保险）
+                    _inspection_state["module"] = "听力专项"
+                    _inspection_state["stage"] = "快速检查"
+                    _dd = _connect_device()
+                    sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+                    from modules.听力专项 import _test_answer_loop as _listen_loop
+                    _q_done = _listen_loop(_dd, max_q=60)
+                    log_msg(f"✅ 听力专项快速检查完成: {_q_done} 题", "success")
+                except Exception as _e2:
+                    log_msg(f"⚠ 听力专项答题循环异常: {_e2}", "warning")
+                    import traceback
+                    traceback.print_exc()
+                set_done()
+                return
+        except Exception:
+            pass
+
         log_msg("⚡ 快速检查启动（从当前页面开始，跳过导航）", "success")
         time.sleep(1)
 
@@ -3200,9 +3232,12 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
     _qid = f"auto-Q{qidx:03d}"  # 先粗略 qid 做去重 key
     if big:
         _qid = f"auto-Q{big:02d}-{qidx:02d}"
-    if not _inspection_state.get("_seen_qids", set()).__contains__(_qid + "@" + _mod_key):
+    # ★ 去重集合用 dict（JSON 不支持 set → _save_inspection_state 会整体序列化失败丢状态！）
+    _seen = _inspection_state.setdefault("_seen_qids", {})
+    _seen_key = _qid + "@" + _mod_key
+    if not _seen.get(_seen_key):
+        _seen[_seen_key] = 1
         _mods_total[_mod_key] = _mods_total.get(_mod_key, 0) + 1
-        _inspection_state.setdefault("_seen_qids", set()).add(_qid + "@" + _mod_key)
     # ★ 2026-08-25 修复：口语训练"第N大题·第M小题"结构下，不同大题的小题号重复
     #   （每个大题都有小题1-5）→ 旧 qid "auto-Q{小题号}" 会被后面大题的同号小题覆盖，
     #   只剩最后一大题。改为 "auto-Q{大题:02d}-{小题:02d}" 保证每题唯一；
@@ -3331,6 +3366,38 @@ def run_quick_inspect_task(docx_file: str = "", unit: int = 0):
                 log_msg(f"⚠ 脚本不存在: {docx_path}，降级为仅截图", "warning")
         else:
             log_msg("⚡ 未指定脚本，仅截图+推进（选脚本可开启AI六维审查）", "info")
+
+        # ★ 2026-08-30 修复：快速检查优先走"模块真实答题循环"（听力专项 _test_answer_loop），
+        #   废弃的简易"点选项→点按钮x2"逻辑不识别图片选项(卡Q1)/不收集evidence/不设模块上下文。
+        #   判断当前是否听力专项答题页：有题号 X/Y + 题干含"听" + 无封面按钮(去练习/开始答题)
+        try:
+            _els0 = adb.dump_ui(retries=2)
+            _t_all0 = " ".join((e.text or "") for e in _els0)
+            _m_xy0 = re.search(r"(\d+)/(\d+)", _t_all0)
+            _no_cover0 = ("去练习" not in _t_all0 and "开始答题" not in _t_all0
+                          and "重新答题" not in _t_all0)
+            if _m_xy0 and "听" in _t_all0 and _no_cover0:
+                log_msg(f"✅ 检测到听力专项答题页（{_m_xy0.group(0)}），走真实答题循环…", "success")
+                try:
+                    from common.logger import set_current_module
+                    set_current_module("听力专项", "快速检查")
+                    # ★ 同时写 _inspection_state 的 module/stage（_record_module_evidence
+                    #   fallback 读取；线程间 logger 全局偶尔读不到，双保险）
+                    _inspection_state["module"] = "听力专项"
+                    _inspection_state["stage"] = "快速检查"
+                    _dd = _connect_device()
+                    sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+                    from modules.听力专项 import _test_answer_loop as _listen_loop
+                    _q_done = _listen_loop(_dd, max_q=60)
+                    log_msg(f"✅ 听力专项快速检查完成: {_q_done} 题", "success")
+                except Exception as _e2:
+                    log_msg(f"⚠ 听力专项答题循环异常: {_e2}", "warning")
+                    import traceback
+                    traceback.print_exc()
+                set_done()
+                return
+        except Exception:
+            pass
 
         log_msg("⚡ 快速检查启动（从当前页面开始，跳过导航）", "success")
         time.sleep(1)
@@ -3630,6 +3697,10 @@ def api_inspect_state():
         "stage": _inspection_state.get("stage", ""),
         "docx": _inspection_state.get("docx", ""),
         "live_report_path": _inspection_state.get("live_report_path", ""),
+        # ★ 2026-08-30 修复：总览按模块+单元分组 → 必须把 module/_modules_total 透出给前端
+        "module": _inspection_state.get("module", ""),
+        "_modules_total": _inspection_state.get("_modules_total", {}),
+        "_reuse_info": _inspection_state.get("_reuse_info", ""),
     }
     try:
         _enrich_inspect_state(state)
