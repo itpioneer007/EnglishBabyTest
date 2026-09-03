@@ -3113,6 +3113,8 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
             return _best, _best_ratio
         return None, _best_ratio
 
+    _sq_cur = None          # ★ 审查体系改造：命中的脚本题（供脚本层标记/合并）
+    _sq_stem_hit = ""       # 命中的脚本题干（供记录展示）
     try:
         _docx_cur = (_GLOBAL_DOCX_MAP or {}).get(_current_module_name, "")
         if _docx_cur and stem_text and stem_text not in ("(无题干文字)", "(无)"):
@@ -3160,6 +3162,7 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
                                 break
                 if _sq_cur:
                     _script_stem = (getattr(_sq_cur, "stem", "") or "").strip()
+                    _sq_stem_hit = _script_stem
                     _script_rec = (getattr(_sq_cur, "recording", "") or "").strip()
                     if _current_module_name == "巧记单词":
                         # ★ 巧记单词匹配成功：题干类型一致
@@ -3335,6 +3338,15 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
         "human_label": None,
         "human_note": "",
         "timestamp": datetime.now().isoformat(),
+        # ★ 审查体系改造：分层标记（基础层 = UI 证据；脚本层 = 对照 docx 脚本）
+        #   有匹配脚本 → basic+script（脚本层待后置 LLM 审查回填合并）
+        #   无匹配脚本 → basic_only（仅基础层）
+        "layer": "basic+script" if _sq_cur else "basic_only",
+        "script": {
+            "matched": True,
+            "status": "pending",          # 待 LLM 脚本审查回填 → done
+            "script_stem": _sq_stem_hit,
+        } if _sq_cur else None,
     }
     _inspection_state["current_question_idx"] = qidx
     # ★ 每 10 题保存一次到文件（供错题溯源 trace 页面读取，避免只存内存导致 trace 看不到）
@@ -4866,6 +4878,24 @@ def _qreview_to_state(module: str, docx: str, unit, r, stage: str = "", q=None) 
         # 部分检查（无 False 但未全过，如仅 1 维）→ 保持 None（未定），不误报不通过
     # ★ module_qno：脚本 idx（后续由 report_exporter 按 stage 分组重置显示）
     # ★ progress：含具体位置（口语训练·U3·第2大题·第4小题），方便错题日志快速定位
+    # ★ 审查体系改造：脚本层子结构（合并进同一条基础层记录时挂到 questions[qid]["script"]）
+    _kb = r.knowledge_check or {}
+    if isinstance(_kb, dict):
+        _kb_ok = _kb.get("passed")
+        _kb_sum = (_kb.get("detail") or _kb.get("reason") or "").strip()
+        if not _kb_sum:
+            _kb_sum = "知识库查证" + ("通过" if _kb_ok else ("未检" if _kb_ok is None else "异常"))
+    else:
+        _kb_ok = None
+        _kb_sum = str(_kb)[:200]
+    _dim_keys = ("stem", "content", "image", "answer", "audio", "post_error")
+    _fail_layers = [(k, dims[k][1]) for k in _dim_keys if dims[k][0] is False]
+    if _fail_layers:
+        _reason_summary = "脚本核验不通过：" + "；".join(
+            f"{k}:{d}" for k, d in _fail_layers[:3])[:300]
+    else:
+        _reason_summary = (f"脚本核验通过（{len(passed)}/{len(checked)} 维）"
+                           if checked else "脚本核验未检（LLM 不可用）")
     return {
         "idx": r.idx, "total": 0,
         "question_type": r.question_type or "脚本题",
@@ -4888,7 +4918,51 @@ def _qreview_to_state(module: str, docx: str, unit, r, stage: str = "", q=None) 
                 f"第{r.idx}题（{r.question_type or '脚本题'}）",
         "options": "", "script_answer": r.script_answer or "",
         "note": f"LLM 知识性审查 · 脚本 {docx}",
+        # ★ 审查体系改造：分层标记 + 脚本层结论（边跑边审 → 单记录双层）
+        "layer": "script_only",
+        "script": {
+            "matched": True,
+            "status": "done",
+            "stem": dims["stem"][0], "content": dims["content"][0],
+            "image": dims["image"][0], "answer": dims["answer"][0],
+            "audio": dims["audio"][0], "post_error": dims["post_error"][0],
+            "stem_reason": dims["stem"][1], "content_reason": dims["content"][1],
+            "image_reason": dims["image"][1], "answer_reason": dims["answer"][1],
+            "audio_reason": dims["audio"][1], "post_error_reason": dims["post_error"][1],
+            "knowledge": _kb_ok, "knowledge_reason": _kb_sum,
+            "reason": _reason_summary,
+            "overall_passed": overall,
+            "overall_score": round(len(passed) / max(len(checked), 1), 2) if checked else 0.0,
+        },
     }
+
+
+def _match_basic_qid(module: str, q, rr, stage: str = "") -> str:
+    """★ 审查体系改造：把脚本审查结果合并进同一条基础层记录（边跑边审 → 单记录双层）。
+
+    优先口语训练结构 (unit, big, stage_idx) → auto-Q{big:02d}-{stage_idx:02d}；
+    其他模块按脚本 idx → auto-Q{idx:03d}，要求模块名（+stage 若都有）一致才合并。
+    找不到匹配 → 返回 ""（脚本题未在 App 出现过 → 保留独立脚本记录）。
+    """
+    qs = _inspection_state.get("questions", {})
+    _big = getattr(q, "big", 0) or 0
+    _no = getattr(q, "stage_idx", 0) or 0
+    _idx = rr.idx or getattr(q, "global_idx", 0) or 0
+    cands = []
+    if _big and _no:
+        cands.append(f"auto-Q{_big:02d}-{_no:02d}")
+    cands.append(f"auto-Q{int(_idx):03d}")
+    for c in cands:
+        rec = qs.get(c)
+        if rec is None:
+            continue
+        if rec.get("module") and module and rec.get("module") != module:
+            continue
+        _rec_stage = rec.get("stage") or ""
+        if _rec_stage and stage and _rec_stage != stage:
+            continue
+        return c
+    return ""
 
 
 def _run_llm_script_review(module: str, docx: str, version: str, unit, stage: str = ""):
@@ -4943,8 +5017,23 @@ def _run_llm_script_review(module: str, docx: str, version: str, unit, stage: st
             if _cache_path.exists():
                 _cached_qs = json.loads(_cache_path.read_text(encoding="utf-8"))
                 if isinstance(_cached_qs, dict):
-                    _inspection_state["questions"].update(_cached_qs)
-                    log_msg(f"✅ 已加载 {len(_cached_qs)} 题历史审查结论", "success")
+                    # ★ 审查体系改造：合并脚本层进本轮 fresh 基础记录，而非整体覆盖。
+                    #   重跑模块后 auto-* 基础记录是新的 UI 证据，脚本层复用缓存结论；
+                    #   独立脚本记录直接恢复。
+                    _merged_cache = 0
+                    for _k, _v in _cached_qs.items():
+                        _cur = _inspection_state["questions"].get(_k)
+                        if _cur is not None and isinstance(_v, dict) \
+                                and isinstance(_v.get("script"), dict) and _k.startswith("auto-"):
+                            _cur["script"] = _v["script"]
+                            _cur["layer"] = "basic+script"
+                            if _v.get("note"):
+                                _cur["note"] = _v["note"]
+                            _merged_cache += 1
+                        else:
+                            _inspection_state["questions"][_k] = _v
+                    log_msg(f"✅ 已加载 {len(_cached_qs)} 题历史审查结论"
+                            f"（其中 {_merged_cache} 题脚本层合并进基础记录）", "success")
         except Exception as _e:
             log_msg(f"⚠ 加载缓存审查结论失败: {_e}，将重新审查", "warning")
             # 缓存加载失败 → 回退到完整审查，不 return
@@ -4993,18 +5082,35 @@ def _run_llm_script_review(module: str, docx: str, version: str, unit, stage: st
         #   → 统一走 LLM 脚本审查（_review_script_llm：脚本信息 → LLM 六维判定，理由具体有说服力）
         results = agent.review(screenshots={})
         n_pass = sum(1 for rr in results if rr.overall_passed)
+        # ★ 审查体系改造：边跑边审 → 单记录双层。
+        #   脚本审查结果优先合并进同一条基础层记录（questions[auto-qid]["script"]）；
+        #   未在 App 出现过的脚本题 → 保留独立脚本记录（layer=script_only）。
+        _merged_cnt = 0
         for q, rr in zip(agent.script_questions, results):
             qid = f"{module}-脚本-Q{rr.idx:02d}"
-            _inspection_state["questions"][qid] = _qreview_to_state(
+            _state = _qreview_to_state(
                 module, docx, unit, rr, stage=getattr(q, "stage", "") or "", q=q)
+            _m = _match_basic_qid(module, q, rr, stage)
+            if _m and _m in _inspection_state["questions"]:
+                _basic = _inspection_state["questions"][_m]
+                _basic["script"] = _state["script"]
+                _basic["layer"] = "basic+script"
+                _basic["note"] = (_basic.get("note") or "") + \
+                    f"；脚本核验·{docx}" if _basic.get("note") else f"脚本核验·{docx}"
+                _merged_cnt += 1
+            else:
+                _inspection_state["questions"][qid] = _state
         _save_inspection_state_merge()
         # ★ 触发实时错题报告（前端「📑 查看报告」）
         try:
             _live_regen_error_report()
         except Exception:
             pass
-        log_msg(f"✅ {module} LLM 知识性审查完成: {len(results)}题（通过{n_pass}，未检维度不计入不通过）", "success")
+        log_msg(f"✅ {module} LLM 知识性审查完成: {len(results)}题"
+                f"（通过{n_pass}，未检维度不计入不通过，其中 {_merged_cnt} 题已合并进对应基础层记录）", "success")
         # ★ 审查体系改造：审查完成后写入索引 + 缓存文件
+        #   缓存同时包含：独立脚本记录 + 已合并进 auto-* 基础记录（含 script 层），
+        #   供重跑同模块时复用脚本层结论（保留本轮 fresh 的 UI 证据）。
         try:
             _index = load_script_review_index()
             _index[_index_key] = {
@@ -5018,11 +5124,16 @@ def _run_llm_script_review(module: str, docx: str, version: str, unit, stage: st
             _cache_dir = PROJECT_ROOT / "data" / "script_review_cache"
             _cache_dir.mkdir(parents=True, exist_ok=True)
             _cache_path = _cache_dir / f"{_index_key.replace('/','_').replace(' ','')}.json"
+            _cache_payload = {}
+            for q, rr in zip(agent.script_questions, results):
+                _qid_s = f"{module}-脚本-Q{rr.idx:02d}"
+                _m_s = _match_basic_qid(module, q, rr, stage)
+                if _m_s and _m_s in _inspection_state["questions"]:
+                    _cache_payload[_m_s] = _inspection_state["questions"][_m_s]
+                elif _qid_s in _inspection_state["questions"]:
+                    _cache_payload[_qid_s] = _inspection_state["questions"][_qid_s]
             _cache_path.write_text(
-                json.dumps({k: _inspection_state["questions"].get(k) for k in
-                           [f"{module}-脚本-Q{rr.idx:02d}" for rr in results]
-                           if k in _inspection_state["questions"]},
-                          ensure_ascii=False, indent=2),
+                json.dumps(_cache_payload, ensure_ascii=False, indent=2),
                 encoding="utf-8")
         except Exception as _e:
             pass

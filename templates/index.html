@@ -575,6 +575,76 @@
         padding: 2px 0;
         line-height: 1.6;
       }
+      /* ★ 审查体系改造：脚本核验区块（脚本层，与基础层独立展示） */
+      .q-script-box {
+        margin-top: 6px;
+        margin-bottom: 8px;
+        padding: 8px 12px;
+        border-radius: 8px;
+        background: #f8fafc;
+        border: 1px solid #dbe4ec;
+        border-left: 3px solid #64748b;
+        font-size: 12px;
+        line-height: 1.7;
+      }
+      .q-script-box.pending {
+        background: #fffbeb;
+        border-color: #fde68a;
+        border-left-color: #f59e0b;
+      }
+      .q-script-head {
+        font-weight: 700;
+        color: #475569;
+        font-size: 12px;
+        margin-bottom: 4px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .q-script-badge {
+        font-size: 10px;
+        padding: 1px 8px;
+        border-radius: 5px;
+        font-weight: 600;
+      }
+      .q-script-badge.ok {
+        background: var(--ok-bg);
+        color: var(--ok-ink);
+      }
+      .q-script-badge.bad {
+        background: var(--red-bg);
+        color: var(--red);
+      }
+      .q-script-badge.na {
+        background: #f1f5f9;
+        color: #64748b;
+      }
+      .q-script-line {
+        font-size: 12px;
+        padding: 1.5px 0;
+      }
+      .q-script-line.ok {
+        color: #2d6a4f;
+      }
+      .q-script-line.bad {
+        color: #a33b36;
+      }
+      .q-script-line.na {
+        color: #64748b;
+      }
+      /* 脚本层状态徽标（标题行） */
+      .q-head-new .badge-script-ok {
+        background: var(--ok-bg);
+        color: var(--ok-ink);
+      }
+      .q-head-new .badge-script-bad {
+        background: var(--red-bg);
+        color: var(--red);
+      }
+      .q-head-new .badge-script-na {
+        background: #f1f5f9;
+        color: #64748b;
+      }
       .q-shot {
         margin-top: 8px;
         margin-bottom: 8px;
@@ -3465,12 +3535,15 @@
         // ★ 2026-08-30 修复：按 (模块·stage) 分组展示各自动态题数
         //   （用户要求：测了听力专项·练习+测试，总览要分开展示，不能只显示单一总数字）
         const modsTotal = f._modules_total || {};
-        const modRows = Object.keys(modsTotal).map((k) =>
-          `<span class="mod-row"><b>${escHtml(k)}</b> ${modsTotal[k]} 题</span>`
-        ).join('  ');
+        const modRows = Object.keys(modsTotal)
+          .map(
+            (k) =>
+              `<span class="mod-row"><b>${escHtml(k)}</b> ${modsTotal[k]} 题</span>`,
+          )
+          .join("  ");
         const overviewHtml = `<div class="review-overview">
     <div class="review-overview-title">本次审查 <b>${t}</b> 题：通过 <b class="pass">${aipa}</b> ／ 不通过 <b class="fail">${aifa}</b> ／ 未审 <b class="skip">${nOpt}</b></div>
-    <div class="review-overview-sub">${modRows ? '分模块：' + modRows : ''}　人工标注 <b>${lb}</b> 题 · 反馈准确率 <b>${$("fbAccuracy") ? $("fbAccuracy").textContent : "—"}</b></div>
+    <div class="review-overview-sub">${modRows ? "分模块：" + modRows : ""}　人工标注 <b>${lb}</b> 题 · 反馈准确率 <b>${$("fbAccuracy") ? $("fbAccuracy").textContent : "—"}</b></div>
   </div>`;
         // 3) 不通过题清单（折叠区，默认展开）
         const failIds = ids.filter((id) => qs[id].overall_passed === false);
@@ -3515,9 +3588,11 @@
         //   <details> 的 open 会被重置为初始 cardOpen → 用户手动展开几秒又收回。
         //   渲染前记录当前已打开的 qc_ 集合，渲染时保留它们。
         const openSet = new Set(
-          [...document.querySelectorAll("#questionList details.q-card-new[open]")].map(
-            (el) => el.id,
-          ),
+          [
+            ...document.querySelectorAll(
+              "#questionList details.q-card-new[open]",
+            ),
+          ].map((el) => el.id),
         );
         const groupKey = (qid) => {
           const s = String(qid),
@@ -3629,6 +3704,59 @@
                       ? `<div class="q-pass-details">${meaningful.map((d) => `<div class="q-pass-line">✅ ${escHtml(d)}</div>`).join("")}</div>`
                       : "";
                   })();
+                  // ★ 审查体系改造：脚本层（脚本核验）区块 —— 与基础层独立展示
+                  const scr =
+                    q.script && typeof q.script === "object" ? q.script : null;
+                  const isScriptLayer =
+                    q.layer === "basic+script" || q.layer === "script_only";
+                  let scriptBadgeHtml = "";
+                  if (scr && scr.matched && scr.status === "done") {
+                    const sCls =
+                      scr.overall_passed === false
+                        ? "bad"
+                        : scr.overall_passed === true
+                          ? "ok"
+                          : "na";
+                    const sTxt =
+                      scr.overall_passed === false
+                        ? "脚本✗"
+                        : scr.overall_passed === true
+                          ? "脚本✓"
+                          : "脚本…";
+                    scriptBadgeHtml = `<span class="q-status-badge badge-script-${sCls}">${sTxt}</span>`;
+                  }
+                  let scriptHtml = "";
+                  if (isScriptLayer && scr) {
+                    if (scr.status === "pending") {
+                      scriptHtml = `<div class="q-script-box pending"><div class="q-script-head">📑 脚本核验 <span class="q-script-badge na">核验中…</span></div></div>`;
+                    } else if (scr.matched || scr.status === "done") {
+                      const sRows = [
+                        ["题干", scr.stem, scr.stem_reason],
+                        ["选项", scr.content, scr.content_reason],
+                        ["答案", scr.answer, scr.answer_reason],
+                        ["知识点", scr.knowledge, scr.knowledge_reason],
+                        ["听力材料", scr.audio, scr.audio_reason],
+                      ].filter(([, v]) => v === true || v === false);
+                      const sLines = sRows
+                        .map(([k, v, det]) => {
+                          const ok = v === true ? "✅" : "❌";
+                          const cls = v === true ? "ok" : "bad";
+                          return `<div class="q-script-line ${cls}">${ok} <b>${k}:</b> ${escHtml((det || "").slice(0, 140))}</div>`;
+                        })
+                        .join("");
+                      const sOverall =
+                        scr.overall_passed === false
+                          ? "不通过"
+                          : scr.overall_passed === true
+                            ? "通过"
+                            : "未定";
+                      scriptHtml = `<div class="q-script-box">
+      <div class="q-script-head">📑 脚本核验 <span class="q-script-badge ${scr.overall_passed === false ? "bad" : scr.overall_passed === true ? "ok" : "na"}">${sOverall}</span></div>
+      ${sLines || `<div class="q-script-line na">⏸ 脚本层无明确可核验维度（听音/图片题等，未检不计不通过）</div>`}
+      ${scr.reason ? `<div class="q-script-line na">${escHtml(scr.reason)}</div>` : ""}
+    </div>`;
+                    }
+                  }
                   // 人工标注
                   const actHtml = q.human_label
                     ? `<span class="done-tag">已标注: ${q.human_label}${q.human_note ? " · " + q.human_note : ""}</span>`
@@ -3654,12 +3782,14 @@
                   }
                   // 卡面折叠状态：★ 失败题永远默认展开（用户期望，否者过几秒就刷新被收起）
                   //   + 用户手动展开过的（openSet）保留 → 防止 pollInspect 每2s重渲染把卡片收起
-                  const cardOpen = (pa === false) || openSet.has("qc_" + qid) ? "open" : "";
+                  const cardOpen =
+                    pa === false || openSet.has("qc_" + qid) ? "open" : "";
                   return `<details class="q-card-new" id="qc_${qid}" ${cardOpen}>
       <summary class="q-head-new ${pa === false ? "fail" : unrev ? "pending" : "pass"}">
         <div class="qnum">Q${qnum}</div>
         <span class="qtype">${q.question_type || "?"}</span>
         <span class="q-conclusion">${escHtml(conclusionLine)}</span>
+        ${scriptBadgeHtml}
         <span class="q-status-badge ${pa === false ? "badge-fail" : unrev ? "badge-pending" : "badge-pass"}">${unrev ? "未审查" : pa ? "通过" : "不通过"}</span>
         <span class="toggle-icon">▾</span>
       </summary>
@@ -3667,6 +3797,7 @@
         ${contentHtml ? `<div class="q-content">${contentHtml}</div>` : ""}
         ${failReasonHtml}
         ${passDetailHtml}
+        ${scriptHtml}
         ${shotHtml}
         <div class="q-actions">${actHtml}</div>
       </div>
