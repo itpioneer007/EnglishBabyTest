@@ -303,9 +303,31 @@ def _enter_level(d, level_no):
     d.click(*pos)
     print(f"    ✅ 点关卡 {level_no} @{pos}")
     time.sleep(1.2)
+    # ★ 2026-09-02 浏览页/答题页都可能弹"当前关卡无试题"气泡（关卡未出好题）。
+    #   用户约定：识别到就跳过本关继续下一关，不要卡住。
+    #   同样要在浏览页早识别（免得干等"点击显示释义"/重复点马上闯关）。
+    def _no_question_in(xml: str) -> bool:
+        if not xml:
+            return False
+        _txts = " ".join(t for t in re.findall(r'text="([^"]+)"', xml))
+        return any(k in _txts for k in (
+            "当前关卡无试题", "没有试题", "暂无题目", "暂无数",
+            "无题", "敬请期待", "正在开发",
+        ))
     # 单词浏览页 → 先点单词卡片（"点击显示释义"，解锁马上闯关）→ 点马上闯关
     for _ in range(8):
         if d(text="马上闯关").exists(timeout=1):
+            # ★ 浏览页级早识别"当前关卡无试题"：一样点马上闯关让关卡走完，
+            #   然后 _answer_loop 兜底也会识别到并 0 退出，不影响下一关
+            try:
+                _xml_pv = d.dump_hierarchy()
+                if _no_question_in(_xml_pv):
+                    step_log(
+                        f"⚠ 关卡 {level_no} 无试题（浏览页气泡），直接点马上闯关走完",
+                        "warning",
+                    )
+            except Exception:
+                pass
             # 先点单词卡片（浏览页 5 个单词卡片，点第一个解锁即可）
             try:
                 if d(text="点击显示释义").exists(timeout=0.5):
@@ -451,9 +473,9 @@ def _answer_loop(d, max_q=20):
         if should_stop():
             step_log("⏹ 收到停止请求，中断当前模块", "warning")
             return q
-        # ★ 2026-08-26 无试题关卡识别：进入关卡后若页面没有任何答题元素
-        #   （提交/检查/下一题/选项/录音/填字母），且无 N/M 进度 → 该关未出好题，
-        #   只记录一句提示，不走每题证据卡刷屏，直接跳出关卡继续下一关。
+        # ★ 2026-09-02 用户约定：识别"当前关卡无试题"立即跳到下一关，不要卡住。
+        #   原阈值 6 帧~4.8s 太长（无试题关卡视觉上像死循环）；改为：显式气泡立即跳；
+        #   隐式"无答题元素+无进度"连续 2 帧~1.6s 也立即跳，秒过不浪费时间。
         try:
             _xml_st = d.dump_hierarchy()
             _st_txts = " ".join(t for t in re.findall(r'text="([^"]+)"', _xml_st))
@@ -461,19 +483,25 @@ def _answer_loop(d, max_q=20):
                 "提交", "检查", "下一题", "跳过", "重新答题", "原音", "点击录音",
                 "马上闯关", "字母", "补全"))
             _has_progress = bool(re.search(r'\d+/\d+', _st_txts))
-            # 无试题特征：既无答题元素也无进度，且出现"没有试题/暂无/无题"类文案
-            _no_q_txt = any(k in _st_txts for k in ("没有试题", "暂无题目", "暂无数", "无题", "敬请期待", "正在开发"))
+            # 无试题特征：既无答题元素也无进度，且出现"当前关卡无试题/没有试题"类文案
+            # ★ 把"当前关卡无试题"放在最前（这是截图真实命中文案）
+            _no_q_txt = any(k in _st_txts for k in (
+                "当前关卡无试题",        # 真机命中（截图）—— 最常见
+                "没有试题", "暂无题目", "暂无数",
+                "无题", "敬请期待", "正在开发",
+            ))
             if _no_q_txt:
                 if not _no_question_logged:
                     step_log(f"⚠ 本关无试题（页面：{_st_txts[:40]}），跳过本关继续下一关", "warning")
                     _no_question_logged = True
                 # 返回已完成的题数（0），跳出关卡
                 return q
+            # ★ 2026-09-02 隐式无题（既无答题元素也无 N/M 进度）阈值由 6 → 2，
+            #   让"无试题但页面没气泡文案"的关卡也能秒过，单元不被拖慢
             if not _has_answer_elm and not _has_progress and _cur_progress == 0:
-                # 首轮可能仍在 loading/浏览页，给几次机会；连续多次无答题元素才判无试题
                 _no_answer_frames = getattr(_answer_loop, "_no_answer_frames", 0) + 1
                 _answer_loop._no_answer_frames = _no_answer_frames
-                if _no_answer_frames >= 6:
+                if _no_answer_frames >= 2:
                     step_log(f"⚠ 本关进入后未出现答题元素（可能未出好题），跳过本关（当前页：{_st_txts[:40]}）", "warning")
                     _answer_loop._no_answer_frames = 0
                     return q
