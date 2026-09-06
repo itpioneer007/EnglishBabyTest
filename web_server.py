@@ -4449,6 +4449,7 @@ def api_audio_run():
     mode = data.get("mode", "all")
     units = data.get("units", [1])
     test_units = data.get("test_units", units)
+    test_paper = data.get("paper")  # A/B/AB/None —— 测试 A/B 卷选择
 
     def _run():
         _register_task_thread()  # 记录线程 id，供"立即停止"注入异常
@@ -4476,7 +4477,7 @@ def api_audio_run():
                 log_msg(f"练习部分完成: {q1} 题")
             if mode in ("all", "test"):
                 log_msg("▶ 开始测试部分...")
-                q2 = run_test_module(d)
+                q2 = run_test_module(d, paper=test_paper)
                 log_msg(f"测试部分完成: {q2} 题")
 
             log_msg(f"✅ 听力专项全部完成: 练习{q1} + 测试{q2} = {q1+q2} 题")

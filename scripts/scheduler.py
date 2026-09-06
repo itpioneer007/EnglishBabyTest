@@ -198,6 +198,7 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
             if name == "听力专项" and hasattr(mod, "run_test_module"):
                 practice_units = units.get("听力专项")
                 test_units = units.get("听力专项_测试")
+                test_paper = units.get("听力专项_测试_paper")  # A/B/AB/None
                 _p_on = practice_units is not None and practice_units != "NONE"
                 _t_on = test_units is not None and test_units != "NONE"
                 # ★ 辅助：分别记录"练习/测试"的题数和回调状态，用于拆 on_module_done
@@ -210,7 +211,7 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
                     step_log(f"✅ 听力专项·练习 完成: {_p_q} 题", "success")
                     _p_res = {"q": _p_q, "t": 0, "ok": True, "stage": "练习"}
                     set_current_module("听力专项", "测试")
-                    _t_q = mod.run_test_module(d, test_units=test_units) if _t_on else 0
+                    _t_q = mod.run_test_module(d, test_units=test_units, paper=test_paper) if _t_on else 0
                     step_log(f"✅ 听力专项·测试 完成: {_t_q} 题", "success")
                     _t_res = {"q": _t_q, "t": 0, "ok": True, "stage": "测试"}
                     q = _p_q + _t_q
@@ -222,7 +223,7 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
                     q = _p_q
                 elif _t_on:
                     set_current_module("听力专项", "测试")
-                    _t_q = mod.run_test_module(d, test_units=test_units)
+                    _t_q = mod.run_test_module(d, test_units=test_units, paper=test_paper)
                     step_log(f"📌 听力专项: 仅测试（练习未勾选）完成 {_t_q} 题", "info")
                     _t_res = {"q": _t_q, "t": 0, "ok": True, "stage": "测试"}
                     q = _t_q
@@ -236,7 +237,7 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
                     _p_q = mod.run_module(d, units=module_units) if module_units else mod.run_module(d)
                     _p_res = {"q": _p_q, "t": 0, "ok": True, "stage": "练习"}
                     set_current_module("听力专项", "测试")
-                    _t_q = mod.run_test_module(d, test_units=module_units) if module_units else mod.run_test_module(d)
+                    _t_q = mod.run_test_module(d, test_units=module_units, paper=test_paper) if module_units else mod.run_test_module(d)
                     _t_res = {"q": _t_q, "t": 0, "ok": True, "stage": "测试"}
                     q = _p_q + _t_q
                     step_log(f"📌 听力专项: 练习+测试 全部完成（{q} 题）", "info")

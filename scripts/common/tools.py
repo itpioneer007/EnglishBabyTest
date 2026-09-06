@@ -497,7 +497,7 @@ def back_to_home(d, grade_level):
 
 
 # ==================== ⑧ 智能单元定位（随机应变按名字找内容） ====================
-def smart_find_unit_row(d, target, click_text="去答题", max_pages=8, prefer_restart=False):
+def smart_find_unit_row(d, target, click_text="去答题", max_pages=8, prefer_restart=False, paper=None):
     """智能定位目标单元/测试行并点击其按钮 —— 不写死标题，随机应变
 
     target: 单元引用
@@ -522,7 +522,7 @@ def smart_find_unit_row(d, target, click_text="去答题", max_pages=8, prefer_r
             xml = ""
         # tab 名：目标关键词本身或其变体（"期中评价"→"期中"，"期末评价"→"期末"）
         tab_names = [s]
-        for _k in ("期中评价", "期末评价", "期中", "期末", "单元"):
+        for _k in ("期中评价", "期末评价", "考前突破", "期中", "期末", "单元"):
             if _k in s:
                 tab_names.append(_k)
         for _t in tab_names:
@@ -535,23 +535,36 @@ def smart_find_unit_row(d, target, click_text="去答题", max_pages=8, prefer_r
             except Exception:
                 pass
 
+    # ★ 卷标记匹配辅助（A/B 卷识别）
+    def _has_paper(t):
+        return bool(_re.search(r"[（(][AB][)）卷]?", t))
+    def _match_paper(t):
+        if not paper or paper == "AB":
+            return True  # 不区分卷（AB/未指定：任意卡片命中）
+        if _has_paper(t):
+            # 卡片明确标注（A）/（B）→ 必须同卷
+            return _re.search(r"[（(]" + _re.escape(paper) + r"[)）卷]?", t) is not None
+        # ★ 卡片无 A/B 标记（单卷单元）+ 指定了具体卷(A/B) → 该卡不属于任何一卷，
+        #   不命中（避免“选 B 卷”却点到无标记的单卷卡，或 AB 拆卷时单卡被重复点）
+        return False
+
     # ② 构造标题匹配函数
     def _match(t):
         t = (t or "").strip()
         if not t:
             return False
         if is_keyword:
-            return s in t          # 标题包含关键词（如"AI检测 测试题目选题"）
+            return (s in t) and _match_paper(t)   # 标题含关键词 + 命中卷
         # 数字/区间：Unit N 或 Unit N单元评价（忽略"湘少X上"前缀）
         #   ★ 容错：Unit3(无空格) / "Unit 3·单元评价" / "Unit 3 单元评价" 都匹配
         #     —— 之前严格 `(?:\s*单元评价|\s|$)` 在"Unit3单元评价"(无空格)时
         #     可能漏匹配 → 误下滑（用户实测：目标在首屏却下滑找不到）
-        if _re.search(rf"U\s*n\s*i\s*t\s*{_re.escape(s)}", t, _re.IGNORECASE):
-            return True
+        if _re.search(rf"U\s*n\s*i\s*t\s*s?\s*{_re.escape(s)}", t, _re.IGNORECASE):
+            return _match_paper(t)
         if _re.fullmatch(r"\d+", s):
             # U3 / U3单元 / U 3（单元自检新列表可能用 U3 简写）
-            if _re.search(rf"U\s*{_re.escape(s)}(?:\s*单元评价|\s*·|\s|$)", t, _re.IGNORECASE):
-                return True
+            if _re.search(rf"U\s*s?\s*{_re.escape(s)}(?:\s*单元评价|\s*·|\s|$)", t, _re.IGNORECASE):
+                return _match_paper(t)
         return False
 
     # ③ 逐屏查找：标题行 → 点同行 click_text 按钮

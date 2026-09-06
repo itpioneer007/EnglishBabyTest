@@ -542,10 +542,49 @@ def _test_answer_loop(d, max_q=45):
     return q
 
 
-def run_test_module(d, test_units=None):
+def _unit_is_split(d, unit_num):
+    """测试列表中该单元/关键词是否分 A/B 卷（存在（A）/（B）(A)/(B) 标记卡片）"""
+    try:
+        xml = d.dump_hierarchy()
+    except Exception:
+        xml = ""
+    return ("（A）" in xml) or ("（B）" in xml) or ("(A)" in xml) or ("(B)" in xml)
+
+
+def _expand_papers(d, unit_num, paper):
+    """根据 paper 参数展开成待跑卷列表:
+       'A'/'B' → 单张; 'AB'/None → 列表里有 A/B 标记则 [A, B]，否则单卡"""
+    if paper in ("A", "B"):
+        return [paper]
+    if _unit_is_split(d, unit_num):   # AB 或 未指定 且确为拆卷 → 跑两张
+        return ["A", "B"]
+    return [None]                     # 单卷，不区分
+
+
+def _run_one_test_card(d, unit_num, paper):
+    """在测试 tab 内定位并作答一张卡片（含 A/B 卷过滤），返回题数(0=未找到)"""
+    found = smart_find_unit_row(d, unit_num, click_text="去答题", paper=paper)
+    if not found:
+        return 0
+    time.sleep(0.8)
+    if d(text="好的，我知道啦~").exists(timeout=3):
+        d(text="好的，我知道啦~").click(); time.sleep(0.8)
+    if d(text="开始答题").exists(timeout=3):
+        d(text="开始答题").click(); time.sleep(1.2)
+    q = _test_answer_loop(d)
+    for _ in range(3):               # back 回测试列表
+        if d(text="去答题").exists(timeout=1.5):
+            break
+        d.press("back"); time.sleep(0.6)
+    return q
+
+
+def run_test_module(d, test_units=None, paper=None):
     """第二部分：测试模块——测试 tab 遍历指定单元，返回题数
 
     test_units: 单元范围，如 [1,2] 或 '1-2'；None=默认全部
+    paper: A/B/AB/None —— 指定 A 卷 / B 卷 / AB 两卷
+           （阶段评价/期中/期末 的 (A)/(B) 卡片区分）
     """
     t0 = time.time()
     total = 0
@@ -590,31 +629,23 @@ def run_test_module(d, test_units=None):
     print("  ✅ 已进入测试 tab")
 
     for ui, unit_num in enumerate(_tunits):
-        print(f"\n  🎯 测试目标 [{unit_num}] [{ui+1}/{len(_tunits)}]")
-        # ★ 智能定位：数字/区间/关键词（期中/期末/AI检测…）随机应变找"去答题"
-        #   ★ App 测试模块已恢复：正常点击测试 tab 后逐单元测（此前下线时自动跳过）
-        found = smart_find_unit_row(d, unit_num, click_text="去答题")
-        if not found:
-            print(f"  ❌ 找不到目标 [{unit_num}] 的去答题"); continue
-        time.sleep(0.8)
-        # 规则弹窗"好的，我知道啦~"
-        if d(text="好的，我知道啦~").exists(timeout=3):
-            d(text="好的，我知道啦~").click(); time.sleep(0.8)
-        # 开始答题
-        if d(text="开始答题").exists(timeout=3):
-            d(text="开始答题").click(); time.sleep(1.2)
-        # 答题循环
-        q = _test_answer_loop(d)
-        total += q
-        print(f"  ✅ U{unit_num} 测试完成: {q} 题")
-        # back 回测试列表
-        for _ in range(3):
-            if d(text="去答题").exists(timeout=1.5):
-                break
-            d.press("back"); time.sleep(0.6)
-        # 回到测试 tab
-        if d(text="测试").exists(timeout=2):
-            d(text="测试").click(); time.sleep(0.8)
+        print(f"  🎯 测试目标 [{unit_num}] [{ui+1}/{len(_tunits)}]")
+        _papers = _expand_papers(d, unit_num, paper)
+        _uq = 0
+        for _p in _papers:
+            _tag = f"({_p}卷)" if _p else ""
+            print(f"    · 跑{_tag or '默认卷'}")
+            _q = _run_one_test_card(d, unit_num, _p)
+            if _q == 0:
+                print(f"  ❌ 找不到目标 [{unit_num}]{_tag} 的去答题")
+            else:
+                print(f"  ✅ U{unit_num}{_tag} 测试完成: {_q} 题")
+            _uq += _q
+            # 回到测试 tab（下一张卷/下一单元前）
+            if d(text="测试").exists(timeout=2):
+                d(text="测试").click(); time.sleep(0.8)
+        total += _uq
+        print(f"  📊 [{unit_num}] 合计 {_uq} 题")
 
     print(f"✅ 测试部分完成: {total} 题, 耗时 {time.time()-t0:.0f}s")
     return total

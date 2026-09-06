@@ -2606,7 +2606,9 @@
           for (let u = a; u <= b; u++) vals.push(u);
         });
         const uniq = [...new Set(vals)].sort((a, b) => a - b);
-        if (!uniq.length) return "";
+        // ★ 无数字 token 时保留原始文本（"期中"/"期末"/"考前突破"等关键词目标），
+        //   否则关键词被清空 → 前端 testUnits 变空 → 后端当成未选(NONE)跳过测试
+        if (!uniq.length) return String(s || "").trim() || "";
         const parts = [];
         let start = uniq[0],
           p = uniq[0];
@@ -2791,11 +2793,15 @@
         }
         const modules = moduleConfigs.map((m) => m.name);
         const unitsMap = {};
+        // ★ A/B 卷：从听力专项「测」输入框读取 dataset.paper（A/B/AB），随 units 一并传给后端
+        const _tInp = document.querySelector(".unit-val-t");
+        const _testPaper = _tInp && _tInp.dataset.paper ? _tInp.dataset.paper : "";
         moduleConfigs.forEach((m) => {
           if (m.name === "听力专项") {
             // ★ 听力专项始终传"练/测"两个键（NONE=跳过该部分），保证后端能正确判断
             unitsMap["听力专项"] = m.units || "NONE";
             unitsMap["听力专项_测试"] = m.testUnits || "NONE";
+            if (_testPaper) unitsMap["听力专项_测试_paper"] = _testPaper;  // A/B/AB
           } else {
             if (m.units) unitsMap[m.name] = m.units;
           }
@@ -4808,7 +4814,7 @@ function confirmTestPick(){
     const u=_tp.sub||(_tp.nums.length?[...new Set(_tp.nums)].sort((a,b)=>a-b).join(','):'');
     display='单元|'+u+'|'+_tp.papers;
     raw=u;                            // 如 5 或 1-5
-  } else { display=_tp.type+'||'+_tp.papers; raw=''; }
+  } else { display=_tp.type+'||'+_tp.papers; raw=_tp.type; }   // 关键词(期中/期末/考前突破)→直接存关键词
   inp.value=raw || display;           // 有范围时存纯范围，否则保留显示文本
   inp.dataset.tpickerDisplay=display; // 保留完整显示串
   inp.dataset.paper=_tp.papers;
