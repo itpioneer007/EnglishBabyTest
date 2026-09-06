@@ -1390,7 +1390,38 @@
         color: var(--gray);
         line-height: 1.5;
       }
-    </style>
+      .tp-trigger{margin-left:6px;padding:2px 9px;border:1.5px solid var(--green);border-radius:7px;font-size:11px;background:#fff;color:var(--green-deep);cursor:pointer;flex-shrink:0;transition:.12s}
+  .tp-trigger:hover{background:var(--green);color:#fff}
+  .unit-val-t{cursor:pointer;background:#fff}
+  .tp-mask{position:fixed;inset:0;background:rgba(30,40,33,.18);z-index:60}
+  .tp-pop{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:282px;max-width:92vw;background:#fff;border-radius:14px;box-shadow:0 14px 44px rgba(0,0,0,.24);z-index:61;padding:15px;font-family:inherit;box-sizing:border-box}
+  .tp-head{font-weight:700;font-size:13px;color:#1b4332;display:flex;justify-content:space-between;align-items:center;margin-bottom:11px}
+  .tp-close{cursor:pointer;font-size:19px;color:#9aa5a0;line-height:1;padding:0 2px}
+  .tp-close:hover{color:#bc4742}
+  .tp-types{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+  .tp-type{padding:5px 12px;border:1.5px solid #c9d8d0;border-radius:8px;font-size:12px;background:#faf8f3;color:#2d3a33;cursor:pointer;transition:.12s}
+  .tp-type.on{border-color:#2d6a4f;background:#2d6a4f;color:#fff}
+  .tp-units{margin-bottom:8px}
+  .tp-hint{font-size:11px;color:#6b7280;margin-bottom:6px}
+  .tp-unit-btns{display:flex;flex-wrap:wrap;gap:6px}
+  .tp-ub{width:34px;height:34px;border:1.5px solid #c9d8d0;border-radius:8px;font-size:13px;background:#faf8f3;color:#2d3a33;cursor:pointer;transition:.12s}
+  .tp-ub.on{border-color:#2d6a4f;background:#2d6a4f;color:#fff}
+  .tp-label{font-size:11px;color:#6b7280;margin:6px 0 5px}
+  .tp-sub{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px}
+  .tp-subb{padding:5px 10px;border:1.5px solid #c9d8d0;border-radius:8px;font-size:12px;background:#faf8f3;color:#2d3a33;cursor:pointer;transition:.12s}
+  .tp-subb.on{border-color:#2d6a4f;background:#2d6a4f;color:#fff}
+  .tp-range{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px}
+  .tp-range input{width:46px;height:30px;border:1.5px solid #c9d8d0;border-radius:8px;text-align:center;font-size:13px;background:#faf8f3;color:#2d3a33}
+  .tp-range input:focus{outline:none;border-color:#2d6a4f}
+  .tp-papers{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:4px}
+  .tp-paper{padding:5px 11px;border:1.5px solid #c9d8d0;border-radius:8px;font-size:12px;background:#faf8f3;color:#2d3a33;cursor:pointer;transition:.12s}
+  .tp-paper.on{border-color:#2d6a4f;background:#2d6a4f;color:#fff}
+  .tp-note{font-size:11px;color:#bc4742;min-height:15px;margin-bottom:9px;line-height:1.4}
+  .tp-foot{display:flex;justify-content:flex-end;gap:8px}
+  .tp-clear{padding:6px 14px;border-radius:8px;font-size:12px;background:#f1f1ee;color:#6b7280;cursor:pointer;border:none}
+  .tp-ok{padding:6px 16px;border-radius:8px;font-size:12px;background:#2d6a4f;color:#fff;cursor:pointer;border:none}
+  .tp-ok:hover{background:#1b4332}
+</style>
   </head>
   <body>
     <!-- ===== 顶部 ===== -->
@@ -1620,11 +1651,7 @@
                     />测</label
                   >
                   <span class="up-k">测</span
-                  ><input
-                    class="unit-val unit-val-t"
-                    placeholder="范围/逗号/空格，留空=全部"
-                    title="测试单元范围：支持 1-5 / 1,3,5；留空=全部"
-                  />
+                  ><input class="unit-val unit-val-t" id="tingliTestInput" readonly placeholder="点此选测评（留空=不测测试）" title="点击打开测评选择器：全部/单元/期中/期末/考前突破" onclick="openTestPicker()"><button type="button" class="tp-trigger" onclick="openTestPicker()">▾选</button>
                 </div>
               </div>
               <!-- 口语训练 -->
@@ -4688,6 +4715,133 @@
           alert("导出异常: " + e.message);
         }
       }
-    </script>
-  </body>
+    
+function openTestPicker(){
+  const inp=document.querySelector('.unit-val-t');
+  const cur=(inp.value||'').trim();
+  parseTestVal(cur);
+  renderTestPicker();
+  document.getElementById('testPicker').classList.remove('hidden');
+  document.getElementById('testPickerMask').classList.remove('hidden');
+}
+
+function parseTestVal(cur){
+  _tp={type:'全部',sub:'',nums:[],papers:'AB'};
+  if(!cur) return;
+  if(cur.indexOf('|')>=0){
+    const bits=cur.split('|');
+    _tp.type=bits[0]||'全部';
+    const u=(bits[1]||'').trim();
+    if(u){ if(/^\d+-\d+$/.test(u)) _tp.sub=u; else _tp.nums=u.split(',').filter(Boolean); }
+    if(bits[2]&&bits[2].trim()) _tp.papers=bits[2].trim().toUpperCase();
+  } else if(/^[\d,\s]+$/.test(cur)){ _tp.type='单元'; _tp.nums=cur.split(',').map(s=>s.trim()).filter(Boolean); }
+  else if(cur==='all'||cur==='全部'){ _tp.type='全部'; }
+  else { _tp.type=cur; }
+}
+
+function renderTestPicker(){
+  document.querySelectorAll('.tp-type').forEach(b=>b.classList.toggle('on',b.dataset.t===_tp.type));
+  document.getElementById('tpUnitBox').classList.toggle('hidden',_tp.type!=='单元');
+  // 自定义范围输入框
+  const fromEl=document.getElementById('tpFrom'), toEl=document.getElementById('tpTo');
+  if(fromEl&&toEl){
+    const m=_tp.sub.match(/^(\d+)-(\d+)$/);
+    if(m){ fromEl.value=m[1]; toEl.value=m[2]; }
+    else { fromEl.value=''; toEl.value=''; }
+  }
+  // "全部单元" 高亮：sub 为空且没有选单个单元号
+  document.querySelectorAll('.tp-subb').forEach(b=>b.classList.toggle('on',b.dataset.s===''&&_tp.sub===''&&_tp.nums.length===0));
+  const box=document.getElementById('tpUnitBtns');
+  if(!box.dataset.built){box.dataset.built='1';for(let i=1;i<=9;i++){const b=document.createElement('button');b.type='button';b.textContent=i;b.className='tp-ub';b.onclick=()=>pickNum(String(i));box.appendChild(b);}}
+  document.querySelectorAll('.tp-ub').forEach(b=>b.classList.toggle('on',_tp.nums.includes(b.textContent)));
+  // A/B 卷
+  document.querySelectorAll('.tp-paper').forEach(b=>b.classList.toggle('on',b.dataset.p===_tp.papers));
+  const note=document.getElementById('tpNote');
+  if(_tp.type==='单元') note.textContent='自定义范围对应六下「Units阶段评价」；单元号多选对应三下「Unit N 单元评价」（无 A/B 卷时自动忽略）';
+  else if(_tp.type==='期中'||_tp.type==='期末') note.textContent='点击对应「'+_tp.type+'评价」卷；当前版本若无此分类将提示未找到并跳过';
+  else if(_tp.type==='考前突破') note.textContent='考前突破 = 测该 tab 下所有卷';
+  else note.textContent='全部 = 测测试页所有卷（留空同效果）';
+}
+
+function onRangeChange(){
+  const fromEl=document.getElementById('tpFrom'), toEl=document.getElementById('tpTo');
+  let a=parseInt(fromEl.value), b=parseInt(toEl.value);
+  if(!isNaN(a)&&!isNaN(b)&&a>=1&&b>=1&&a<=b){
+    _tp.sub=a+'-'+b; _tp.nums=[]; renderTestPicker();
+  }
+}
+
+function pickNum(k){
+  const idx=_tp.nums.indexOf(k);
+  if(idx>=0)_tp.nums.splice(idx,1); else _tp.nums.push(k);
+  _tp.sub=''; renderTestPicker();
+}
+
+function pickType(t){_tp.type=t;if(t!=='单元'){_tp.sub='';_tp.nums=[];}renderTestPicker();}
+
+function pickSub(s){_tp.sub=s;_tp.nums=[];const fromEl=document.getElementById('tpFrom'),toEl=document.getElementById('tpTo');if(fromEl)fromEl.value='';if(toEl)toEl.value='';renderTestPicker();}
+
+function pickPaper(p){_tp.papers=p;renderTestPicker();}
+
+function closeTestPicker(){document.getElementById('testPicker').classList.add('hidden');document.getElementById('testPickerMask').classList.add('hidden');}
+
+function clearTestPick(){const inp=document.querySelector('.unit-val-t');inp.value='';inp.placeholder='点此选测评（留空=不测测试）';closeTestPicker();}
+
+function confirmTestPick(){
+  const inp=document.querySelector('.unit-val-t');
+  let v='';
+  if(_tp.type==='全部'){v='全部||';}
+  else if(_tp.type==='单元'){
+    const u=_tp.sub||(_tp.nums.length?[...new Set(_tp.nums)].sort((a,b)=>a-b).join(','):'');
+    v='单元|'+u+'|'+_tp.papers;
+  } else { v=_tp.type+'||'+_tp.papers; }
+  inp.value=v;
+  let label=_tp.type;
+  if(_tp.type==='单元'){ label='单元'+( _tp.sub?(' '+ _tp.sub.replace('-','~')+'单元') : (_tp.nums.length?(' '+_tp.nums.join(',')):'') ); }
+  label+=' · '+(_tp.papers==='AB'?'AB两卷':_tp.papers+'卷');
+  inp.placeholder='已选：'+label;
+  closeTestPicker();
+}
+</script>
+  
+<div id="testPickerMask" class="tp-mask hidden" onclick="closeTestPicker()"></div>
+<div id="testPicker" class="tp-pop hidden">
+  <div class="tp-head">选择测评类型<span class="tp-close" onclick="closeTestPicker()">×</span></div>
+  <div class="tp-types">
+    <button type="button" class="tp-type" data-t="全部" onclick="pickType('全部')">全部</button>
+    <button type="button" class="tp-type" data-t="单元" onclick="pickType('单元')">单元</button>
+    <button type="button" class="tp-type" data-t="期中" onclick="pickType('期中')">期中</button>
+    <button type="button" class="tp-type" data-t="期末" onclick="pickType('期末')">期末</button>
+    <button type="button" class="tp-type" data-t="考前突破" onclick="pickType('考前突破')">考前突破</button>
+  </div>
+
+  <!-- 单元：六下阶段评价(1~5 / 6~10 可自定义) 或 三下 Unit N -->
+  <div id="tpUnitBox" class="tp-units hidden">
+    <div class="tp-label">自定义单元范围（六下阶段评价 / 三下 Unit N 单元评价）</div>
+    <div class="tp-range">
+      <span>从</span>
+      <input type="number" id="tpFrom" min="1" max="9" placeholder="1" oninput="onRangeChange()">
+      <span>到</span>
+      <input type="number" id="tpTo" min="1" max="9" placeholder="5" oninput="onRangeChange()">
+      <span>单元</span>
+      <button type="button" class="tp-subb" data-s="" onclick="pickSub('')">全部单元</button>
+    </div>
+    <div class="tp-label">或按单元号多选（三下用）</div>
+    <div id="tpUnitBtns" class="tp-unit-btns"></div>
+  </div>
+
+  <!-- A/B 卷（六下有分卷；三下无分卷时忽略） -->
+  <div id="tpPaperBox" class="tp-papers">
+    <button type="button" class="tp-paper" data-p="A" onclick="pickPaper('A')">A卷</button>
+    <button type="button" class="tp-paper" data-p="B" onclick="pickPaper('B')">B卷</button>
+    <button type="button" class="tp-paper" data-p="AB" onclick="pickPaper('AB')">AB 两卷</button>
+  </div>
+
+  <div id="tpNote" class="tp-note"></div>
+  <div class="tp-foot">
+    <button type="button" class="tp-clear" onclick="clearTestPick()">清空</button>
+    <button type="button" class="tp-ok" onclick="confirmTestPick()">确定</button>
+  </div>
+</div>
+</body>
 </html>
