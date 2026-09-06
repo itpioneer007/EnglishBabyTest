@@ -241,13 +241,21 @@ def detect_screen_resolution(adb_serial: str = ""):
     try:
         # ★ 跨机器自动定位 adb（复用 ADBController 的探测逻辑，不写死任何用户路径）
         adb_path = ADBController._find_adb()
+        print(f"  [坐标缩放] 使用 adb: {adb_path}")
         cmd = [adb_path]
         if adb_serial:
             cmd.extend(["-s", adb_serial])
         cmd.extend(["shell", "wm", "size"])
         r = sp.run(cmd, capture_output=True, text=True, timeout=5,
                    encoding="utf-8", errors="replace")
-        m = re.search(r"(\d+)x(\d+)", r.stdout)
+        output = (r.stdout or "") + (r.stderr or "")
+        print(f"  [坐标缩放] adb wm size 原始输出: {output!r}")
+
+        # 优先取实际生效的 Override size，没有则取 Physical size
+        override = re.search(r"Override\s+size:\s*(\d+)x(\d+)", output, re.IGNORECASE)
+        physical = re.search(r"Physical\s+size:\s*(\d+)x(\d+)", output, re.IGNORECASE)
+        plain = re.search(r"(\d+)x(\d+)", output)
+        m = override or physical or plain
         if m:
             w, h = int(m.group(1)), int(m.group(2))
             _detected_res = (w, h)
@@ -255,7 +263,7 @@ def detect_screen_resolution(adb_serial: str = ""):
             _scale_y = h / REFERENCE_RES[1]
             print(f"  [坐标缩放] 检测到分辨率 {w}x{h}, 缩放比 X={_scale_x:.3f} Y={_scale_y:.3f}")
         else:
-            print(f"  [坐标缩放] 无法解析分辨率: {r.stdout}")
+            print(f"  [坐标缩放] 无法解析分辨率，原始输出: {output!r}")
     except Exception as e:
         print(f"  [坐标缩放] 检测失败: {e}, 使用默认1:1")
 
@@ -1696,6 +1704,14 @@ def api_status():
     config = load_config()
     # 优先用动态选择的设备序列号，未选择则用配置文件兜底
     cur_serial = os.environ.get("ANDROID_SERIAL") or config.device.serial
+    # ★ 未选中设备但有设备在线时，自动选第一个（多设备优先 IP:端口），免手动点选
+    if not cur_serial:
+        try:
+            sys.path.insert(0, str(Path(__file__).parent / "scripts"))
+            from common.device import auto_select_first
+            cur_serial = auto_select_first() or config.device.serial
+        except Exception:
+            pass
     device_ok = False
     try:
         sys.path.insert(0, str(Path(__file__).parent / "scripts"))
@@ -5394,8 +5410,20 @@ if __name__ == "__main__":
     print(f"  项目路径: {PROJECT_ROOT}")
     print(f"  启动: http://localhost:5000")
     print("=" * 50)
-        # 自动检测屏幕分辨率并缩放坐标
     config = load_config()
+    # ★ 多设备时自动选择第一个在线设备（优先 IP:端口），免去手动点选
+    _sel = None
+    try:
+        sys.path.insert(0, str(Path(__file__).parent / "scripts"))
+        from common.device import auto_select_first
+        _sel = auto_select_first()
+        if _sel:
+            # 同步到运行时配置,保证分辨率检测、任务执行都用同一台设备
+            config.device.serial = _sel
+            print(f"  ✅ 已自动选择设备: {_sel}")
+    except Exception as _e:
+        print(f"  ⚠ 自动选择设备失败: {_e}")
+    # 自动检测屏幕分辨率并缩放坐标(优先用自动选择的设备,否则回退配置文件)
     detect_screen_resolution(config.device.serial)
     scale_all_coords()
 

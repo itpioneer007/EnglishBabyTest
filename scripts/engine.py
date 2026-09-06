@@ -1540,7 +1540,26 @@ def run_single_module(d, module_name, config):
     # 1. 找模块入口
     print(f"  [1] 查找「{entry}」...")
     if not scroll_and_find(d, entry):
-        print(f"  ❌ 未找到模块: {entry}"); return 0
+        # ★ 兜底：当前「英语」首页可能没有入口（模块已移到「拓展」标签），切换后再找
+        if d(text="拓展").exists(timeout=1.5):
+            print(f"  [1.5] 首页未找到 {entry}，尝试切换到「拓展」标签…")
+            try:
+                d(text="拓展").click()
+            except Exception:
+                # text 节点本身不可点击时，用 XML 取中心点点击其父容器区域
+                try:
+                    _xml_tab = d.dump_hierarchy()
+                except Exception:
+                    _xml_tab = ""
+                _m_tab = re.search(r'text="拓展"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', _xml_tab)
+                if _m_tab:
+                    _tx = (int(_m_tab.group(1)) + int(_m_tab.group(3))) // 2
+                    _ty = (int(_m_tab.group(2)) + int(_m_tab.group(4))) // 2
+                    d.click(_tx, _ty)
+            time.sleep(1.5)
+        # 切换后再找一次（若已经在拓展页则等效于原地重找）
+        if not scroll_and_find(d, entry):
+            print(f"  ❌ 未找到模块: {entry}"); return 0
     # ★ 点击入口【前】必须先清广告：广告延迟加载并覆盖入口卡片，直接点文字坐标会
     #   点到广告上 → 打开外链触发 OPPO 系统验证弹窗（使用面部验证/密码验证）→ 全流程卡死。
     #   （用户定位：只有点到广告才会弹这个验证框）
