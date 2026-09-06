@@ -2578,9 +2578,21 @@
       /* ========== 单元范围输入（空格/横线/逗号分隔 → 规范范围串） ========== */
       /* 输入 "1-5" / "1,3,5" / "1 3 5" / "1-3,5" → "1-5" / "1,3,5" / "1-3,5"；空 → ""（不限） */
       function normalizeUnits(str) {
-        const tokens = String(str || "")
-          .split(/[\s,，]+/)
-          .filter(Boolean);
+        let s = String(str || "").trim();
+        // ★ 兼容 testPicker 弹窗格式：单元|5|A / 全部||AB / 期中||A
+        if (s.indexOf('|') >= 0) {
+          const bits = s.split('|');
+          const type = bits[0] || '';
+          const range = (bits[1] || '').trim();
+          if (type === '单元' && range) {
+            s = range;  // 只取中间范围部分，如 "5" 或 "1-5"
+          } else if (type === '全部') {
+            s = '';     // 全部 = 不测具体单元，交给后端默认处理
+          } else {
+            s = range || s;  // 期中/期末/考前突破等，有范围用范围，否则原样
+          }
+        }
+        const tokens = s.split(/[\s,，]+/).filter(Boolean);
         const vals = [];
         tokens.forEach((t) => {
           // ★ 兼容 U 前缀（U3/U3-5/U1-U2/第5单元/单元3），剥离后按纯数字解析
@@ -2596,7 +2608,7 @@
         const uniq = [...new Set(vals)].sort((a, b) => a - b);
         if (!uniq.length) return "";
         const parts = [];
-        let s = uniq[0],
+        let start = uniq[0],
           p = uniq[0];
         for (let i = 1; i <= uniq.length; i++) {
           const v = uniq[i];
@@ -2604,8 +2616,8 @@
             p = v;
             continue;
           }
-          parts.push(s === p ? String(s) : `${s}-${p}`);
-          s = p = v;
+          parts.push(start === p ? String(start) : `${start}-${p}`);
+          start = p = v;
         }
         return parts.join(",");
       }
@@ -4789,13 +4801,17 @@ function clearTestPick(){const inp=document.querySelector('.unit-val-t');inp.val
 
 function confirmTestPick(){
   const inp=document.querySelector('.unit-val-t');
-  let v='';
-  if(_tp.type==='全部'){v='全部||';}
+  let display='';
+  let raw='';                         // 提交用：纯范围，兼容 normalizeUnits
+  if(_tp.type==='全部'){ display='全部||'; raw=''; }
   else if(_tp.type==='单元'){
     const u=_tp.sub||(_tp.nums.length?[...new Set(_tp.nums)].sort((a,b)=>a-b).join(','):'');
-    v='单元|'+u+'|'+_tp.papers;
-  } else { v=_tp.type+'||'+_tp.papers; }
-  inp.value=v;
+    display='单元|'+u+'|'+_tp.papers;
+    raw=u;                            // 如 5 或 1-5
+  } else { display=_tp.type+'||'+_tp.papers; raw=''; }
+  inp.value=raw || display;           // 有范围时存纯范围，否则保留显示文本
+  inp.dataset.tpickerDisplay=display; // 保留完整显示串
+  inp.dataset.paper=_tp.papers;
   let label=_tp.type;
   if(_tp.type==='单元'){ label='单元'+( _tp.sub?(' '+ _tp.sub.replace('-','~')+'单元') : (_tp.nums.length?(' '+_tp.nums.join(',')):'') ); }
   label+=' · '+(_tp.papers==='AB'?'AB两卷':_tp.papers+'卷');
