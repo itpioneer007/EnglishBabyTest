@@ -8,6 +8,33 @@ import time
 import re as _re
 from common.tools import S, S_swipe
 
+
+def _norm_ver(s):
+    """版本名归一化：全角括号→半角、去空格（兼容 App 显示的"湘少版（2024审定）"
+    与代码里写的"湘少版(2024审定)"）"""
+    return (
+        (s or "")
+        .replace("（", "(")
+        .replace("）", ")")
+        .replace("　", "")
+        .replace(" ", "")
+        .strip()
+    )
+
+
+def _ver_match(cur, target):
+    """当前版本 是否 就是目标版本 —— 归一化后【完全相等】才算匹配。
+
+    ★ 重要：人教版 与 人教版(2024审定) 是两个不同版本，不能用前缀/包含匹配，
+      否则会把非2024审定版误判成2024审定版（导致该切的版本没切）。
+      全角/半角括号、空格的差异由 _norm_ver 消除。
+    """
+    if not cur or not target:
+        return False
+    c, t = _norm_ver(cur), _norm_ver(target)
+    return bool(c and t and c == t)
+
+
 def _is_home(d):
     """判断是否在英语主页：顶部「版本+年级」栏(switch_textbook_tv)是主页独有标志
     （旧版主页有'教材精学/专项突破'，新版主页改版后没有，用 switch_textbook_tv 更可靠）"""
@@ -65,31 +92,34 @@ def switch_version(d, target_version):
     #   无完全相等时退回前缀匹配（兼容"湘少版"→"湘少版(2024审定)"）
     #   ★ 找不到时下滑翻页再找（版本列表可能不止一屏，如教科版在底部）
     picked = False
+    _tv = _norm_ver(target_version)
+    exact = None      # 归一化后完全相等（优先，避免 人教版 误配 人教版(2024审定)）
+    prefix = None     # 兜底：下拉写简称、App 显示全称时才用
     for _page in range(5):
-        exact = None
-        prefix = None
         for e in d.xpath('//*[@text!=""]').all():
             t = (e.text or '').strip()
-            if t == target_version:
-                exact = e
-                break
-            if prefix is None and t.startswith(target_version) and ('版' in t or '审定' in t):
+            tn = _norm_ver(t)
+            if tn == _tv:
+                if exact is None:
+                    exact = e
+            elif prefix is None and tn.startswith(_tv) and ('版' in tn or '审定' in tn):
                 prefix = e
-        pick = exact or prefix
-        if pick is not None:
-            try:
-                pick.click()
-            except Exception:
-                b = pick.bounds
-                d.click((b[0]+b[2])//2, (b[1]+b[3])//2)
-            picked = True
-            break
+        if exact is not None:
+            break          # 找到完全相等 → 立即停止翻页
         # 本屏没找到 → 下滑翻页
         try:
             S_swipe(d, 540, 1800, 540, 700, 0.4)
             time.sleep(0.7)
         except Exception:
             break
+    pick = exact or prefix
+    if pick is not None:
+        try:
+            pick.click()
+        except Exception:
+            b = pick.bounds
+            d.click((b[0] + b[2]) // 2, (b[1] + b[3]) // 2)
+        picked = True
     time.sleep(1.2)
     # 关闭设置面板 + 回主页
     # ★ 用户确认：选完版本后只需按一次 back 就能回到"我"主界面（之前按两次
@@ -142,13 +172,13 @@ def check_current(d, version, grade):
         if not tm:
             continue
         t = tm.group(1)
-        if version in t and grade in t:
+        if _ver_match(t, version) and grade in t:
             return True
     # 兜底：xpath 遍历（兼容无 switch_textbook_tv 的版本）
     for e in d.xpath('//*[@text!=""]').all():
         t = (e.text or '').strip()
         if '版' in t and ('上册' in t or '下册' in t):
-            if version in t and grade in t:
+            if _ver_match(t, version) and grade in t:
                 return True
     return False
 
@@ -236,7 +266,7 @@ def check_version_ok(d, version):
     cur_ver, _ = _current_texts(d)
     if not cur_ver:
         return False
-    return cur_ver.startswith(version) or version in cur_ver
+    return _ver_match(cur_ver, version)
 
 
 def check_grade_ok(d, grade):
@@ -266,7 +296,7 @@ def switch_version_grade(d, version, grade, skip_if_ok=True):
 
     # 2. 读当前版本+年级
     cur_ver, cur_gra = _current_texts(d)
-    ver_ok = bool(cur_ver and (cur_ver.startswith(version) or version in cur_ver))
+    ver_ok = _ver_match(cur_ver, version)
     gra_ok = bool(cur_gra and cur_gra == grade)
     if ver_ok and gra_ok:
         print(f"    ✔ 已是 {version} {grade}，无需切换")
@@ -292,7 +322,7 @@ def switch_version_grade(d, version, grade, skip_if_ok=True):
 
     # 5. 最终确认
     cur_ver, cur_gra = _current_texts(d)
-    ver_ok = bool(cur_ver and (cur_ver.startswith(version) or version in cur_ver))
+    ver_ok = _ver_match(cur_ver, version)
     gra_ok = bool(cur_gra and cur_gra == grade)
     print(f"    最终: {'✔' if ver_ok and gra_ok else '✘'} {cur_ver} {cur_gra}")
     return ver_ok and gra_ok

@@ -1848,28 +1848,126 @@ def api_errors_summary():
 
 @app.route("/api/versions/available")
 def api_versions_available():
-    """可用版本列表 = App 实际展示的5个2024审定版本（真机 2026-08-26 确认），
-    + 知识库中可能存在的其他版本（兜底），去重"""
-    # ★ 2026-08-26：App 当前只展示这5个版本（带2024审定），preset 改为完整版本名
-    #   旧 preset "新湘鲁五上"等拆分形式已停用（与 App 实际版本不一致）
+    """★ 动态可用版本列表（2026-09-06 改为动态合并 → App 加版本无需再改前端代码）
+
+    合并来源（去重，preset 优先保证默认项稳定）：
+      1) preset：App 2026-08-26 确认的 5 个 2024审定版（兜底 + 默认选中）
+      2) 年级配置表 outputs/web/versions_grades.json 的 key（scan_versions_grades.py 生成）
+      3) 切换课本分组 outputs/web/switchbook_groups.json 的标题（App 真实名称，去 "|学段" 后缀）
+      4) App 实时扫描缓存 outputs/web/versions.json（POST /api/versions 触发重扫）
+      5) 知识库 key（形如 "湘少版:五上" → "湘少版五上"）
+    返回: {"versions": [...], "preset": preset, "sources": {来源: 新增条数}}
+    """
     preset = [
         "湘少版(2024审定)", "湘鲁版(2024审定)", "人教版(PEP)(2024审定)",
         "教科版(2024审定)", "教研版(2024审定)",
     ]
     versions = list(preset)
+    sources = {"preset": len(preset)}
+
+    def _norm(x):
+        # 全角括号/空格归一化（与 scripts/common/setup.py:_norm_ver 保持一致）
+        return (
+            (x or "")
+            .replace("（", "(")
+            .replace("）", ")")
+            .replace("　", "")
+            .replace(" ", "")
+            .strip()
+        )
+
+    def _add(name):
+        """仅按「归一化后完全相等」去重。
+
+        ★ 重要：人教版 与 人教版(2024审定) 是两个不同版本，绝不能用前缀去重，
+          否则非2024审定版会被2024审定版吞掉。归一化只消除全/半角括号与空格差异
+          （如 "人教版（PEP）" 与 "人教版(PEP)" 视为同一项）。
+        """
+        name = (name or "").strip()
+        if not name:
+            return False
+        n = _norm(name)
+        if any(n == _norm(v) for v in versions):
+            return False
+        versions.append(name)
+        return True
+
+    def _clean(t):
+        # "人教版（PEP）|小学" → "人教版（PEP）"（去掉学段后缀/空白）
+        return (t or "").strip().split("|")[0].strip()
+
+    def _ver_like(t):
+        # 只收"像版本名"的条目，过滤年级/按钮等噪声
+        return bool(t) and ("版" in t or "审定" in t) and len(t) <= 30
+
+    def _from_json(rel):
+        f = PROJECT_ROOT / "outputs" / "web" / rel
+        if not f.exists():
+            return None
+        try:
+            return json.loads(f.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+
+    # 2) 年级配置表（已规范化 + 带年级数据）
     try:
-        from src.knowledge_base import KnowledgeBase
-        kb = KnowledgeBase()
-        summary = kb.summary()
-        for s in summary:
-            key = s.get("key", "")
-            # 知识库key形如 "湘少版:五上" / "湘鲁版:六上" → 转成 "湘少版五上"
-            label = key.replace(":", "") if ":" in key else key
-            if label and label not in versions:
-                versions.append(label)
+        data = _from_json("versions_grades.json")
+        table = (data or {}).get("table", data) if isinstance(data, dict) else None
+        n = 0
+        for k in (table or {}):
+            if isinstance(k, str):
+                n += 1 if _add(k) else 0
+        sources["grades_table"] = n
     except Exception:
         pass
-    return jsonify({"versions": versions, "preset": preset})
+
+    # 3) 切换课本分组（App 真实标题，可能含全角括号）
+    try:
+        data = _from_json("switchbook_groups.json")
+        groups = (data or {}).get("groups", {}) if isinstance(data, dict) else {}
+        n = 0
+        for k in groups:
+            t = _clean(k)
+            if _ver_like(t):
+                n += 1 if _add(t) else 0
+        sources["switchbook"] = n
+    except Exception:
+        pass
+
+    # 4) App 实时扫描缓存（元素是 {"text":..,"center":..} 或纯字符串）
+    try:
+        data = _from_json("versions.json")
+        items = data if isinstance(data, list) else (
+            (data or {}).get("versions") if isinstance(data, dict) else [])
+        n = 0
+        for it in (items or []):
+            t = it.get("text", "") if isinstance(it, dict) else str(it)
+            t = _clean(t)
+            if _ver_like(t):
+                n += 1 if _add(t) else 0
+        sources["app_scan"] = n
+    except Exception:
+        pass
+
+    # 5) 知识库（key 形如 "湘少版:五上" → 取冒号前的【版本名】；
+    #    冒号后是年级，拼进去会变成"湘少版五上"这种非版本条目，必须去掉）
+    try:
+        import re as _re
+        from src.knowledge_base import KnowledgeBase
+        n = 0
+        for s_ in KnowledgeBase().summary():
+            key = s_.get("key", "") or ""
+            vpart = key.split(":")[0].strip() if ":" in key else key.strip()
+            # 跳过仍带年级后缀的脏数据（如 "湘少版五上"）
+            if not vpart or _re.search(r"[一二三四五六][上下]$", vpart) or "年级" in vpart:
+                continue
+            if _ver_like(vpart):
+                n += 1 if _add(vpart) else 0
+        sources["kb"] = n
+    except Exception:
+        pass
+
+    return jsonify({"versions": versions, "preset": preset, "sources": sources})
 
 
 @app.route("/api/versions", methods=["GET", "POST"])
