@@ -37,51 +37,20 @@ def get_device():
     return u2.connect()
 
 
-def auto_select_first():
-    """自动选择第一个在线设备并写 ANDROID_SERIAL。
-
-    多设备场景：优先选 IP:端口 形式（如 192.168.x.x:port），
-    把 mDNS 别名（adb-xxxx._adb-tls-connect._tcp）排后，
-    避免 u2.connect() 因多设备报错。
-    返回选中的序列号；无设备返回空串。
-    """
-    devs = list_devices()
-    if not devs:
-        return ""
-    def _score(s):
-        # IP:端口 形式优先（首字符是数字且含冒号）
-        return 0 if (":" in s and s[0].isdigit()) else 1
-    devs_sorted = sorted(devs, key=lambda d: _score(d.get("serial", "")))
-    serial = devs_sorted[0]["serial"]
-    set_device(serial)
-    return serial
-
-
 def device_ok(serial=None):
-    """检查指定（或当前）设备是否在线。
-
-    ★ 多设备兜底：未指定 serial 且未设置 ANDROID_SERIAL 时，
-      自动选择第一个在线设备（避免 u2.connect() 因多设备报错）。
-    """
-    import uiautomator2 as u2
-    old = os.environ.get("ANDROID_SERIAL", "")
-    if serial:
-        os.environ["ANDROID_SERIAL"] = serial
-    elif not os.environ.get("ANDROID_SERIAL"):
-        # 未选设备 → 自动选一个在线的，再检测
-        try:
-            auto_select_first()
-        except Exception:
-            pass
+    """检查指定（或当前）设备是否在线"""
     try:
+        import uiautomator2 as u2
+        old = os.environ.get("ANDROID_SERIAL", "")
+        if serial:
+            os.environ["ANDROID_SERIAL"] = serial
         d = u2.connect()
         info = d.info
+        if serial:
+            os.environ["ANDROID_SERIAL"] = old
         return bool(info)
     except Exception:
         return False
-    finally:
-        if serial:
-            os.environ["ANDROID_SERIAL"] = old
 
 
 if __name__ == "__main__":
