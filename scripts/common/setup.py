@@ -53,10 +53,63 @@ def _back_home(d):
     return False
 
 
+def _ensure_screen_ready(d):
+    """★ 前置检查：确保屏幕亮着且已解锁（息屏/AOD 状态下点击一律无效）。
+
+    真机问题（2026-09-08）：手机自动息屏后跑任务，`_enter_switchbook` 点顶部栏
+    完全点不动 → 版本/年级切换失败 → 任务以「同版本/年级无法切换」终止，
+    用户还以为是「版本不存在」，实际是屏幕根本没亮。
+
+    流程：screenOn? → 否 → screen_on() → 尝试 unlock() → 再确认一次
+    返回 True/False（False = 仍不可用，上层应明确提示用户手动解锁）
+    """
+    try:
+        info = d.info or {}
+    except Exception:
+        info = {}
+    # 1) 亮屏
+    try:
+        if not info.get("screenOn", True):
+            print("    ⚠ 屏幕处于息屏状态 → 尝试点亮")
+            try:
+                d.screen_on()
+            except Exception:
+                try:
+                    d.shell("input keyevent 26")  # 电源键兜底
+                except Exception:
+                    pass
+            time.sleep(1.2)
+    except Exception:
+        pass
+    # 2) 解锁（无密码/图案时可直接滑开；有人脸/密码/指纹时无法绕过 → 提示用户）
+    try:
+        d.unlock()
+        time.sleep(0.8)
+    except Exception:
+        pass
+    # 3) 再确认一次：能 dump 到非空页面才算就绪
+    try:
+        _xml = d.dump_hierarchy() or ""
+    except Exception:
+        _xml = ""
+    if len(_xml) < 2000:
+        print("    ❌ 屏幕仍不可用（可能锁屏需人脸/密码解锁）→ 请手动解锁手机后重试")
+        return False
+    # 锁屏页特征（AOD/锁屏时钟）：包名不是英语宝且节点极少
+    if ("com.hihonor.aod" in _xml or "keyguard" in _xml.lower()
+            or "com.android.systemui" in _xml and "status_bar" not in _xml):
+        print("    ❌ 当前停在锁屏/息屏界面 → 请手动解锁并回到英语宝主页后重试")
+        return False
+    return True
+
+
 def _enter_switchbook(d, max_retry=3):
     """主页 → 点顶部栏「switch_textbook_tv」进入'切换课本'页。
     返回是否成功进入（页面出现'切换课本'标题）。
     """
+    # ★ 前置：息屏状态下点击无效，先确保亮屏+解锁
+    if not _ensure_screen_ready(d):
+        return False
     if not _is_home(d):
         _back_home(d); time.sleep(1.2)
     for _ in range(max_retry):
