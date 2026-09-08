@@ -2009,6 +2009,20 @@ def api_version_grades_current():
         sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
         setup = importlib.import_module("common.setup")
 
+        # ★ 2026-09-08：先确保「亮屏 + 解锁 + 英语宝在前台主页」，
+        #   否则手机停在桌面/AOD/其他 App 时，下面 dump 什么都读不到，
+        #   前端就一直显示「年级 读取中…」。
+        if not setup.ensure_app_ready(d):
+            _cached = _read_cached_grades(target)
+            if _cached and _cached.get("grades"):
+                return jsonify({
+                    "version": target or _cached.get("version", ""),
+                    "grades": _cached["grades"],
+                    "current_grade": _cached.get("current_grade", ""),
+                    "source": "cache_fallback_app_not_ready",
+                })
+            return jsonify({"error": "未能进入英语宝主页（请确认已解锁、已登录）"}), 500
+
         def _homebar_text():
             """主页顶部版本+年级栏文本（resource-id=switch_textbook_tv，属性顺序不固定）"""
             try:

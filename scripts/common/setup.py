@@ -103,6 +103,64 @@ def _ensure_screen_ready(d):
     return True
 
 
+def ensure_app_ready(d, package="com.dinoenglish.yyb", timeout=10):
+    """★ 确保手机「亮屏解锁 + 英语宝在前台主页」。
+
+    背景（2026-09-08 真机）：web_server 的 /api/version-grades/current 连上设备后
+    直接 dump 当前页面找 switch_textbook_tv，若手机停在桌面/AOD/其他 App
+    → 什么也读不到 → 前端一直显示「年级 读取中…」。
+    本函数把「亮屏 + 解锁 + 拉起 App + 等主页 + 关开屏弹窗」串起来。
+
+    返回 True/False（False 时上层应回退缓存，不要静默失败）
+    """
+    if not _ensure_screen_ready(d):
+        return False
+    # 1) 已在英语宝主页？
+    for _ in range(3):
+        try:
+            xml = d.dump_hierarchy() or ""
+        except Exception:
+            xml = ""
+        if "switch_textbook_tv" in xml:
+            return True
+        if package in xml:
+            break
+        time.sleep(0.6)
+    # 2) 拉起 App
+    try:
+        print(f"    → 英语宝未在前台，启动 {package}")
+        d.app_start(package)
+    except Exception as e:
+        print(f"    ⚠ app_start 失败: {e}")
+        try:
+            d.shell(["monkey", "-p", package,
+                     "-c", "android.intent.category.LAUNCHER", "1"])
+        except Exception:
+            pass
+    # 3) 等主页出现（switch_textbook_tv = 主页顶部「版本+年级」栏）
+    for _ in range(timeout * 2):
+        time.sleep(0.5)
+        try:
+            xml = d.dump_hierarchy() or ""
+        except Exception:
+            xml = ""
+        if "switch_textbook_tv" in xml:
+            print("    ✓ 已进入英语宝主页")
+            return True
+        # 开屏广告/权限弹窗 → 顺手关掉
+        for _txt in ("同意", "允许", "跳过", "关闭", "我知道了", "好的"):
+            try:
+                if d(text=_txt).exists(timeout=0.3):
+                    d(text=_txt).click()
+                    print(f"    → 关闭弹窗: {_txt}")
+                    time.sleep(0.6)
+                    break
+            except Exception:
+                pass
+    print("    ❌ 未能进入英语宝主页（请确认已安装、已登录，且未在锁屏）")
+    return False
+
+
 def _enter_switchbook(d, max_retry=3):
     """主页 → 点顶部栏「switch_textbook_tv」进入'切换课本'页。
     返回是否成功进入（页面出现'切换课本'标题）。
