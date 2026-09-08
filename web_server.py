@@ -1889,6 +1889,59 @@ def api_versions():
     return jsonify({"status": "started", "task": "version_detect"})
 
 
+def _read_cached_grades(target_version=""):
+    """从 versions_grades.json 缓存里读年级列表（不需要 adb/App）
+
+    返回 {"version": ..., "grades": [...], "current_grade": ...}；没找到返回 None
+    ★ 2026-09-08 加：用于 /api/version-grades/current 在 任务在跑/设备未连接时回退
+    """
+    import re as _re_g
+    vg_file = PROJECT_ROOT / "outputs" / "web" / "versions_grades.json"
+    if not vg_file.exists():
+        return None
+    try:
+        with open(vg_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        table = data.get("table", data) if isinstance(data, dict) else {}
+    except Exception:
+        return None
+    if not isinstance(table, dict) or not table:
+        return None
+
+    # 1) 精确命中 target（按归一化全角括号→半角 + 去空格）
+    def _norm(s):
+        s = (s or "").strip().replace("（", "(").replace("）", ")").replace(" ", "").replace("　", "")
+        return s
+    if target_version:
+        nt = _norm(target_version)
+        for k, v in table.items():
+            if _norm(k) == nt and isinstance(v, dict):
+                grades = v.get("grades") or []
+                return {
+                    "version": k,
+                    "grades": grades,
+                    "current_grade": v.get("current", "") or "",
+                }
+        # 2) 子串兜底（target 是 "湘鲁版" 找不到精确，但 "湘鲁版（2024审定）" 命中）
+        for k, v in table.items():
+            if (nt in _norm(k)) and isinstance(v, dict):
+                grades = v.get("grades") or []
+                return {
+                    "version": k,
+                    "grades": grades,
+                    "current_grade": v.get("current", "") or "",
+                }
+    # 3) 都没传 target → 返回第一个有 grades 的版本
+    for k, v in table.items():
+        if isinstance(v, dict) and v.get("grades"):
+            return {
+                "version": k,
+                "grades": v["grades"],
+                "current_grade": v.get("current", "") or "",
+            }
+    return None
+
+
 @app.route("/api/version-grades")
 def api_version_grades():
     """返回版本→年级配置表（scan_versions_grades.py 生成的缓存数据，秒回）"""
@@ -1926,11 +1979,30 @@ def api_version_grades_current():
     """
     data = request.get_json(silent=True) or {}
     target = (data.get("version") or "").strip()
+    # ★ 2026-09-08：任务在跑时不要直接 409（用户体验差，年级下拉不该被任务锁卡住）。
+    #   回退读 versions_grades.json 缓存里的年级（按 target 找），保证下拉能填充。
     if task_status["running"]:
-        return jsonify({"error": "已有任务在运行"}), 409
+        _cached = _read_cached_grades(target)
+        if _cached and _cached.get("grades"):
+            return jsonify({
+                "version": target or _cached.get("version", ""),
+                "grades": _cached["grades"],
+                "current_grade": _cached.get("current_grade", ""),
+                "source": "cache_fallback_task_running",
+            })
+        return jsonify({"error": "已有任务在运行，且无缓存年级数据可回退"}), 409
     try:
         d = _connect_device()
     except Exception as e:
+        # 设备未连接 → 也回退读缓存（让下拉至少能用，只是可能不是 App 最新数据）
+        _cached = _read_cached_grades(target)
+        if _cached and _cached.get("grades"):
+            return jsonify({
+                "version": target or _cached.get("version", ""),
+                "grades": _cached["grades"],
+                "current_grade": _cached.get("current_grade", ""),
+                "source": "cache_fallback_no_device",
+            })
         return jsonify({"error": f"设备未连接: {e}"}), 400
     try:
         import importlib
