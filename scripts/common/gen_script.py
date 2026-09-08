@@ -330,7 +330,9 @@ class QuestionCollector:
         _u = f"U{unit}"
         # ★ 规范文件名：日期+版本缩写+年级缩写+模块[+单元]，如
         #   "260817湘少五上单元自检U6.docx"（参考官方脚本"260714新湘鲁六上听力专项"格式）
-        fname = f"{datetime.now().strftime('%y%m%d')}{self._short_version()}{self._short_grade()}{self.module}{_u}.docx"
+        #   ★ 听力专项 → 听力专项练习（用户约定 2026-09-08：与官方便签命名对齐）
+        _mod_in_fname = "听力专项练习" if self.module == "听力专项" else self.module
+        fname = f"{datetime.now().strftime('%y%m%d')}{self._short_version()}{self._short_grade()}{_mod_in_fname}{_u}.docx"
         path = os.path.join(self.save_root, fname)
         doc = Document()
         # ★ 统一字体：不用内置 Heading/Title 样式（会随主题变蓝色Calibri→
@@ -392,10 +394,18 @@ class QuestionCollector:
 
     # ------------------------------------------------------------
     def _short_version(self):
-        """版本缩写：湘少版→湘少；新湘鲁版→新湘鲁；其余原样（去'版'字）"""
+        """版本缩写：湘少版→湘少；湘鲁版(2024审定)→新湘鲁；其余原样（去'版'字）
+
+        ★ 用户约定（2026-09-08）："新湘鲁" = 湘鲁版 + 审定（即 2024审定版 的简称）
+          - 之前的列表匹配在"新湘鲁"上要求版本名里就含"新湘鲁"3字，命中不到"湘鲁版(2024审定)"
+          - 现在改成：版本里同时含"湘鲁"和"审定"时，简写为"新湘鲁"；其他情况再回退到子串匹配
+        """
         v = (self.version or "").strip()
         v = v.replace("（", "").replace("）", "").replace("(", "").replace(")", "")
-        for k in ("新湘鲁", "湘鲁", "湘少", "人教", "外研", "译林"):
+        # ★ 湘鲁版 + 审定 → "新湘鲁"
+        if "湘鲁" in v and "审定" in v:
+            return "新湘鲁"
+        for k in ("湘少", "湘鲁", "人教", "外研", "译林"):
             if k in v:
                 return k
         return v.replace("版", "") or "通用"
