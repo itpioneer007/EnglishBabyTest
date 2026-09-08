@@ -60,24 +60,58 @@ def _back_home(d):
 _SCHOOL_LEVELS = ("", "小学", "初中", "高中", "中学", "中")
 
 
-def _ver_title_match(tn, target_n):
-    """版本分组标题归一化匹配。
+def _ver_base(s):
+    """抽取版本『基础名』：剥掉学段后缀(小学/初中/高中/中学)与审定噪声(2024审定/审定)，
+    但保留 PEP（用于区分 人教版 ≠ 人教版(PEP)）。
+    例：'湘鲁版（2024审定）小学' → '湘鲁版'；'人教版(PEP)小学' → '人教版(PEP)'。"""
+    s = s or ""
+    for suf in ("小学", "初中", "高中", "中学", "中"):
+        if s.endswith(suf):
+            s = s[: -len(suf)]
+    s = s.replace("2024审定", "").replace("审定", "")
+    return s
 
-    行为：
-      target_n="湘鲁版"  → 命中 "湘鲁版" / "湘鲁版小学" / "湘鲁版 小学"
-      target_n="湘鲁版"  → 不命中 "湘鲁版（2024审定）小学"（含审定）
-      target_n="人教版"  → 命中 "人教版" / "人教版小学"
-      target_n="人教版"  → 不命中 "人教版(PEP)小学"（含 PEP，区分人教/PEP）
-      target_n="人教版(PEP)" → 命中 "人教版(PEP)小学"
+
+def _ver_is_preferred(tn, target_n):
+    """该版本标题是否『优先匹配』：去噪基础名相等，且其 审定/PEP 噪声与目标一致。
+
+    用途：版本/年级归属时优先选与目标噪声一致的那一版，而不是误选另一版。
+      - 目标"湘鲁版"(无审定)  → 优先"湘鲁版 小学"(无审定)，不优先"湘鲁版（2024审定）小学"
+      - 目标"湘鲁版（2024审定）" → 优先"湘鲁版（2024审定）小学"(有审定)
+      - 目标"人教版" → 不优先"人教版(PEP)小学"（PEP 边界保留）
     """
-    if not target_n or not tn or len(tn) < len(target_n):
+    if not tn or not target_n:
         return False
-    if tn == target_n:
+    tn = _norm(tn); target_n = _norm(target_n)
+    if ('PEP' in tn) != ('PEP' in target_n):
+        return False
+    if ('审定' in tn) != ('审定' in target_n):
+        return False
+    return _ver_base(tn) == _ver_base(target_n)
+
+
+def _ver_title_match(tn, target_n):
+    """版本分组标题归一化匹配（★ 宽松前缀版，恢复『输入湘鲁版即可自动点中』的行为）。
+
+    规则（target_n 为用户/前端传入版本名，如 '湘鲁版' / '人教版(PEP)'）：
+      1) 完全相等：tn == target_n → 命中
+      2) 仅接学段/审定噪声：去噪后基础名相等 → 命中
+         （'湘鲁版' 命中 '湘鲁版 小学' / '湘鲁版（2024审定）小学' / '湘鲁版（2024审定）'）
+      3) PEP 边界：target 含 PEP 而 tn 不含（或反之）→ 不命中
+         （保留 '人教版' ≠ '人教版(PEP)' 的精确区分）
+      4) 前缀兜底：去噪后基础名互为前缀 → 命中
+    """
+    if not target_n or not tn:
+        return False
+    tn = _norm(tn); target_n = _norm(target_n)
+    # ★ PEP 边界：跨 PEP 不互认（这是唯一严格保留的区分）
+    if ('PEP' in tn) != ('PEP' in target_n):
+        return False
+    if _ver_base(tn) == _ver_base(target_n):
         return True
-    # 允许 target_n 之后仅接学段后缀
-    for suf in _SCHOOL_LEVELS:
-        if tn == target_n + suf:
-            return True
+    bn, bt = _ver_base(tn), _ver_base(target_n)
+    if bn.startswith(bt) or bt.startswith(bn):
+        return True
     return False
 
 
@@ -245,6 +279,8 @@ def switch_version(d, target_version):
         return False
     time.sleep(0.5)
     picked = False
+    plain_pick = None   # ★ 纯版本（无审定/PEP 噪声）优先
+    any_pick = None     # 兜底：任意匹配版本
     # 版本选项分布在页面上部，先上滑回顶再向下逐屏扫描
     for _ in range(3):
         S_swipe(d, 540, 650, 540, 1850, 0.3); time.sleep(0.4)
@@ -252,24 +288,32 @@ def switch_version(d, target_version):
         for e in d.xpath('//*[@text!=""]').all():
             t = (e.text or "").strip()
             tn = _norm(t)
-            # ★ 2026-09-08：版本分组标题是 "X版 学段"（如 "湘鲁版 小学"），
-            #   归一化后 tn="湘鲁版小学" 不等于 target_n="湘鲁版"，
-            #   必须用 _ver_title_match 兼容学段后缀；同时禁止 target_n 之后
-            #   跟"审定/PEP"等修饰词（保留人教版 ≠ 人教版(PEP) 的区分）。
+            # ★ 版本分组标题是 "X版 学段"（如 "湘鲁版 小学"）：用 _ver_title_match 宽松前缀匹配；
+            #   同时保留 人教版 ≠ 人教版(PEP) 的区分（PEP 边界）。
             if (('版' in t or '审定' in t) and '年级' not in t and '册' not in t
                     and '切换' not in t and '如何' not in t and len(t) <= 20
                     and _ver_title_match(tn, target_n)):
-                try:
-                    e.click()
-                except Exception:
-                    b = e.bounds
-                    d.click((b[0] + b[2]) // 2, (b[1] + b[3]) // 2)
-                print(f"    → 选中版本: {t}")
-                picked = True
-                break
-        if picked:
+                if _ver_is_preferred(tn, target_n) and plain_pick is None:
+                    plain_pick = (t, e)
+                elif any_pick is None:
+                    any_pick = (t, e)
+        # 找到纯版本即可停止扫描（纯版本优先于审定版）
+        if plain_pick:
             break
         S_swipe(d, 540, 1850, 540, 650, 0.45); time.sleep(0.7)  # 下滑继续找
+    target_e = plain_pick or any_pick
+    if target_e:
+        t, e = target_e
+        try:
+            e.click()
+        except Exception:
+            try:
+                b = e.bounds
+                d.click((b[0] + b[2]) // 2, (b[1] + b[3]) // 2)
+            except Exception:
+                pass
+        print(f"    → 选中版本: {t}")
+        picked = True
     time.sleep(1.5)
     # 版本切换后年级会被重置；回到主页以便后续统一确认/切年级
     if not _is_home(d):
@@ -628,8 +672,12 @@ def _pick_version_grade(d, version, grade):
     """
     target_vn = _norm(version)
     target_gn = _norm(grade)
+    target_base = _ver_base(target_vn)
     current_vn = None
     version_seen = False  # ★ 目标版本标题是否在整页扫描中出现过（区分"版本不存在"vs"年级不存在"）
+    preferred_clicked = False
+    # 兜底候选：仅当全程未出现『纯版本』匹配时（如 APP 只有审定版），退化点任意匹配版本的年级
+    fb_grade = None  # (t, elem, b)
     # 先回到页面顶部（版本分组从上方开始）
     for _ in range(3):
         S_swipe(d, 540, 650, 540, 1850, 0.3); time.sleep(0.4)
@@ -661,22 +709,36 @@ def _pick_version_grade(d, version, grade):
         nodes.sort(key=lambda x: x[0])
         for y, typ, t, tn, elem, b in nodes:
             if typ == 'ver':
-                # ★ 2026-09-08：兼容 "湘鲁版 小学" → 归一化后 tn="湘鲁版小学"，
-                #   需用 _ver_title_match 而非严格 tn == target_vn。
+                # ★ 兼容 "湘鲁版 小学" / "湘鲁版（2024审定）小学"：用 _ver_title_match 宽松前缀匹配
                 current_vn = tn
                 if _ver_title_match(tn, target_vn):
                     version_seen = True
             elif typ == 'grade':
                 if _ver_title_match(current_vn or "", target_vn) and tn == target_gn:
-                    try:
-                        elem.click()
-                        print(f"    → 选中 {version} {grade}")
-                    except Exception:
-                        d.click((b[0] + b[2]) // 2, (b[1] + b[3]) // 2)
-                        print(f"    → 选中 {version} {grade}（坐标兜底）")
-                    return True
+                    # ★ 优先点『纯版本』（无审定/PEP 噪声）的年级；审定版仅作兜底，
+                    #   这样输入"湘鲁版"会点旧版湘鲁版的年级，而不是误点 2024审定版。
+                    if _ver_is_preferred(current_vn or "", target_vn):
+                        try:
+                            elem.click()
+                            print(f"    → 选中 {version} {grade}")
+                        except Exception:
+                            d.click((b[0] + b[2]) // 2, (b[1] + b[3]) // 2)
+                            print(f"    → 选中 {version} {grade}（坐标兜底）")
+                        return True
+                    if fb_grade is None:
+                        fb_grade = (t, elem, b)
         # 本屏未命中 → 下滑继续（current_vn 跨屏保留）
         S_swipe(d, 540, 1850, 540, 650, 0.45); time.sleep(0.7)
+    # ★ 兜底：全程无纯版本匹配（如 APP 只有审定版），点第一个候选年级
+    if fb_grade is not None:
+        t, elem, b = fb_grade
+        try:
+            elem.click()
+            print(f"    → 选中(兜底) {version} {grade}")
+        except Exception:
+            d.click((b[0] + b[2]) // 2, (b[1] + b[3]) // 2)
+            print(f"    → 选中(兜底) {version} {grade}（坐标兜底）")
+        return True
     # ★ 区分失败原因：目标版本标题从未出现 → 版本不存在；否则是年级不存在/未找到
     if not version_seen:
         print(f"    ✘ 版本不存在: {version}")
