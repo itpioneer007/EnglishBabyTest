@@ -2080,6 +2080,50 @@ def api_scan_grades():
     return jsonify({"status": "started"})
 
 
+@app.route("/api/textbook/scan", methods=["POST"])
+def api_textbook_scan():
+    """★ 扫描「切换课本」页的教材分册（新旧两套分开），返回 json。
+
+    规格（2026-09-08 用户指定）：
+      ① 进入课本切换页面
+      ② 循环读控件文本 → 提取年级分册 → 滑动上翻
+      ③ 滑动无新增 → 停止
+      ④ 去重
+      ⑤ 输出 json
+      ⑥ 湘鲁旧版预期 8 套，数量不对加 warning
+    ★ 新旧分开：页面上方【新教材】区 → new_books；版本分组标题下方 → old_books
+    ❌ 不用 OCR / 不读出版社 / 不图像识别封面，只读 APP 控件文本
+
+    body(可选): {"rounds": 15, "expect_old": 8}
+    """
+    if task_status["running"]:
+        return jsonify({"error": "已有任务在运行"}), 409
+    data = request.get_json(silent=True) or {}
+    rounds = int(data.get("rounds", 15) or 15)
+    expect_old = int(data.get("expect_old", 8) or 8)
+    try:
+        d = _connect_device()
+    except Exception as e:
+        return jsonify({"error": f"设备未连接: {e}"}), 400
+    try:
+        import importlib
+        sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+        setup = importlib.import_module("common.setup")
+        result = setup.scan_textbook_list(d, max_rounds=rounds, expect_old=expect_old)
+        # 顺手落盘，方便前端/脚本复用
+        try:
+            out = PROJECT_ROOT / "outputs" / "web" / "textbook_list.json"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            with open(out, "w", encoding="utf-8") as f:
+                json.dump(result, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+        return jsonify(result)
+    except Exception as e:
+        log_msg(f"❌ 教材分册扫描异常: {e}", "error")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/run-full", methods=["POST"])
 def api_run_full():
     """一键全流程运行：登录 → 切换版本 → 选年级 → 测模块"""

@@ -365,6 +365,164 @@ def check_current(d, version, grade):
     return _norm(cur_ver) == _norm(version) and _norm(cur_gra) == _norm(grade)
 
 
+# ═══════════ 教材分册扫描（新旧分开）═══════════
+# ★ 2026-09-08 按用户指定规格实现：
+#   ① 进入课本切换页面
+#   ② 循环：读取当前页面所有文本控件 → 提取年级分册 → 滑动上翻
+#   ③ 判断：滑动前后没有新增课本条目 → 停止滚动
+#   ④ 对 book_list 做去重
+#   ⑤ 输出 json
+#   ⑥ 湘鲁旧版校验：预期 8 套分册，数量不对添加 warning
+#
+#   重要限制：
+#     ❌ 不用多张截图 OCR   ❌ 不读取出版社   ❌ 不图像识别封面
+#     ✅ 全部读取 APP 控件文本，滚动遍历列表，只解析文字
+#
+#   ★ 新旧分开：页面上方是【新教材】区（2024审定），下方是湘鲁版旧教材。
+#     归属规则：按 y 坐标顺序扫描，遇到「版本分组标题」（如"湘鲁版 小学"）
+#     之前的年级条目 → new_books；之后的 → old_books。两套分开不混。
+
+# 年级分册（如"三年级上册"/"六年级下册"）
+_GRADE_RE = _re.compile(r'([一二三四五六七八九]年级\s*(?:上|下)\s*册)')
+# 版本分组标题噪音词（说明文字/提示语，不是真正的版本标题）
+_VER_NOISE = ("如何", "切换", "教材发行", "：", "|", "｜", "新教材：", "开始新使用")
+
+
+def _is_ver_title(t):
+    """是否版本分组标题（如"湘鲁版 小学"）。排除说明文字（含：/|/教材发行等）。"""
+    t = (t or "").strip()
+    if not t:
+        return False
+    if any(n in t for n in _VER_NOISE):
+        return False
+    if '年级' in t or '册' in t:
+        return False
+    if not ('版' in t or '审定' in t):
+        return False
+    return len(t) <= 20
+
+
+def scan_textbook_list(d, max_rounds=15, expect_old=8):
+    """扫描「切换课本」页的教材分册列表（新旧两套分开）。
+
+    返回 dict（可直接 json.dumps）:
+      {
+        "ok": True/False,
+        "new_books":  [{"grade": "六年级上册", "y": 820}, ...],   # 新教材区（页面上方）
+        "old_books":  [{"grade": "三年级上册", "y": 1250}, ...],  # 湘鲁旧教材（版本标题下方）
+        "new_count": N,
+        "old_count": M,
+        "version_titles": ["湘鲁版 小学", ...],   # 扫描到的版本分组标题（调试用）
+        "rounds": K,                             # 实际滚动轮数
+        "warnings": [...],
+      }
+    """
+    result = {
+        "ok": False,
+        "new_books": [],
+        "old_books": [],
+        "new_count": 0,
+        "old_count": 0,
+        "version_titles": [],
+        "rounds": 0,
+        "warnings": [],
+    }
+
+    # ① 进入课本切换页面
+    if not ensure_app_ready(d):
+        result["warnings"].append("无法进入英语宝主页（屏幕未解锁 / App 未启动）")
+        return result
+    if not _enter_switchbook(d):
+        result["warnings"].append("无法进入「切换课本」页")
+        return result
+    time.sleep(0.8)
+    # 回到页面顶部（版本分组从上方开始）
+    for _ in range(3):
+        S_swipe(d, 540, 650, 540, 1850, 0.3); time.sleep(0.4)
+
+    seen_new, seen_old = set(), set()
+    prev_total = -1
+
+    # ② 循环：读控件文本 → 提取分册 → 滑动上翻
+    for _round in range(max_rounds):
+        result["rounds"] = _round + 1
+        try:
+            xml = d.dump_hierarchy() or ""
+        except Exception:
+            break
+
+        # 收集本屏节点（带 y 坐标），按 y 升序归属新旧
+        nodes = []
+        for m in _re.finditer(
+                r'text="([^"]*)"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml):
+            t = (m.group(1) or "").strip()
+            if not t:
+                continue
+            y = int(m.group(3))
+            if _is_ver_title(t):
+                nodes.append((y, 'ver', t))
+            else:
+                gm = _GRADE_RE.search(t)
+                if gm:
+                    nodes.append((y, 'grade', gm.group(1).replace(" ", "")))
+
+        # ★ 归属：版本标题之前的年级 → new_books；之后的 → old_books
+        nodes.sort(key=lambda x: x[0])
+        in_old = False
+        for y, kind, t in nodes:
+            if kind == 'ver':
+                in_old = True
+                if t not in result["version_titles"]:
+                    result["version_titles"].append(t)
+                continue
+            # kind == 'grade'
+            if in_old:
+                if t not in seen_old:
+                    seen_old.add(t)
+                    result["old_books"].append({"grade": t, "y": y})
+            else:
+                if t not in seen_new:
+                    seen_new.add(t)
+                    result["new_books"].append({"grade": t, "y": y})
+
+        # ③ 终止：本轮滑动后没有新增条目 → 已到底
+        total = len(seen_new) + len(seen_old)
+        if total == prev_total:
+            break
+        prev_total = total
+
+        # 滑动上翻（从网格下方空白区起滑，避免起点落在卡片上被识别为点击）
+        try:
+            S_swipe(d, 540, 1900, 540, 500, 0.5)
+            time.sleep(0.7)
+        except Exception:
+            break
+
+    # ④ 去重（seen set 已保证唯一）→ 按 y 排序输出
+    result["new_books"].sort(key=lambda x: x["y"])
+    result["old_books"].sort(key=lambda x: x["y"])
+    result["new_count"] = len(result["new_books"])
+    result["old_count"] = len(result["old_books"])
+
+    # ⑥ 湘鲁旧版校验：预期 8 套分册
+    if result["old_count"] != expect_old:
+        got = [b["grade"] for b in result["old_books"]]
+        result["warnings"].append(
+            f"湘鲁旧版分册数量异常：预期 {expect_old} 套，实际采集 {result['old_count']} 套 → {got}"
+        )
+    if not result["new_books"] and not result["old_books"]:
+        result["warnings"].append("未采集到任何分册条目（页面可能未正确加载）")
+
+    # 回主页（不选中任何年级 → back = 取消）
+    try:
+        d.press('back'); time.sleep(0.8)
+    except Exception:
+        pass
+
+    result["ok"] = bool(result["new_books"] or result["old_books"])
+    return result
+
+
 def get_grades_from_app(d, max_pages=5):
     """从 App「切换课本」页实时读取当前版本下的年级列表（与 App 实际内容一致）
 
