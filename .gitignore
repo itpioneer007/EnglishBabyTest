@@ -1,0 +1,81 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+venv/
+.venv/
+env/
+
+# IDE
+.idea/
+*.swp
+*.swo
+*~
+
+# 输出结果
+outputs/screenshots/*
+outputs/flow_log_*.json
+outputs/*.png
+!outputs/.gitkeep
+
+# 运行日志（不上传Git）
+*.log
+server_output.log
+logs/
+test_seq_*.log
+
+# 调试产物（截图/界面dump，不上传Git）
+_archive/debug_files/
+_archive/root_debug/
+screenshots/
+*.xml
+!outputs/.gitkeep
+
+# 上传文件（含大文件，不上传Git）
+uploads/
+
+# 敏感配置（含 API Key，严禁提交）
+.env
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# ★ 临时测试脚本（不入库，正式逻辑已合入模块）
+test_knowledge_module.py
+run_ai_loop.py
+run_ai_test.py
+_ai_*.py
+test_*.py
+
+# 临时调试截图（根目录）
+_q*.png
+_now*.xml
+_after*.xml
+_kw*.xml
+_ai_*.png
+
+# 生成的错题报告（输出产物，不入库）
+outputs/reports/*.docx
+outputs/reports/湘少版(2024审定)/
+outputs/web/marked_*.png
+outputs/web/live.png
+outputs/reports/latest/report_live.html
+
+# 运行时状态（每次运行变化，不入库）
+data/inspection_state.json
+outputs/reports/latest/
+outputs/web/live.png
+
+# 生成报告（合并后新增的产物目录）
+outputs/reports/湘少版/U*/ 
+outputs/reports/湘少版/UNONE_*/
+outputs/reports/湘少版/U全部_*/
+
+# 空壳 gitlink（无 .gitmodules 映射，勿追踪）
+EnglishBabyTest/
+_state.json

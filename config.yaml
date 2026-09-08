@@ -1,0 +1,40 @@
+﻿# 英语宝模块检测 - 全局配置
+# 修改此文件即可配置设备、账号、输出路径等
+
+# 设备配置
+device:
+  serial: ""        # ADB设备序列号 (留空=自动适配当前唯一设备; adb devices 查看)
+  screen_resolution: [1080, 2400]   # 手机屏幕分辨率
+
+# 英语宝APP
+app:
+  package: "com.dinoenglish.yyb"    # APP包名 (英语宝)
+  # activity: ""                    # 启动Activity (留空则用monkey启动)
+
+# 灰度账号
+account:
+  username: "10010005"
+  password: "123456"
+
+# 输出配置
+output:
+  dir: "outputs"                    # 输出根目录
+  screenshot_dir: "outputs/screenshots"
+  save_pass_screenshots: false      # 是否保存通过题目的截图
+  question_timeout: 120             # 单题超时(秒)
+  max_retries: 2                    # 最大重试次数
+
+# 流程引擎配置
+flow:
+  default_timeout: 10               # 默认等待超时(秒)
+  poll_interval: 1.0                # 轮询间隔(秒)
+  step_delay: 0.5                   # 步骤间延迟(秒)
+
+# 参考图片目录 (可选, 缺省或目录不存在时自动跳过, 不报错)
+# 作用：仅「配图审查 / 错题报告」功能会加载这些目录下 U*图片/ 子目录的参考图，
+#       用于把参考图和 APP 截图对比、提高配图判断准确度。
+#       ★ 对自动点击等主流程无影响；目录不存在时会自动跳过配图比对。
+# 配置多个时写列表，路径用本机真实存在的目录（转发别人时若无此目录会自动跳过）：
+image_dir:
+  - 'D:\压缩包存储\听力专项新湘鲁五上U6-9'
+  - 'D:\压缩包存储\听力专项新湘鲁六上U6-9'

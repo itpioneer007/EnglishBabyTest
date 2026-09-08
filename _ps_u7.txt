@@ -1,0 +1,4 @@
+
+[state] running=
+[request] {"docx":"260717湘鲁版2024审六上听力专项U6-9(已二校).docx","stages":["基础巩固"],"version":"新湘鲁六上","unit":7}
+[response] {"params":{"stages":["基础巩固"],"unit":7,"version":"新湘鲁六上"},"status":"started","task":"listening_inspect"}

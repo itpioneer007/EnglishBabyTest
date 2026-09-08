@@ -1,0 +1,800 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>英语宝模块检测 — 批量自动化审查</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:"Microsoft YaHei","PingFang SC",sans-serif;background:#f1f5f9;color:#1e293b;font-size:15px}
+
+/* ====== 顶部导航 ====== */
+.nav{background:#fff;border-bottom:1px solid #e2e8f0;padding:0 24px;display:flex;align-items:center;height:56px;gap:32px}
+.nav .logo{font-size:18px;font-weight:700;color:#1e40af}
+.nav a{color:#64748b;text-decoration:none;font-size:14px;padding:6px 14px;border-radius:6px}
+.nav a:hover,.nav a.active{background:#eff6ff;color:#1e40af}
+
+/* ====== 主布局 ====== */
+.main{max-width:1400px;margin:0 auto;padding:24px;display:grid;grid-template-columns:1fr 1fr;gap:24px}
+@media(max-width:900px){.main{grid-template-columns:1fr}}
+
+/* ====== 卡片 ====== */
+.card{background:#fff;border-radius:12px;border:1px solid #eef0f5;overflow:hidden}
+.card-hdr{padding:16px 20px;background:#fafbfc;border-bottom:1px solid #f0f2f6;display:flex;align-items:center;gap:10px;font-weight:600}
+.card-body{padding:20px}
+
+/* ====== 表单 ====== */
+.form-row{margin-bottom:14px}
+.form-label{font-size:13px;font-weight:600;color:#64748b;margin-bottom:4px;display:block}
+select,input[type=text],input[type=email]{width:100%;padding:8px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px;outline:none}
+select:focus,input:focus{border-color:#4a6cf7;box-shadow:0 0 0 3px rgba(74,108,247,.1)}
+.form-hint{font-size:12px;color:#94a3b8;margin-top:2px;display:block}
+
+/* ====== 按钮 ====== */
+.btn{padding:10px 20px;border:none;border-radius:8px;font-size:15px;cursor:pointer;font-weight:500;transition:all .2s}
+.btn-primary{background:#4a6cf7;color:#fff}
+.btn-primary:hover{background:#2952e8}
+.btn-primary:disabled{background:#94a3b8;cursor:not-allowed}
+.btn-danger{background:#ef4444;color:#fff}
+.btn-success{background:#16a34a;color:#fff}
+.btn-sm{padding:6px 14px;font-size:13px}
+.btn-row{display:flex;gap:10px;margin-top:16px}
+
+/* ====== 进度 ====== */
+.progress-bar{background:#eef0f5;border-radius:6px;height:8px;margin:12px 0;overflow:hidden}
+.progress-fill{height:100%;background:linear-gradient(90deg,#4a6cf7,#6366f1);border-radius:6px;transition:width .3s}
+.progress-stats{display:flex;gap:20px;font-size:13px;color:#64748b}
+.progress-stats span{font-weight:600;color:#1e293b}
+
+/* ====== 模块列表 ====== */
+.module-list{max-height:300px;overflow-y:auto}
+.module-item{display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid #f0f2f6;font-size:14px}
+.module-item .idx{width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0}
+.module-item .idx.pending{background:#f1f5f9;color:#64748b}
+.module-item .idx.running{background:#dbeafe;color:#1e40af}
+.module-item .idx.done{background:#dcfce7;color:#166534}
+.module-item .idx.failed{background:#fee2e2;color:#991b1b}
+.module-item .name{flex:1}
+.module-item .stat{font-size:12px;color:#94a3b8}
+
+/* ====== 日志 ====== */
+.log-box{background:#0f172a;color:#94a3b8;font-family:"Consolas","Courier New",monospace;font-size:12px;padding:14px;border-radius:8px;max-height:300px;overflow-y:auto;line-height:1.7}
+.log-box .level-success{color:#4ade80}
+.log-box .level-warning{color:#fbbf24}
+.log-box .level-error{color:#f87171}
+
+/* ====== 标签 ====== */
+.badge{font-size:12px;padding:2px 10px;border-radius:10px;font-weight:500}
+.badge-running{background:#dbeafe;color:#1e40af}
+.badge-idle{background:#f1f5f9;color:#64748b}
+
+/* ====== 清单编辑 ====== */
+.checklist-editor textarea{width:100%;height:120px;font-family:monospace;font-size:13px;border:1px solid #e2e8f0;border-radius:8px;padding:10px;resize:vertical}
+/* ===== 统计数据条 ===== */
+.q-stats-bar {
+  display:flex; gap:16px; padding:12px 16px;
+  background:linear-gradient(135deg,#f8fafc,#f1f5f9);
+  border-radius:10px; margin-bottom:14px; font-size:15px;
+  flex-wrap:wrap;
+}
+.q-stats-bar .stat { display:flex; align-items:center; gap:8px }
+.q-stats-bar .num { font-weight:700; font-size:20px }
+.q-stats-bar .num.green { color:#16a34a }
+.q-stats-bar .num.red { color:#dc2626 }
+.q-stats-bar .num.blue { color:#4a6cf7 }
+
+/* ===== 题目卡片 ===== */
+.q-card { background:white; border:1px solid #eef0f5; border-radius:12px; margin-bottom:12px; overflow:hidden; transition:all .2s }
+.q-card:hover { box-shadow:0 3px 12px rgba(0,0,0,.07) }
+.q-head {
+  display:flex; align-items:center; gap:12px;
+  padding:12px 16px; background:#fafbfc; border-bottom:1px solid #f0f2f6;
+}
+.q-head .qnum { font-size:22px; font-weight:700; color:#4a6cf7; min-width:48px }
+.q-head .qtype { font-size:12px; padding:3px 10px; border-radius:6px; background:#eef2ff; color:#4a6cf7; font-weight:500 }
+.q-head .qstatus { margin-left:auto; display:flex; gap:6px; align-items:center }
+.q-head .qstatus .tag { padding:3px 10px; border-radius:6px; font-size:12px; font-weight:600 }
+.q-head .qstatus .tag.pass { background:#dcfce7; color:#166534 }
+.q-head .qstatus .tag.fail { background:#fee2e2; color:#991b1b }
+.q-head .qstatus .tag.human-pass { background:#bbf7d0; color:#14532d }
+.q-head .qstatus .tag.human-fail { background:#fecaca; color:#7f1d1d }
+.q-head .qstatus .tag.pending-label { background:#fef3c7; color:#92400e; cursor:pointer; animation:blink 1.5s infinite }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.5} }
+
+.q-body { padding:14px 16px }
+
+/* 六个维度网格 */
+.q-dims { display:grid; grid-template-columns:repeat(6,1fr); gap:6px; margin-bottom:10px }
+.q-dim { text-align:center; padding:8px 2px; border-radius:10px; border:1px solid #eef0f5; background:#fafbfc }
+.q-dim .icon { font-size:18px; margin-bottom:2px }
+.q-dim .label { font-size:11px; font-weight:600; color:#64748b }
+.q-dim .score { font-size:10px; margin-top:1px }
+.q-dim.pass { background:#f0fdf4; border-color:#bbf7d0 }
+.q-dim.pass .label { color:#166534 }
+.q-dim.fail { background:#fef2f2; border-color:#fecaca }
+.q-dim.fail .label { color:#991b1b }
+.q-dim.skip { background:#f8fafc; border-color:#f1f5f9 }
+.q-dim.skip .label { color:#94a3b8 }
+
+/* AI理由区域 */
+.q-reasons {
+  font-size:14px; color:#475569;
+  background:#f8fafc; border-radius:8px; padding:10px 14px;
+  margin-bottom:10px; line-height:1.8;
+}
+.q-reasons b { color:#334155 }
+
+/* 人工标注区 */
+.q-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap }
+.q-actions .note { flex:1; min-width:120px; padding:8px 12px; border:1.5px solid #e2e8f0; border-radius:7px; font-size:14px; outline:none; transition:border .2s }
+.q-actions .note:focus { border-color:#4a6cf7 }
+.q-actions .action-label { font-size:13px; color:#64748b; font-weight:500; margin-right:4px }
+.q-actions .done-tag { font-size:13px; padding:5px 12px; border-radius:7px; background:#fef3c7; color:#92400e; display:flex; align-items:center; gap:4px }
+
+/* ===== 上传区域 ===== */
+.upload-area { border:2px dashed #d1d5db; border-radius:12px; padding:24px; text-align:center; transition:all .2s; background:#fafbfc }
+.upload-area.dragover { border-color:#4a6cf7; background:#eef2ff }
+.upload-area .icon { font-size:40px; color:#4a6cf7; margin-bottom:8px }
+.upload-area .txt { font-size:15px; color:#64748b; margin-bottom:10px }
+
+/* ===== 截图区域 ===== */
+.screenshot-box {
+  background:#f8fafc; border-radius:10px; overflow:hidden;
+  min-height:140px; display:flex; align-items:center; justify-content:center;
+  border:1px solid #eef0f5;
+}
+.screenshot-box img { max-width:100%; max-height:300px; display:block; border-radius:8px }
+.screenshot-box .ph { color:#94a3b8; font-size:14px; padding:24px; text-align:center }
+
+/* ===== 信息行 ===== */
+.info-row { display:flex; justify-content:space-between; padding:8px 0; font-size:15px; border-bottom:1px solid #f1f5f9 }
+.info-row:last-child { border:none }
+.info-row .key { color:#64748b }
+.info-row .val { font-weight:600; color:#1e293b }
+.file-list { font-size:14px; max-height:80px; overflow-y:auto; margin-top:8px }
+.file-list .item { padding:3px 0; color:#475569; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+.file-list .item::before { content:"📄 "; }
+
+/* ===== 小徽标 ===== */
+.badge {
+  display:inline-block; background:#f1f4f9; color:#64748b;
+  padding:3px 12px; border-radius:12px; font-size:12px; font-weight:500;
+}
+</style>
+</head>
+<body>
+
+<!-- ====== 导航 ====== -->
+<div class="nav">
+  <div class="logo">🔍 英语宝模块审查</div>
+  <a href="/" class="active">📋 批量检查</a>
+  <a href="/trace">🔎 错误溯源</a>
+  <a href="/export">📤 报告导出</a>
+  <span style="margin-left:auto;font-size:13px;color:#94a3b8">
+    设备: <span id="devStatus" style="color:#94a3b8">检测中...</span>
+  </span>
+</div>
+
+<!-- ====== 主内容 ====== -->
+<div class="main">
+
+  <!-- 左：自然语言 + 检查计划 + 进度 -->
+  <div>
+    <!-- 自然语言输入 -->
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-hdr">💬 一句话描述要检查什么</div>
+      <div class="card-body">
+        <textarea id="nlInput" placeholder='例如：帮我检测新湘鲁六年级上册的U6-U9听力专项模块基础巩固'
+          style="width:100%;height:72px;border:1px solid #e2e8f0;border-radius:8px;padding:10px;font-size:14px;resize:vertical;font-family:inherit"
+          onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();parseNL()}"></textarea>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:8px">
+          <button class="btn btn-primary btn-sm" onclick="parseNL()">🔍 解析</button>
+          <span id="nlResult" style="font-size:12px;color:#64748b"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 检查计划 -->
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-hdr">📋 检查计划清单</div>
+      <div class="card-body">
+        <div class="form-row">
+          <span class="form-label">教材版本</span>
+          <select id="planVersion">
+            <option selected>新湘鲁六上</option>
+            <option>新湘鲁五上</option>
+            <option>湘少版五上</option>
+          </select>
+        </div>
+
+        <div class="form-row">
+          <span class="form-label">Unit 范围</span>
+          <div style="display:flex;gap:10px;align-items:center">
+            <select id="planUnitFrom" style="flex:1">
+              <option>6</option><option>7</option><option>8</option><option>9</option>
+            </select>
+            <span style="color:#94a3b8">至</span>
+            <select id="planUnitTo" style="flex:1">
+              <option>6</option><option>7</option><option selected>9</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <span class="form-label">阶段</span>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <label style="font-size:13px;cursor:pointer"><input type="checkbox" checked id="cbBase"> 基础巩固</label>
+            <label style="font-size:13px;cursor:pointer"><input type="checkbox" id="cbAdv"> 综合进阶</label>
+            <label style="font-size:13px;cursor:pointer"><input type="checkbox" id="cbHard"> 难点突破</label>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <span class="form-label">对照脚本 <span style="font-weight:400;color:#ef4444;font-size:12px">* 需先在右侧上传</span></span>
+          <select id="planDocx"></select>
+        </div>
+
+        <div class="btn-row">
+          <button class="btn btn-primary" id="btnStart" onclick="startBatch()">
+            ▶ 开始批量检查
+          </button>
+          <button class="btn" style="background:#7c3aed;color:#fff" id="btnAudio" onclick="startAudio()">
+            🎧 听力专项(练习+测试)
+          </button>
+          <button class="btn" style="background:#0d9488;color:#fff" id="btnOral" onclick="startOral()">
+            🗣 口语训练
+          </button>
+          <button class="btn" style="background:#b45309;color:#fff" id="btnUnit" onclick="startUnit()">
+            📋 单元自检
+          </button>
+          <button class="btn" style="background:#059669;color:#fff" id="btnKnowledge" onclick="startKnowledge()">
+            ✅ 知识过关
+          </button>
+          <button class="btn" style="background:#7c2d12;color:#fff" id="btnVoice" onclick="startVoice()">
+            🎤 语音评测
+          </button>
+          <button class="btn" style="background:#1d4ed8;color:#fff" id="btnQiaoji" onclick="startQiaoji()">
+            🧠 巧记单词
+          </button>
+          <button class="btn btn-danger btn-sm" id="btnCancel" onclick="cancelBatch()" style="display:none">
+            ⏹ 停止
+          </button>
+          <button class="btn btn-sm" id="btnPause" onclick="togglePause()" style="display:none">
+            ⏸ 暂停
+          </button>
+        </div>
+
+        <div class="form-hint" id="planEta"></div>
+      </div>
+    </div>
+
+    <!-- 进度 -->
+    <div class="card" id="progressCard" style="display:none;margin-bottom:20px">
+      <div class="card-hdr">
+        ⏱ 执行进度
+        <span class="badge badge-running" id="batchBadge" style="margin-left:auto">运行中</span>
+      </div>
+      <div class="card-body">
+        <div class="progress-bar"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
+        <div class="progress-stats">
+          <span>完成: <b id="statDone">0</b>/<b id="statTotal">0</b> 模块</span>
+          <span>通过: <b id="statPassed" style="color:#16a34a">0</b> 题</span>
+          <span>错误: <b id="statFailed" style="color:#dc2626">0</b> 题</span>
+          <span>剩余: <b id="statEta">--</b></span>
+        </div>
+        <div style="margin-top:10px;font-size:13px;color:#64748b">
+          当前: <b id="currentModule">--</b>
+        </div>
+      </div>
+    </div>
+
+    <!-- 模块清单 -->
+    <div class="card" id="moduleListCard" style="display:none">
+      <div class="card-hdr">📝 模块状态</div>
+      <div class="card-body" style="padding:0">
+        <div class="module-list" id="moduleList"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 右：日志 + 脚本上传 + 知识库 -->
+  <div>
+    <!-- 脚本上传 / 知识库 -->
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-hdr">📄 脚本 & 知识库</div>
+      <div class="card-body">
+        <div class="form-row">
+          <span class="form-label">上传对照脚本 (.docx)</span>
+          <input type="file" id="uploadInput" accept=".docx,.doc" onchange="uploadFile()">
+          <div id="uploadList" style="margin-top:8px;font-size:13px;color:#94a3b8">暂无已上传文件</div>
+        </div>
+        <div class="form-row">
+          <span class="form-label">无脚本时 <span style="color:#4a6cf7">🤖 AI 自动生成答案</span></span>
+          <span class="form-hint">审查智能体会根据知识库自动推演正确答案</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 操作日志 -->
+    <div class="card">
+      <div class="card-hdr">📜 操作日志</div>
+      <div class="card-body" style="padding:14px">
+        <div class="log-box" id="logBox">
+          <span style="color:#94a3b8">等待任务启动...</span>
+          <div class="log-entry"><span class="t">--:--:--</span><span class="lv info">INFO</span><span>等待巡检启动...</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 🎮 运行控制 -->
+    <div class="card">
+      <div class="card-title">🎮 运行控制</div>
+      <div class="card-desc">选择本次巡检的<strong>教材版本、单元编号、题目阶段</strong>，然后点「开始检查」自动跑完全流程。</div>
+
+      <span class="form-label">📖 教材版本</span>
+      <span class="form-hint">选择要检查的册别，如"新湘鲁六上"</span>
+      <div class="input-group">
+        <select id="inspectVersion">
+          <option>新湘鲁五上</option>
+          <option>新湘鲁五下</option>
+          <option selected>新湘鲁六上</option>
+          <option>新湘鲁六下</option>
+        </select>
+      </div>
+
+      <span class="form-label">🔢 单元编号</span>
+      <span class="form-hint">选择要巡检的 Unit (6-9)</span>
+      <div class="input-group">
+        <select id="inspectUnit">
+          <option>6</option><option>7</option><option>8</option><option>9</option>
+        </select>
+      </div>
+
+      <span class="form-label">📌 题目阶段</span>
+      <span class="form-hint">脚本中的题型分类，如"基础巩固"是第一轮听力题</span>
+      <div class="input-group">
+        <select id="inspectStage">
+          <option selected>基础巩固</option>
+          <option>综合进阶</option>
+          <option>难点突破</option>
+        </select>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-primary" id="runBtn" onclick="startInsp()">▶ 开始检查</button>
+        <button class="btn btn-danger" id="stopBtn" onclick="stopInsp()">⏹ 停止</button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ========== 中栏 ========== -->
+  <div>
+    <div class="card">
+      <div class="card-title">
+        <span>🔍 题目检查结果</span>
+        <span class="badge" id="qBadge">待启动</span>
+      </div>
+      <div class="card-desc">
+        每道题展示AI的<strong>六维检查结果</strong>（题干 / 内容 / 配图 / 作答 / 音频 / 答错后）。
+        每个维度有✅通过或❌不通过。底部可<strong>人工标注</strong>（✓通过 / ✗不通过），标注结果会自动存入反馈库供审查智能体学习。
+      </div>
+
+      <!-- 统计栏 -->
+      <div class="q-stats-bar" id="qStatsBar" style="display:none">
+        <div class="stat">总题数: <span class="num blue" id="sTotal">0</span></div>
+        <div class="stat">AI通过: <span class="num green" id="sPassed">0</span></div>
+        <div class="stat">AI不通过: <span class="num red" id="sFailed">0</span></div>
+        <div class="stat" style="margin-left:auto">已人工标注: <span class="num blue" id="sLabeled">0</span></div>
+      </div>
+
+      <!-- 题目列表 -->
+      <div id="questionList" style="max-height:800px;overflow-y:auto">
+        <div style="text-align:center;padding:60px 20px;color:#94a3b8">
+          <div style="font-size:48px;margin-bottom:14px">📋</div>
+          <div style="font-size:17px;font-weight:500;color:#64748b">尚未开始检查</div>
+          <div style="font-size:14px;margin-top:8px">请在左侧面板选择 <strong>版本/Unit/阶段</strong>，然后点击「▶ 开始检查」</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== 右栏 ========== -->
+  <div>
+
+    <!-- 📤 脚本上传 -->
+    <div class="card">
+      <div class="card-title">📤 脚本上传</div>
+      <div class="card-desc">
+        上传公司提供的<strong>DOCX/DOC脚本文件</strong>（如"260717新湘鲁六上听力专项.docx"），系统自动解析并导入知识库，审查时会用这些内容核验题目是否正确。
+      </div>
+      <div class="upload-area" id="dropZone">
+        <div class="icon">+</div>
+        <div class="txt">拖拽 DOCX 或 DOC 文件到此处，或点下方按钮选择</div>
+        <input type="file" id="fileInput" accept=".docx,.doc" style="display:none">
+        <button class="btn btn-outline" onclick="document.getElementById('fileInput').click()">📂 选择文件 (.docx / .doc)</button>
+      </div>
+      <div id="uploadStatus" style="font-size:14px;color:#64748b;margin-bottom:8px;margin-top:6px"></div>
+      <div class="file-list" id="uploadList"></div>
+    </div>
+
+    <!-- 📚 知识库 -->
+    <div class="card">
+      <div class="card-title">📚 知识库</div>
+      <div class="card-desc">
+        教材知识点仓库，存储所有已上传脚本中的<strong>词汇、句型、语法</strong>。
+        审查时AI自动查证题目内容是否在教材范围内，避免超纲或错位。
+      </div>
+      <div id="kbContent">
+        <div class="info-row"><span class="key">总知识点数</span><span class="val" id="kbTotal">加载中</span></div>
+        <div class="info-row"><span class="key">覆盖年级</span><span class="val" id="kbGrades">—</span></div>
+      </div>
+    </div>
+
+    <!-- 🤖 审查智能体 -->
+    <div class="card">
+      <div class="card-title">🤖 审查智能体</div>
+      <div class="card-desc">
+        选择已上传的脚本文件，指定单元后一键审查。<br>
+        <strong>审查流程</strong>：AI逐题做六维检查 → 结果保存在中栏 → 可人工标注 → 智能体自动学习。
+      </div>
+
+      <span class="form-label">📄 脚本文件</span>
+      <span class="form-hint">选择要对照审查的DOCX</span>
+      <div class="input-group">
+        <select id="reviewDocx" style="width:100%"></select>
+      </div>
+
+      <span class="form-label">🔢 单元编号</span>
+      <span class="form-hint">0=审查整个脚本，6-9=指定Unit</span>
+      <div class="input-group">
+        <input type="number" id="reviewUnit" placeholder="例: 6 (0=全部)">
+        <button class="btn btn-primary" onclick="runReview()">▶ 审查</button>
+      </div>
+      <div id="reviewResult" style="margin-top:10px;font-size:14px;color:#64748b"></div>
+    </div>
+
+    <!-- 📊 智能体学习状态 -->
+    <div class="card">
+      <div class="card-title">📊 智能体学习状态</div>
+      <div class="card-desc">
+        人工标注数据统计：AI判断 vs 人工判定<strong>一致越多</strong> → 智能体越准确。
+        在中栏题目卡片底部点击「✓通过 / ✗不通过」即可标注。
+      </div>
+      <div id="agentStats">
+        <div class="info-row"><span class="key">反馈样本数</span><span class="val" id="fbTotal">0</span></div>
+        <div class="info-row"><span class="key">AI准确率</span><span class="val" id="fbAccuracy">—</span></div>
+        <div class="info-row"><span class="key">已人工标注</span><span class="val" id="fbLabeled">0</span></div>
+      </div>
+    </div>
+
+    <!-- 📸 截图预览 -->
+    <div class="card">
+      <div class="card-title">📸 截图预览</div>
+      <div class="card-desc">最近一题的APP真实截图，供肉眼核验AI判断是否准确。</div>
+      <div class="screenshot-box" id="screenshotArea"><div class="ph">等待巡检截图...</div></div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// ====== 快捷选择器 ======
+function $(id){return document.getElementById(id)}
+
+// ====== 初始化 ======
+async function init(){
+  pollStatus()
+  loadUploadList()
+}
+init()
+
+// ====== 设备状态轮询 ======
+async function pollStatus(){
+  while(true){
+    try{
+      const s=await(await fetch('/api/status')).json()
+      $('devStatus').textContent=s.device_connected?'已连接':'离线'
+      $('devStatus').style.color=s.device_connected?'#16a34a':'#ef4444'
+
+      // 批量状态
+      const bs=await(await fetch('/api/batch/status')).json()
+      updateBatchUI(bs)
+    }catch(e){}
+    await new Promise(r=>setTimeout(r,2000))
+  }
+}
+
+// ====== 批量UI更新 (B实现) ======
+function updateBatchUI(bs){
+  if(!bs.running && !bs.paused){
+    $('btnStart').style.display=''; $('btnCancel').style.display='none'; $('btnPause').style.display='none'
+    $('progressCard').style.display='none'; $('moduleListCard').style.display='none'
+    return
+  }
+  $('btnStart').style.display='none'; $('btnCancel').style.display=''; $('btnPause').style.display=''
+  $('progressCard').style.display=''; $('moduleListCard').style.display=''
+
+  const total=bs.completed.length+(bs.pending?.length||0)
+  const done=bs.completed.length
+  $('progressFill').style.width=(done/Math.max(total,1)*100)+'%'
+  $('statDone').textContent=done; $('statTotal').textContent=total
+  $('batchBadge').textContent=bs.paused?'已暂停':'运行中'
+  $('batchBadge').className='badge '+(bs.paused?'badge-idle':'badge-running')
+  $('statEta').textContent=bs.eta_remaining||'--'
+  $('currentModule').textContent=bs.current?`U${bs.current.unit} ${bs.current.stage}`:'--'
+
+  // 模块列表
+  const items=[]
+  bs.completed.forEach(m=>items.push({name:`U${m.unit} ${m.stage}`,status:'done',detail:`${m.questions||0}题`}))
+  if(bs.current) items.push({name:`U${bs.current.unit} ${bs.current.stage}`,status:'running',detail:bs.current.question||''})
+  bs.pending.forEach(m=>items.push({name:`U${m.unit} ${m.stage}`,status:'pending',detail:''}))
+  bs.failed_modules.forEach(m=>items.push({name:`U${m.unit} ${m.stage}`,status:'failed',detail:m.reason||'失败'}))
+  $('moduleList').innerHTML=items.map((m,i)=>
+    `<div class="module-item">
+      <div class="idx ${m.status}">${m.status==='done'?'✓':m.status==='running'?'▶':m.status==='failed'?'✗':i+1}</div>
+      <div class="name">${m.name}</div>
+      <div class="stat">${m.detail}</div>
+    </div>`
+  ).join('')
+
+  // 统计
+  let tp=0,tf=0
+  bs.completed.forEach(m=>{tp+=m.passed||0;tf+=m.failed||0})
+  $('statPassed').textContent=tp; $('statFailed').textContent=tf
+
+  // 完成后显示
+  if(!bs.running && done===total && total>0){
+    $('progressFill').style.width='100%'
+    $('btnStart').style.display=''; $('btnCancel').style.display='none'; $('btnPause').style.display='none'
+    $('batchBadge').textContent='已完成'; $('batchBadge').className='badge badge-idle'
+    addLog('success',`✅ 全部完成! ${tp}题通过, ${tf}题出错 → 查看 <a href="/trace" style="color:#4ade80">错误溯源</a>`)
+  }
+}
+
+// ====== 文件上传 ======
+async function uploadFile(){
+  const f=$('uploadInput').files[0]; if(!f) return
+  const fd=new FormData(); fd.append('file',f)
+  await fetch('/api/upload',{method:'POST',body:fd})
+  loadUploadList()
+}
+
+async function loadUploadList(){
+  const d=await(await fetch('/api/upload/list')).json()
+  $('planDocx').innerHTML=(d.files||[]).map(f=>`<option>${f.name}</option>`).join('')
+  $('uploadList').innerHTML=(d.files||[]).length
+    ? d.files.map(f=>`<div>📄 ${f.name} (${(f.size/1024).toFixed(0)}KB)</div>`).join('')
+    : '<span>暂无上传 — 可跳过，AI将自动生成答案</span>'
+function updQ(f) {
+  const qs=f.questions||{},ids=Object.keys(qs).sort(),t=ids.length;
+  const lb=Object.values(qs).filter(q=>q.human_label).length;
+  const aipa=Object.values(qs).filter(q=>q.overall_passed).length;
+  const aifa=t-aipa;
+
+  $('qBadge').textContent=t?t+'题':'待启动';
+  const sb=$('qStatsBar');
+  if(t){sb.style.display='flex';$('sTotal').textContent=t;$('sPassed').textContent=aipa;$('sFailed').textContent=aifa;$('sLabeled').textContent=lb;}
+  else sb.style.display='none';
+
+  // 智能体学习状态
+  $('fbTotal').textContent=t;
+  $('fbLabeled').textContent=lb;
+  const corr=Object.values(qs).filter(q=>q.human_label==='通过'&&q.overall_passed).length
+            +Object.values(qs).filter(q=>q.human_label==='不通过'&&!q.overall_passed).length;
+  $('fbAccuracy').textContent=lb>0?(corr/lb*100).toFixed(0)+'%':'-';
+
+  if(!t) return;
+
+  $('questionList').innerHTML=ids.map(qid=>{
+    const q=qs[qid],pa=q.overall_passed;
+    return `<div class="q-card">
+      <div class="q-head">
+        <div class="qnum">Q${String(q.idx).padStart(2,'0')}</div>
+        <span class="qtype">${q.question_type||'?'}</span>
+        <div class="qstatus">
+          <span class="tag ${pa?'pass':'fail'}">AI:${pa?'通过':'不通过'}</span>
+          ${q.human_label
+            ?`<span class="tag ${q.human_label==='通过'?'human-pass':'human-fail'}">人:${q.human_label}</span>`
+            :`<span class="tag pending-label">待标注</span>`}
+        </div>
+      </div>
+      <div class="q-body">
+        <div class="q-dims">
+          <div class="q-dim ${q.ai_stem?'pass':'fail'}"><div class="icon">${q.ai_stem?'✅':'❌'}</div><div class="label">题干</div></div>
+          <div class="q-dim ${q.ai_content?'pass':'fail'}"><div class="icon">${q.ai_content?'✅':'❌'}</div><div class="label">内容</div></div>
+          <div class="q-dim ${q.ai_image?'pass':(q.question_type&&q.question_type.includes('图片')?'fail':'skip')}">
+            <div class="icon">${q.ai_image?'✅':(q.question_type&&q.question_type.includes('图片')?'❌':'⏭')}</div>
+            <div class="label">配图</div></div>
+          <div class="q-dim ${q.ai_answer?'pass':'fail'}"><div class="icon">${q.ai_answer?'✅':'❌'}</div><div class="label">作答</div></div>
+          <div class="q-dim ${q.ai_audio===true?'pass':(q.ai_audio===false?'fail':'skip')}">
+            <div class="icon">${q.ai_audio===true?'✅':(q.ai_audio===false?'❌':'⏭')}</div>
+            <div class="label">音频</div></div>
+          <div class="q-dim ${q.ai_post_error===true?'pass':(q.ai_post_error===false?'fail':'skip')}">
+            <div class="icon">${q.ai_post_error===true?'✅':(q.ai_post_error===false?'❌':'⏭')}</div>
+            <div class="label">答错后</div></div>
+        </div>
+        <div class="q-reasons">
+          <b>(1)题干:</b> ${q.stem_reason||'-'}<br>
+          <b>(2)内容:</b> ${q.content_reason||'-'}<br>
+          <b>(3)配图:</b> ${q.image_reason||'-'}<br>
+          <b>(4)作答:</b> ${q.answer_reason||'-'}<br>
+          <b>(5)音频:</b> ${q.audio_reason||'-'}<br>
+          <b>(6)答错后:</b> ${q.post_error_reason||'-'}
+        </div>
+        <div class="q-actions">
+          ${q.human_label
+            ? `<span class="done-tag">✅ 已标注: ${q.human_label}${q.human_note?' · '+q.human_note:''}</span>`
+            : `<span class="action-label">👤 人工判断</span>
+               <input class="note" id="nt_${qid}" placeholder="备注(选填)" onkeydown="if(event.key==='Enter')humanLabel('${qid}','通过')">
+               <button class="btn btn-success btn-sm" onclick="humanLabel('${qid}','通过')">✓ 通过</button>
+               <button class="btn btn-danger btn-sm" onclick="humanLabel('${qid}','不通过')">✗ 不通过</button>`
+          }
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ====== 自然语言解析 ======
+async function parseNL(){
+  const text=$('nlInput').value.trim()
+  if(!text){$('nlResult').textContent='请先输入描述';return}
+  $('nlResult').textContent='⏳ 解析中...'
+  try{
+    const r=await(await fetch('/api/batch/parse',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({text})
+    })).json()
+    if(r.error){$('nlResult').textContent='❌ '+r.error;return}
+    // 自动填入表单
+    $('planVersion').value=r.version||'新湘鲁六上'
+    $('planUnitFrom').value=r.units[0]
+    $('planUnitTo').value=r.units[r.units.length-1]
+    $('cbBase').checked=(r.stages||[]).includes('基础巩固')
+    $('cbAdv').checked=(r.stages||[]).includes('综合进阶')
+    $('cbHard').checked=(r.stages||[]).includes('难点突破')
+    $('nlResult').textContent=`✅ 解析成功: ${r.version} U${r.units[0]}-${r.units[r.units.length-1]} [${(r.stages||[]).join('/')}] ${r.module_type}`
+    $('planEta').textContent='⏱ '+(r.units.length*(r.stages||[]).length*6)+'分钟（预估）'
+    // 自动开始跑
+    setTimeout(()=>startBatch(),500)
+  }catch(e){$('nlResult').textContent='解析失败: '+e}
+}
+
+// ====== 听力专项（练习+测试）新引擎 ======
+async function startAudio(){
+  const units=[1]
+  if(!confirm('启动听力专项自动化？\n练习: U1 (基础巩固→综合进阶→难点突破)\n测试: U1 测试卷\n(当前配置仅U1，打通后可改脚本扩展)')) return
+  try{
+    const r=await fetch('/api/audio/run',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({mode:'all',units,test_units:units})})
+    const j=await r.json()
+    if(j.error){alert(j.error);return}
+    addLog('info',`▶ 听力专项已启动: ${j.mode} 模式`)
+  }catch(e){alert('启动失败: '+e.message)}
+}
+
+// ====== 口语训练 新引擎 ======
+async function startOral(){
+  const units=[1]
+  if(!confirm('启动口语训练自动化？\nU1 (4大题×5小题，含录音/小喇叭题型)\n(当前配置仅U1，打通后可改脚本扩展)')) return
+  try{
+    const r=await fetch('/api/oral/run',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({units})})
+    const j=await r.json()
+    if(j.error){alert(j.error);return}
+    addLog('info',`▶ 口语训练已启动: 单元${j.units}`)
+  }catch(e){alert('启动失败: '+e.message)}
+}
+
+// ====== 单元自检 新引擎 ======
+async function startUnit(){
+  const units=[1]
+  if(!confirm('启动单元自检自动化？\nU1 (36题：选择/判断/匹配/排序/填空/阅读)\n(当前配置仅U1，打通后可改脚本扩展)')) return
+  try{
+    const r=await fetch('/api/unit/run',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({units})})
+    const j=await r.json()
+    if(j.error){alert(j.error);return}
+    addLog('info',`▶ 单元自检已启动: 单元${j.units}`)
+  }catch(e){alert('启动失败: '+e.message)}
+}
+
+// ====== 知识过关 新引擎 ======
+async function startKnowledge(){
+  const units=[1]
+  if(!confirm('启动知识过关自动化？\nU1 (重点词汇108题 + 重点句型8题)\n题型：选择/判断/录音/填字母/连词成句/系统键盘填空\n(当前配置仅U1，打通后可改脚本扩展)')) return
+  try{
+    const r=await fetch('/api/knowledge/run',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({units})})
+    const j=await r.json()
+    if(j.error){alert(j.error);return}
+    addLog('info',`▶ 知识过关已启动: 单元${j.units}`)
+  }catch(e){alert('启动失败: '+e.message)}
+}
+
+// ====== 语音评测 新引擎 ======
+async function startVoice(){
+  if(!confirm('启动语音评测自动化？\n(题目未做好，仅进入模块)')) return
+  try{
+    const r=await fetch('/api/voice/run',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({})})
+    const j=await r.json()
+    if(j.error){alert(j.error);return}
+    addLog('info',`▶ 语音评测已启动（仅进入）`)
+  }catch(e){alert('启动失败: '+e.message)}
+}
+
+// ====== 巧记单词 新引擎 ======
+async function startQiaoji(){
+  const units=[1,2,3,4,5,6,7,8,9]
+  if(!confirm('启动巧记单词自动化？\n单词同步闯关（U1-U9 全部单元，每单元6关含boss）\n题型：听力选释义/填字母/录音题/选择判断')) return
+  try{
+    const r=await fetch('/api/qiaoji/run',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({units})})
+    const j=await r.json()
+    if(j.error){alert(j.error);return}
+    addLog('info',`▶ 巧记单词已启动: ${j.units.length}个单元`)
+  }catch(e){alert('启动失败: '+e.message)}
+}
+
+// ====== 批量操作 ======
+async function startBatch(){
+  const from=parseInt($('planUnitFrom').value),to=parseInt($('planUnitTo').value)
+  const units=[]; for(let u=from;u<=to;u++) units.push(u)
+  const stages=[]
+  if($('cbBase').checked) stages.push('基础巩固')
+  if($('cbAdv').checked) stages.push('综合进阶')
+  if($('cbHard').checked) stages.push('难点突破')
+  if(!stages.length){alert('至少选一个阶段');return}
+
+  const body={
+    version:$('planVersion').value,
+    units,stages,
+    docx:$('planDocx').value||''
+  }
+  $('btnStart').disabled=true
+  const r=await(await fetch('/api/batch/start',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(body)
+  })).json()
+
+  if(r.error){alert(r.error);$('btnStart').disabled=false;return}
+  $('planEta').textContent='⏱ '+r.eta
+  addLog('success',`✅ 批量任务已启动: ${r.modules} 个模块`)
+  $('logBox').innerHTML=''
+}
+
+async function cancelBatch(){
+  await fetch('/api/batch/cancel',{method:'POST'})
+  addLog('warning','⏹ 任务已取消')
+}
+
+async function togglePause(){
+  const bs=await(await fetch('/api/batch/status')).json()
+  const ep=bs.paused?'resume':'pause'
+  await fetch('/api/batch/'+ep,{method:'POST'})
+  addLog('info',bs.paused?'▶ 继续':'⏸ 暂停')
+}
+
+// ====== 日志轮询 (B实现) ======
+let logLast=0
+async function pollLog(){
+  const d=await(await fetch('/api/log')).json()
+  const logs=(d.logs||[]).slice(logLast)
+  if(logs.length) logLast+=logs.length
+  logs.forEach(l=>addLog(l.level,l.msg))
+  await new Promise(r=>setTimeout(r,1500))
+}
+
+function addLog(level,msg){
+  const t=new Date().toLocaleTimeString()
+  $('logBox').innerHTML+=`<div class="level-${level}">[${t}] ${msg}</div>`
+  $('logBox').scrollTop=$('logBox').scrollHeight
+}
+
+// 启动日志轮询
+setInterval(pollLog,2000)
+</script>
+</body>
+</html>

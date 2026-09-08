@@ -1,0 +1,64 @@
+# 英语宝登录流程
+# 已通过 ADB + uiautomator dump 验证
+# 使用 exact: true 避免模糊匹配（如"登录"误匹配"学生登录"）
+
+name: "英语宝登录"
+description: "从启动APP到登录成功进入主界面的完整流程"
+package: "com.dinoenglish.yyb"
+
+steps:
+  # Step 1: 启动英语宝APP
+  - action: launch_app
+    package: "com.dinoenglish.yyb"
+
+  # Step 2: 等待登录页加载（标题"Hello!" 或 登录按钮）
+  - action: wait_for_element
+    text: "登录"
+    timeout: 10
+
+  # Step 3: 勾选协议复选框
+  - action: click_element
+    text: "我已阅读并同意"
+    # 注意：不要 exact=True，实际文本前面有空格 "  我已阅读并同意..."
+    required: false  # 如果已勾选可能不响应
+
+  # Step 4: 点击登录按钮（精确匹配，避免点到"学生登录"Tab）
+  - action: click_element
+    text: "登录"
+    exact: true   # 关键：精确匹配！"学生登录"和"账号密码登录"都包含"登录"但不是它
+    required: true
+
+  # Step 5: 如果弹出"请先同意协议"提示，等待弹窗出现
+  - action: wait_for_element
+    text: "温馨提示"
+    timeout: 3
+
+  # Step 6: 点击弹窗的"同意"按钮（用resource_id最稳）
+  - action: click_element
+    resource_id: "agree_tv"
+    required: false  # 如果协议已勾选，不会出现此弹窗
+
+  # Step 7: 等待页面响应
+  - action: wait
+    seconds: 3
+
+  # Step 8: 等待主界面加载（用底部导航的"英语"tab确认）
+  - action: wait_for_element
+    resource_id: "rl_first_layout"
+    timeout: 10
+
+  # Step 9: 关闭广告弹窗（如果存在）
+  - action: wait_for_element
+    resource_id: "close_iv"
+    timeout: 5
+
+  - action: click_element
+    resource_id: "close_iv"
+    required: false
+
+  # Step 10: 截图确认登录成功
+  - action: screenshot
+    name: "login_success"
+
+  # Step 11: 列出当前页面所有可点击元素（验证用）
+  - action: list_clickable
