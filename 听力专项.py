@@ -215,6 +215,50 @@ def _asr_evidence(audio_path, xml_now, q):
         return {"ev": [], "answer": None, "confident": False}
 
 
+# ═══════════ 听写单词题（听录音→按字母填方框）═══════════
+# ★ 2026-09-08 新增。此前字母白名单只有 [TFABCDE]，而听写题的选项是乱序的
+#   单词字母（真机：湘鲁六上听力专项·基础巩固「听录音，结合单词」→ g/d/h/a/u/t/r/e），
+#   全部漏检 → opt_map 为空 → 误走下方「图片题 CheckBox 兜底」→ 整卷答错。
+_DICTATION_KW = ("听录音", "结合单词", "拼写", "拼出", "听写", "补全单词",
+                 "补全下列单词", "根据录音", "字母组成")
+
+
+def _is_dictation_page(xml_now):
+    """是否听写/拼词题：题干含听写类关键词 + 页面有多个空输入位。"""
+    if not xml_now:
+        return False
+    texts = " ".join(re.findall(r'text="([^"]+)"', xml_now))
+    if not any(k in texts for k in _DICTATION_KW):
+        return False
+    # 空输入位：优先 EditText；兜底用「空 text + 方框 bounds」粗判
+    n_input = xml_now.count('class="android.widget.EditText"')
+    if n_input < 2:
+        n_input = len(re.findall(
+            r'<node[^>]*text=""[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml_now))
+    return n_input >= 2
+
+
+def _collect_letter_options(xml_now, d=None):
+    """收集页面上的单字母选项（任意 a-zA-Z，不再限于 T/F/A~E）。
+
+    返回 [(字母, (x, y)), ...]，按 y→x 排序（左上到右下，接近视觉顺序）。
+    """
+    found = {}
+    for m in re.finditer(r'<node[^>]*>', xml_now or ""):
+        tag = m.group(0)
+        tm = re.search(r'text="([A-Za-z])"', tag)
+        if not tm:
+            continue
+        bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+        if not bm:
+            continue
+        x1, y1, x2, y2 = map(int, bm.groups())
+        # 选项中区（y1>320）且尺寸合理（字母块一般 >=15px）
+        if y1 > 320 and (x2 - x1) >= 15 and (y2 - y1) >= 15:
+            found.setdefault(tm.group(1), ((x1 + x2) // 2, (y1 + y2) // 2))
+    return sorted(found.items(), key=lambda kv: (kv[1][1], kv[1][0]))
+
+
 def run_module(d, units=None):
     """第一部分：练习模块——跑完听力专项指定单元+子模块，返回题数
 
@@ -564,6 +608,43 @@ def _test_answer_loop(d, max_q=45):
                     break
                 time.sleep(0.1)
             continue
+        # ★ 听写单词题（听录音→按字母填方框）
+        #   ★ 必须放在下方「图片题 CheckBox 兜底」之前：
+        #     听写题页面也有方框类控件，若被 CheckBox 分支先捕获就会误判为图片题。
+        #   ★ 听写题的字母是乱序单词字母（g/d/h/a/u/t/r/e），不在 [TFABCDE] 白名单内，
+        #     上方 opt_map 收集不到 → 必须走这里单独处理。
+        if _is_dictation_page(xml_now):
+            _letters = _collect_letter_options(xml_now, d)
+            if _letters:
+                q += 1
+                # 有 ASR/LLM 转写的单词 → 按单词字母顺序点；否则按界面顺序点（填满方框，不卡死）
+                _seq = list(_letters)
+                _want_word = ""
+                if ASR_CONFIG.get("asr_decide_answer") and _llm_ans:
+                    _want_word = "".join(c for c in str(_llm_ans).lower() if c.isalpha())
+                if _want_word:
+                    _by_ch = {}
+                    for ch, xy in _letters:
+                        _by_ch.setdefault(ch.lower(), xy)
+                    _picked = [(c, _by_ch[c]) for c in _want_word if c in _by_ch]
+                    if _picked:
+                        _seq = _picked
+                        step_log(f"  🎯 听写题按转写单词 '{_want_word}' 点字母", "info")
+                step_log(f"  第{q}题: 听写单词题（{len(_seq)}个字母）", "info")
+                for _ch, (_x, _y) in _seq:
+                    try:
+                        d.click(_x, _y)
+                        time.sleep(0.12)
+                    except Exception:
+                        pass
+                for _ in range(6):
+                    if d(text="检查").exists(timeout=0.15):
+                        d(text="检查").click()
+                        time.sleep(0.3)
+                        break
+                    time.sleep(0.1)
+                _idle = 0
+                continue
         # ★ 图片题选项：字母选项没有时，检测 CheckBox 候选（用户反馈：第16题是图片题）
         #   真机验证：选项 CheckBox 的 clickable="false"（如 T/F 判断框、图片选项框），
         #   故此处【不要求 clickable】，只校验 bounds 在选项区（与字母分支一致）。
