@@ -53,6 +53,45 @@ def _back_home(d):
     return False
 
 
+# ★ 2026-09-08：切课本页里的版本分组标题是 "X版 学段" 格式（如 "湘鲁版 小学"），
+#   归一化后 tn = "湘鲁版小学"，与用户传入的 target_n="湘鲁版" 精确不命中。
+#   学段后缀仅允许 小学/初中/高中/中学/空，不允许"审定/PEP"等修饰词
+#   ——这样既兼容 X版 → X版小学（不区分审定），又保留 X版 ≠ X版(PEP) 的精确区分。
+_SCHOOL_LEVELS = ("", "小学", "初中", "高中", "中学", "中")
+
+
+def _ver_title_match(tn, target_n):
+    """版本分组标题归一化匹配。
+
+    行为：
+      target_n="湘鲁版"  → 命中 "湘鲁版" / "湘鲁版小学" / "湘鲁版 小学"
+      target_n="湘鲁版"  → 不命中 "湘鲁版（2024审定）小学"（含审定）
+      target_n="人教版"  → 命中 "人教版" / "人教版小学"
+      target_n="人教版"  → 不命中 "人教版(PEP)小学"（含 PEP，区分人教/PEP）
+      target_n="人教版(PEP)" → 命中 "人教版(PEP)小学"
+    """
+    if not target_n or not tn or len(tn) < len(target_n):
+        return False
+    if tn == target_n:
+        return True
+    # 允许 target_n 之后仅接学段后缀
+    for suf in _SCHOOL_LEVELS:
+        if tn == target_n + suf:
+            return True
+    return False
+
+
+def _strip_school_level(t):
+    """从 'X版 学段' 文本中剥掉学段后缀，返回纯版本名（如 '湘鲁版 小学' → '湘鲁版'）。"""
+    t = (t or "").strip()
+    for suf in _SCHOOL_LEVELS:
+        if not suf:
+            continue
+        if t.endswith(suf):
+            return t[: -len(suf)].strip()
+    return t
+
+
 def _ensure_screen_ready(d):
     """★ 前置检查：确保屏幕亮着且已解锁（息屏/AOD 状态下点击一律无效）。
 
@@ -213,8 +252,13 @@ def switch_version(d, target_version):
         for e in d.xpath('//*[@text!=""]').all():
             t = (e.text or "").strip()
             tn = _norm(t)
-            # 精确匹配目标版本；并用'版'/'审定'过滤，避免误点年级格子（含'年级'）
-            if tn == target_n and ('版' in t or '审定' in t):
+            # ★ 2026-09-08：版本分组标题是 "X版 学段"（如 "湘鲁版 小学"），
+            #   归一化后 tn="湘鲁版小学" 不等于 target_n="湘鲁版"，
+            #   必须用 _ver_title_match 兼容学段后缀；同时禁止 target_n 之后
+            #   跟"审定/PEP"等修饰词（保留人教版 ≠ 人教版(PEP) 的区分）。
+            if (('版' in t or '审定' in t) and '年级' not in t and '册' not in t
+                    and '切换' not in t and '如何' not in t and len(t) <= 20
+                    and _ver_title_match(tn, target_n)):
                 try:
                     e.click()
                 except Exception:
@@ -256,16 +300,19 @@ def list_versions_from_app(d, max_pages=12):
             elems = d.xpath('//*[@text!=""]').all()
         except Exception:
             elems = []
-        for e in elems:
-            t = (e.text or "").strip()
-            if not t:
-                continue
-            # 版本标题：含'版'/'审定'，不含年级/册/切换/如何，且长度<=20
-            if (('版' in t or '审定' in t) and '年级' not in t and '册' not in t
-                    and '切换' not in t and '如何' not in t and len(t) <= 20):
-                if t not in seen:
-                    seen.add(t)
-                    versions.append(t)
+    for e in elems:
+        t = (e.text or "").strip()
+        if not t:
+            continue
+        # 版本标题：含'版'/'审定'，不含年级/册/切换/如何，且长度<=20
+        if (('版' in t or '审定' in t) and '年级' not in t and '册' not in t
+                and '切换' not in t and '如何' not in t and len(t) <= 20):
+            # ★ 2026-09-08：版本分组标题是 "X版 学段"（如 "湘鲁版 小学"），
+            #   剥掉学段后缀，只留版本名（"湘鲁版"）— 与 versions_grades.json / 前端一致。
+            short = _strip_school_level(t)
+            if short and short not in seen:
+                seen.add(short)
+                versions.append(short)
         S_swipe(d, 540, 1850, 540, 650, 0.45); time.sleep(0.7)
     if not _is_home(d):
         _back_home(d)
@@ -456,11 +503,13 @@ def _pick_version_grade(d, version, grade):
         nodes.sort(key=lambda x: x[0])
         for y, typ, t, tn, elem, b in nodes:
             if typ == 'ver':
+                # ★ 2026-09-08：兼容 "湘鲁版 小学" → 归一化后 tn="湘鲁版小学"，
+                #   需用 _ver_title_match 而非严格 tn == target_vn。
                 current_vn = tn
-                if tn == target_vn:
+                if _ver_title_match(tn, target_vn):
                     version_seen = True
             elif typ == 'grade':
-                if current_vn == target_vn and tn == target_gn:
+                if _ver_title_match(current_vn or "", target_vn) and tn == target_gn:
                     try:
                         elem.click()
                         print(f"    → 选中 {version} {grade}")
