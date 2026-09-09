@@ -62,13 +62,15 @@ _SCHOOL_LEVELS = ("", "小学", "初中", "高中", "中学", "中")
 
 def _ver_base(s):
     """抽取版本『基础名』：剥掉学段后缀(小学/初中/高中/中学)与审定噪声(2024审定/审定)，
-    但保留 PEP（用于区分 人教版 ≠ 人教版(PEP)）。
+    并去掉由此产生的空括号；保留 PEP（用于区分 人教版 ≠ 人教版(PEP)）。
     例：'湘鲁版（2024审定）小学' → '湘鲁版'；'人教版(PEP)小学' → '人教版(PEP)'。"""
     s = s or ""
     for suf in ("小学", "初中", "高中", "中学", "中"):
         if s.endswith(suf):
             s = s[: -len(suf)]
     s = s.replace("2024审定", "").replace("审定", "")
+    # 去掉因去掉审定而产生的空括号，如 "湘鲁版（）" → "湘鲁版"
+    s = _re.sub(r'[（(][）)]', '', s)
     return s
 
 
@@ -113,6 +115,24 @@ def _ver_title_match(tn, target_n):
     if bn.startswith(bt) or bt.startswith(bn):
         return True
     return False
+
+
+def _ver_match_for_confirm(cur, target):
+    """主页顶部栏版本确认用的宽松匹配：允许审定/旧版退化互认，但保留 PEP 边界。
+
+    典型场景：用户输入 '湘鲁版'，App 只有 '湘鲁版（2024审定）' → 切换后顶部栏
+    显示 '湘鲁版（2024审定）'，应视为已切换成功，不再报『版本不存在』。
+
+      - 目标 '湘鲁版' vs 当前 '湘鲁版（2024审定）' → True
+      - 目标 '湘鲁版（2024审定）' vs 当前 '湘鲁版' → True
+      - 目标 '人教版' vs 当前 '人教版(PEP)' → False（PEP 边界保留）
+    """
+    if not cur or not target:
+        return False
+    cur_n = _norm(cur); target_n = _norm(target)
+    if ('PEP' in cur_n) != ('PEP' in target_n):
+        return False
+    return _ver_base(cur_n) == _ver_base(target_n)
 
 
 def _strip_school_level(t):
@@ -399,14 +419,16 @@ def check_current(d, version, grade):
 
     主页顶部栏节点 resource-id=switch_textbook_tv，text 形如
     「湘少版（2024审定）   五年级上册」
-    ★ 版本/年级均用归一化【精确】匹配，避免"湘少版"误判为"湘少版（2024审定）"
+    ★ 版本用宽松匹配（允许审定/旧版退化互认），年级仍精确匹配。
     """
     if not _is_home(d):
         return False
     cur_ver, cur_gra = _current_texts(d)
     if not cur_ver:
         return False
-    return _norm(cur_ver) == _norm(version) and _norm(cur_gra) == _norm(grade)
+    ver_ok = bool(cur_ver and _ver_match_for_confirm(cur_ver, version))
+    gra_ok = bool(cur_gra and _norm(cur_gra) == _norm(grade))
+    return ver_ok and gra_ok
 
 
 # ═══════════ 教材分册扫描（新旧分开）═══════════
@@ -646,11 +668,11 @@ def _current_texts(d):
 
 
 def check_version_ok(d, version):
-    """只检查当前版本是否匹配目标版本（归一化精确匹配，区分'湘少版'与'湘少版（2024审定）'）"""
+    """只检查当前版本是否匹配目标版本（宽松匹配，允许审定/旧版退化互认）"""
     cur_ver, _ = _current_texts(d)
     if not cur_ver:
         return False
-    return _norm(cur_ver) == _norm(version)
+    return _ver_match_for_confirm(cur_ver, version)
 
 
 def check_grade_ok(d, grade):
@@ -763,10 +785,10 @@ def switch_version_grade(d, version, grade, skip_if_ok=True):
 
     # 2. 读当前版本+年级
     cur_ver, cur_gra = _current_texts(d)
-    ver_ok = bool(cur_ver and _norm(cur_ver) == _norm(version))
+    ver_ok = bool(cur_ver and _ver_match_for_confirm(cur_ver, version))
     gra_ok = bool(cur_gra and _norm(cur_gra) == _norm(grade))
     if ver_ok and gra_ok:
-        print(f"    ✔ 已是 {version} {grade}，无需切换")
+        print(f"    ✔ 已是 {version} {grade}（当前 {cur_ver} {cur_gra}），无需切换")
         return True
 
     # 3. 进入切换课本页，直接点目标版本+年级组合
@@ -781,10 +803,12 @@ def switch_version_grade(d, version, grade, skip_if_ok=True):
     time.sleep(2)
 
     # 4. 最终确认（点年级封面后 App 会自动回主页）
+    # ★ 用 _ver_match_for_confirm 做版本确认，允许 App 显示『湘鲁版（2024审定）』
+    #   通过用户输入的『湘鲁版』，避免旧版 App 只有审定版时误判为切换失败。
     if not _is_home(d):
         _back_home(d); time.sleep(1.2)
     cur_ver, cur_gra = _current_texts(d)
-    ver_ok = bool(cur_ver and _norm(cur_ver) == _norm(version))
+    ver_ok = bool(cur_ver and _ver_match_for_confirm(cur_ver, version))
     gra_ok = bool(cur_gra and _norm(cur_gra) == _norm(grade))
     print(f"    最终: {'✔' if ver_ok and gra_ok else '✘'} {cur_ver} {cur_gra}")
     return ver_ok and gra_ok
