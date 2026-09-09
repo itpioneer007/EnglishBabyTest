@@ -165,6 +165,116 @@ def run_module(d, units=None, grade=None, version=None):
 
 # ═══════════ 第二部分：测试模块 ═══════════
 
+# ═══════════ 组合单词题（听录音 → 点绿色字母块拼词）═══════════
+# ★ 2026-09-09 新增。界面：上方 N 个空方框，下方一排绿色字母块（如 e e s b i d），
+#   点字母块即填入方框。用户约定：不必点完所有字母，点几个后「检查」按钮就出现，
+#   点「检查」→「下一题」即可。此前该页被下方「图片题 CheckBox 兜底」误捕获
+#   （字母块往往也是 CheckBox）→ 只点第一个、拼不成词 → 卡住/答错。
+_WORD_BUILD_KW = ("组合单词", "组成单词", "结合单词", "拼写单词", "拼出单词",
+                  "拼单词", "字母组成", "连词成词", "排列字母")
+
+
+def _is_word_build_page(xml_now):
+    """是否「组合单词」类题型（题干含组合/拼词关键词）。"""
+    if not xml_now:
+        return False
+    texts = " ".join(re.findall(r'text="([^"]+)"', xml_now))
+    return any(k in texts for k in _WORD_BUILD_KW)
+
+
+def _collect_word_tiles(d, xml_now):
+    """收集下方字母块的中心坐标 [(x, y), ...]，按 y→x 排序（左上→右下）。
+
+    ★ 不去重字母：同一个字母可能出现两次（beside 有两个 e），必须逐块点击。
+      ① 优先：单字母文本节点（任意 a-zA-Z）；
+      ② 退化：下半屏近正方形的可点击块（字母用图片绘制、读不到文本时）。
+    """
+    tiles, seen = [], set()
+    for m in re.finditer(r'<node[^>]*>', xml_now or ""):
+        tag = m.group(0)
+        tm = re.search(r'text="([A-Za-z])"', tag)
+        bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+        if not (tm and bm):
+            continue
+        x1, y1, x2, y2 = map(int, bm.groups())
+        if y1 > 320 and (x2 - x1) >= 15 and (y2 - y1) >= 15:
+            key = ((x1 + x2) // 2, (y1 + y2) // 2)
+            if key not in seen:
+                seen.add(key)
+                tiles.append(key)
+    if len(tiles) >= 3:
+        return sorted(tiles, key=lambda p: (p[1], p[0]))
+    # ② 退化：下半屏近正方形可点击块
+    try:
+        _h = d.window_size()[1]
+    except Exception:
+        _h = 2400
+    _y_min = int(_h * 0.40)
+    cand = []
+    for m in re.finditer(r'<node[^>]*>', xml_now or ""):
+        tag = m.group(0)
+        # ★ 字母块常是 CheckBox 且 clickable="false"（真机验证，见图片题分支注释），
+        #   故不能只收 clickable="true"；点坐标 d.click(x,y) 不依赖 clickable 属性。
+        _is_cb = 'class="android.widget.CheckBox"' in tag
+        if not (_is_cb or 'clickable="true"' in tag):
+            continue
+        bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+        if not bm:
+            continue
+        x1, y1, x2, y2 = map(int, bm.groups())
+        w, hh = x2 - x1, y2 - y1
+        if y1 < _y_min:
+            continue
+        if not (60 <= w <= 420 and 60 <= hh <= 420):
+            continue
+        if abs(w - hh) > max(w, hh) * 0.6:   # 近正方形（排除底部宽按钮）
+            continue
+        key = ((x1 + x2) // 2, (y1 + y2) // 2)
+        if key in seen:
+            continue
+        seen.add(key)
+        cand.append(key)
+    if len(cand) >= 3:
+        return sorted(cand, key=lambda p: (p[1], p[0]))
+    return sorted(tiles, key=lambda p: (p[1], p[0]))
+
+
+def _handle_word_build(d, tiles, stop_check=None):
+    """逐个点字母块 → 一旦冒出「检查」立刻停手 → 点检查。返回已点击块数。
+
+    ★ 用户约定：不必点完所有字母，点几个后「检查」就会出现；
+      点完检查后由主循环的「下一题」分支推进（答对会自动跳题）。
+    """
+    clicked = 0
+    for _x, _y in tiles:
+        if stop_check is not None and stop_check():
+            break
+        try:
+            d.click(_x, _y)
+            clicked += 1
+        except Exception:
+            pass
+        time.sleep(0.15)
+        # ★ 点几个后出现「检查」即停手，不必点完
+        try:
+            if d(text="检查").exists(timeout=0.2):
+                break
+        except Exception:
+            pass
+    # 点「检查」
+    for _ in range(8):
+        try:
+            if d(text="检查").exists(timeout=0.2):
+                d(text="检查").click()
+                print("      → 检查")
+                time.sleep(0.35)
+                break
+        except Exception:
+            pass
+        time.sleep(0.15)
+    return clicked
+
+
 def _test_answer_loop(d, max_q=45, stop_check=None):
     """测试卷答题循环：点选项→检查→(答对自动跳/答错点下一题)→最后一题查看报告
     
@@ -420,6 +530,18 @@ def _test_answer_loop(d, max_q=45, stop_check=None):
                     return q
                 time.sleep(0.4)
             continue
+
+        # ★ 组合单词题（听录音 → 点绿色字母块拼词）
+        #   ★ 必须放在「字母选项」与「图片题 CheckBox 兜底」之前：
+        #     该页字母块常是 CheckBox，会被图片题分支误当成"图片选项"只点一个 → 拼不成词。
+        if _is_word_build_page(xml_now):
+            _tiles = _collect_word_tiles(d, xml_now)
+            if _tiles:
+                q += 1
+                step_log(f"  第{q}题: 组合单词题（{len(_tiles)}个字母块）", "info")
+                _handle_word_build(d, _tiles, stop_check)
+                _idle = 0
+                continue
 
         opt = None
         opt_xy = None
