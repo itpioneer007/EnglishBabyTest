@@ -711,26 +711,48 @@ def _pick_version_grade(d, version, grade):
                 nodes.append((b[1], 'grade', t, tn, e, b))
         # 按 y 坐标排序后顺序处理：遇到版本标题更新 current_vn，遇到年级判断归属
         nodes.sort(key=lambda x: x[0])
+        # 本屏可见的版本标题 [(标题底部y, 归一化名), ...]
+        visible_vers = [(y, tn) for (y, typ, t, tn, _e, _b) in nodes if typ == 'ver']
+        # ★ 目标版本标题在本屏的底部 y；None = 本屏看不到目标版本标题
+        target_title_y = None
+        for (_vy, _vtn) in visible_vers:
+            if _ver_title_match(_vtn, target_vn):
+                version_seen = True
+            if _ver_is_preferred(_vtn, target_vn):
+                target_title_y = _vy
         for y, typ, t, tn, elem, b in nodes:
             if typ == 'ver':
-                # ★ 宽松系列匹配仅用于"版本系列是否存在"的判断（version_seen）
                 current_vn = tn
-                if _ver_title_match(tn, target_vn):
-                    version_seen = True
-            elif typ == 'grade':
-                # ★ 精确点选：年级必须落在『精确等于目标版本』的分组里。
-                #   _ver_is_preferred 要求基础名相等 + 审定/PEP 噪声一致，
-                #   故输入"湘鲁版"只点"湘鲁版"分组，输入"湘鲁版（2024审定）"只点审定版分组。
-                if _ver_is_preferred(current_vn or "", target_vn) and tn == target_gn:
-                    try:
-                        elem.click()
-                        print(f"    → 选中 {version} {grade}")
-                    except Exception:
-                        d.click((b[0] + b[2]) // 2, (b[1] + b[3]) // 2)
-                        print(f"    → 选中 {version} {grade}（坐标兜底）")
-                    return True
+                continue
+            if tn != target_gn:
+                continue
+            # ★★ 归属确定性校验（2026-09-09 真机修复）
+            #   切换课本页是【长滚动列表】：版本标题 → 该版本若干行年级封面 → 下一个版本标题…
+            #   滚动后，上一屏末尾的年级封面会停留在下一屏顶部，而它【仍在下一个版本标题之上】，
+            #   即仍属于上一个版本。旧逻辑用"跨屏沿用 current_vn"判归属，会把这批封面
+            #   误判成新版本 → 例：湘鲁版六年级上册 实际点到了 湘鲁版（2024审定）的封面。
+            #   现只在归属【确定】时才点：
+            #     ① 本屏能看到目标版本标题，且该年级在标题下方 → 归属确定；
+            #     ② 本屏【没有任何】版本标题 → 说明仍在同一分组内部，沿用上一屏归属。
+            #   其余情况（年级在目标标题上方 / 本屏有别的标题）一律跳过，宁可不点也不错点。
+            owner_ok = False
+            if target_title_y is not None and y > target_title_y:
+                owner_ok = True
+            elif not visible_vers and _ver_is_preferred(current_vn or "", target_vn):
+                owner_ok = True
+            if not owner_ok:
+                print(f"    · 跳过 {t}（归属不确定：本屏标题={[v[1] for v in visible_vers]}，目标标题y={target_title_y}）")
+                continue
+            try:
+                elem.click()
+                print(f"    → 选中 {version} {grade}")
+            except Exception:
+                d.click((b[0] + b[2]) // 2, (b[1] + b[3]) // 2)
+                print(f"    → 选中 {version} {grade}（坐标兜底）")
+            return True
         # 本屏未命中 → 下滑继续（current_vn 跨屏保留）
-        S_swipe(d, 540, 1850, 540, 650, 0.45); time.sleep(0.7)
+        # ★ 1.0s：滚动后列表需时间重绘，太快会 dump 到半屏（实测 0.7s 会漏掉下半屏节点）
+        S_swipe(d, 540, 1850, 540, 650, 0.45); time.sleep(1.0)
     # ★ 区分失败原因
     if not version_seen:
         print(f"    ✘ 版本不存在: {version}（APP 内未找到该版本系列，请核对版本名）")
