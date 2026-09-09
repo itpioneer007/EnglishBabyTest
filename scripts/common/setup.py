@@ -117,23 +117,6 @@ def _ver_title_match(tn, target_n):
     return False
 
 
-def _ver_match_for_confirm(cur, target):
-    """主页顶部栏版本确认用的宽松匹配：允许审定/旧版退化互认，但保留 PEP 边界。
-
-    典型场景：用户输入 '湘鲁版'，App 只有 '湘鲁版（2024审定）' → 切换后顶部栏
-    显示 '湘鲁版（2024审定）'，应视为已切换成功，不再报『版本不存在』。
-
-      - 目标 '湘鲁版' vs 当前 '湘鲁版（2024审定）' → True
-      - 目标 '湘鲁版（2024审定）' vs 当前 '湘鲁版' → True
-      - 目标 '人教版' vs 当前 '人教版(PEP)' → False（PEP 边界保留）
-    """
-    if not cur or not target:
-        return False
-    cur_n = _norm(cur); target_n = _norm(target)
-    if ('PEP' in cur_n) != ('PEP' in target_n):
-        return False
-    return _ver_base(cur_n) == _ver_base(target_n)
-
 
 def _strip_school_level(t):
     """从 'X版 学段' 文本中剥掉学段后缀，返回纯版本名（如 '湘鲁版 小学' → '湘鲁版'）。"""
@@ -419,14 +402,15 @@ def check_current(d, version, grade):
 
     主页顶部栏节点 resource-id=switch_textbook_tv，text 形如
     「湘少版（2024审定）   五年级上册」
-    ★ 版本用宽松匹配（允许审定/旧版退化互认），年级仍精确匹配。
+    ★ 版本/年级均用精确匹配（_ver_is_preferred）：基础名 + 审定/PEP 噪声都一致才算，
+      保证"湘鲁版"与"湘鲁版（2024审定）"是两个独立版本，互不串台。
     """
     if not _is_home(d):
         return False
     cur_ver, cur_gra = _current_texts(d)
     if not cur_ver:
         return False
-    ver_ok = bool(cur_ver and _ver_match_for_confirm(cur_ver, version))
+    ver_ok = bool(cur_ver and _ver_is_preferred(cur_ver, version))
     gra_ok = bool(cur_gra and _norm(cur_gra) == _norm(grade))
     return ver_ok and gra_ok
 
@@ -668,11 +652,11 @@ def _current_texts(d):
 
 
 def check_version_ok(d, version):
-    """只检查当前版本是否匹配目标版本（宽松匹配，允许审定/旧版退化互认）"""
+    """只检查当前版本是否匹配目标版本（精确匹配：基础名 + 审定/PEP 噪声一致）"""
     cur_ver, _ = _current_texts(d)
     if not cur_ver:
         return False
-    return _ver_match_for_confirm(cur_ver, version)
+    return _ver_is_preferred(cur_ver, version)
 
 
 def check_grade_ok(d, grade):
@@ -694,12 +678,10 @@ def _pick_version_grade(d, version, grade):
     """
     target_vn = _norm(version)
     target_gn = _norm(grade)
-    target_base = _ver_base(target_vn)
     current_vn = None
-    version_seen = False  # ★ 目标版本标题是否在整页扫描中出现过（区分"版本不存在"vs"年级不存在"）
-    preferred_clicked = False
-    # 兜底候选：仅当全程未出现『纯版本』匹配时（如 APP 只有审定版），退化点任意匹配版本的年级
-    fb_grade = None  # (t, elem, b)
+    version_seen = False  # ★ 目标版本系列是否在整页扫描中出现过（区分"版本不存在"vs"年级不存在"）
+    # ★ 精确匹配：只有『版本名 + 审定/PEP 噪声』都一致时才点。
+    #   这样手机里"湘鲁版"与"湘鲁版（2024审定）"是两个独立版本，各点各的，绝不串。
     # 先回到页面顶部（版本分组从上方开始）
     for _ in range(3):
         S_swipe(d, 540, 650, 540, 1850, 0.3); time.sleep(0.4)
@@ -731,41 +713,30 @@ def _pick_version_grade(d, version, grade):
         nodes.sort(key=lambda x: x[0])
         for y, typ, t, tn, elem, b in nodes:
             if typ == 'ver':
-                # ★ 兼容 "湘鲁版 小学" / "湘鲁版（2024审定）小学"：用 _ver_title_match 宽松前缀匹配
+                # ★ 宽松系列匹配仅用于"版本系列是否存在"的判断（version_seen）
                 current_vn = tn
                 if _ver_title_match(tn, target_vn):
                     version_seen = True
             elif typ == 'grade':
-                if _ver_title_match(current_vn or "", target_vn) and tn == target_gn:
-                    # ★ 优先点『纯版本』（无审定/PEP 噪声）的年级；审定版仅作兜底，
-                    #   这样输入"湘鲁版"会点旧版湘鲁版的年级，而不是误点 2024审定版。
-                    if _ver_is_preferred(current_vn or "", target_vn):
-                        try:
-                            elem.click()
-                            print(f"    → 选中 {version} {grade}")
-                        except Exception:
-                            d.click((b[0] + b[2]) // 2, (b[1] + b[3]) // 2)
-                            print(f"    → 选中 {version} {grade}（坐标兜底）")
-                        return True
-                    if fb_grade is None:
-                        fb_grade = (t, elem, b)
+                # ★ 精确点选：年级必须落在『精确等于目标版本』的分组里。
+                #   _ver_is_preferred 要求基础名相等 + 审定/PEP 噪声一致，
+                #   故输入"湘鲁版"只点"湘鲁版"分组，输入"湘鲁版（2024审定）"只点审定版分组。
+                if _ver_is_preferred(current_vn or "", target_vn) and tn == target_gn:
+                    try:
+                        elem.click()
+                        print(f"    → 选中 {version} {grade}")
+                    except Exception:
+                        d.click((b[0] + b[2]) // 2, (b[1] + b[3]) // 2)
+                        print(f"    → 选中 {version} {grade}（坐标兜底）")
+                    return True
         # 本屏未命中 → 下滑继续（current_vn 跨屏保留）
         S_swipe(d, 540, 1850, 540, 650, 0.45); time.sleep(0.7)
-    # ★ 兜底：全程无纯版本匹配（如 APP 只有审定版），点第一个候选年级
-    if fb_grade is not None:
-        t, elem, b = fb_grade
-        try:
-            elem.click()
-            print(f"    → 选中(兜底) {version} {grade}")
-        except Exception:
-            d.click((b[0] + b[2]) // 2, (b[1] + b[3]) // 2)
-            print(f"    → 选中(兜底) {version} {grade}（坐标兜底）")
-        return True
-    # ★ 区分失败原因：目标版本标题从未出现 → 版本不存在；否则是年级不存在/未找到
+    # ★ 区分失败原因
     if not version_seen:
-        print(f"    ✘ 版本不存在: {version}")
+        print(f"    ✘ 版本不存在: {version}（APP 内未找到该版本系列，请核对版本名）")
         return "VERSION_NOT_FOUND"
-    print(f"    ✘ 在切换课本页未找到 {version} {grade}")
+    # 系列存在但无精确匹配——多半是输入的版本名与 APP 内不一致（如输入"湘鲁版"但只有审定版有该年级）
+    print(f"    ✘ 在切换课本页找到『{version}』系列，但未精确匹配到 {grade}（请确认 APP 内版本/年级名称是否一致）")
     return "GRADE_NOT_FOUND"
 
 
@@ -785,7 +756,7 @@ def switch_version_grade(d, version, grade, skip_if_ok=True):
 
     # 2. 读当前版本+年级
     cur_ver, cur_gra = _current_texts(d)
-    ver_ok = bool(cur_ver and _ver_match_for_confirm(cur_ver, version))
+    ver_ok = bool(cur_ver and _ver_is_preferred(cur_ver, version))
     gra_ok = bool(cur_gra and _norm(cur_gra) == _norm(grade))
     if ver_ok and gra_ok:
         print(f"    ✔ 已是 {version} {grade}（当前 {cur_ver} {cur_gra}），无需切换")
@@ -803,12 +774,12 @@ def switch_version_grade(d, version, grade, skip_if_ok=True):
     time.sleep(2)
 
     # 4. 最终确认（点年级封面后 App 会自动回主页）
-    # ★ 用 _ver_match_for_confirm 做版本确认，允许 App 显示『湘鲁版（2024审定）』
-    #   通过用户输入的『湘鲁版』，避免旧版 App 只有审定版时误判为切换失败。
+    # ★ 精确确认：当前版本必须『基础名 + 审定/PEP 噪声』都一致才算切换成功，
+    #   保证"湘鲁版"≠"湘鲁版（2024审定）"，互不串台。
     if not _is_home(d):
         _back_home(d); time.sleep(1.2)
     cur_ver, cur_gra = _current_texts(d)
-    ver_ok = bool(cur_ver and _ver_match_for_confirm(cur_ver, version))
+    ver_ok = bool(cur_ver and _ver_is_preferred(cur_ver, version))
     gra_ok = bool(cur_gra and _norm(cur_gra) == _norm(grade))
     print(f"    最终: {'✔' if ver_ok and gra_ok else '✘'} {cur_ver} {cur_gra}")
     return ver_ok and gra_ok
