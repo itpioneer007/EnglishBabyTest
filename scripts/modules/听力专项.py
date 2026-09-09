@@ -29,14 +29,23 @@ from common.logger import step_log
 from common.tools import (
     S, S_swipe, S_h, S_w,
     close_ad, dismiss_global_popups, ensure_grade, back_to_home, scroll_and_find,
-    smart_find_unit_row, applock_blocked, settle_ads,
+    smart_find_unit_row, applock_blocked, settle_ads, enter_module_by_entry,
 )
 from engine import run_single_module
 
 # ═══════════ 模块配置 ═══════════
 APP_PACKAGE = "com.dinoenglish.yyb"
-GRADE_LEVEL = "五年级上册"
-BOOK_VERSION = "湘少版"
+
+
+def resolve_grade_version(grade=None, version=None):
+    """年级/版本的唯一来源：调用方显式传入（来自 UI 年级版本栏）> 环境变量 > 兜底默认值。
+
+    ★ 关键：不再在模块导入时固化（旧写法 GRADE_LEVEL=os.environ.get(...) 在首次导入后失效，
+      导致换年级后自动化仍用旧年级）。改为每次调用时实时解析，保证跟随 UI 栏选择。
+    """
+    g = (grade or os.environ.get("YYB_GRADE") or "六年级上册").strip()
+    v = (version or os.environ.get("YYB_VERSION") or "湘少版").strip()
+    return g, v
 
 
 def _env_units():
@@ -118,25 +127,37 @@ CONFIG = {
         },
         "fill_blank": {
             # ★ 表格/短文补全（键盘注入）：页面有 EditText，复用 _handle_fill_blank
-            #   （FastInputIME 注入）。页面特征：含"补全/填空/完成"关键词。
+            #   （FastInputIME 注入）。页面特征：含"补全/填空/完成/写单词"关键词。
             "detect_text": ["补全表格", "选择正确的选项", "补全", "填空", "完成小短文", "填写",
-                            "按要求完成句子", "完成句子", "句型转换", "改为", "将句子"],
+                            "按要求完成句子", "完成句子", "句型转换", "改为", "将句子",
+                            "写单词", "写句子", "听录音，写", "看图写", "写一写"],
             "action": "fill_blank_questions",
         },
     },
 }
 
 
-def run_module(d, units=None):
+def run_module(d, units=None, grade=None, version=None):
     """第一部分：练习模块——跑完听力专项指定单元+子模块，返回题数
 
     units: 单元范围，如 [1,2,3] 或 '1-3'；None=默认全部
+    grade/version: 目标年级/版本（来自 UI 年级版本栏）；不传则回退环境变量/默认
     """
+    grade, version = resolve_grade_version(grade, version)
+    # ★ 自我纠正：进入模块前确认 App 已切到用户选择的年级/版本，
+    #   避免沿用上一次运行残留的旧年级（用户根因：换年级不生效）
+    try:
+        _ok = ensure_grade(d, grade, version)
+        if not _ok:
+            print(f"  ❌ 年级/版本确认失败，终止任务")
+            return 0
+    except Exception as e:
+        print(f"  ⚠ 年级确认异常(继续): {e}")
     t0 = time.time()
     _units = _resolve_units(units, UNITS)
     _cfg = dict(CONFIG)
     _cfg["units"] = _units
-    print(f"\n📋 听力专项·练习 · 单元 {_units[0]}-{_units[-1]} · {len(_units)}个单元")
+    step_log(f"📋 听力专项·练习 · 单元 {_units[0]}-{_units[-1]} · {len(_units)}个单元", "info")
     q = run_single_module(d, "听力专项", _cfg)
     print(f"✅ 练习部分完成: {q} 题, 耗时 {time.time()-t0:.0f}s")
     return q
@@ -144,7 +165,117 @@ def run_module(d, units=None):
 
 # ═══════════ 第二部分：测试模块 ═══════════
 
-def _test_answer_loop(d, max_q=45):
+# ═══════════ 组合单词题（听录音 → 点绿色字母块拼词）═══════════
+# ★ 2026-09-09 新增。界面：上方 N 个空方框，下方一排绿色字母块（如 e e s b i d），
+#   点字母块即填入方框。用户约定：不必点完所有字母，点几个后「检查」按钮就出现，
+#   点「检查」→「下一题」即可。此前该页被下方「图片题 CheckBox 兜底」误捕获
+#   （字母块往往也是 CheckBox）→ 只点第一个、拼不成词 → 卡住/答错。
+_WORD_BUILD_KW = ("组合单词", "组成单词", "结合单词", "拼写单词", "拼出单词",
+                  "拼单词", "字母组成", "连词成词", "排列字母")
+
+
+def _is_word_build_page(xml_now):
+    """是否「组合单词」类题型（题干含组合/拼词关键词）。"""
+    if not xml_now:
+        return False
+    texts = " ".join(re.findall(r'text="([^"]+)"', xml_now))
+    return any(k in texts for k in _WORD_BUILD_KW)
+
+
+def _collect_word_tiles(d, xml_now):
+    """收集下方字母块的中心坐标 [(x, y), ...]，按 y→x 排序（左上→右下）。
+
+    ★ 不去重字母：同一个字母可能出现两次（beside 有两个 e），必须逐块点击。
+      ① 优先：单字母文本节点（任意 a-zA-Z）；
+      ② 退化：下半屏近正方形的可点击块（字母用图片绘制、读不到文本时）。
+    """
+    tiles, seen = [], set()
+    for m in re.finditer(r'<node[^>]*>', xml_now or ""):
+        tag = m.group(0)
+        tm = re.search(r'text="([A-Za-z])"', tag)
+        bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+        if not (tm and bm):
+            continue
+        x1, y1, x2, y2 = map(int, bm.groups())
+        if y1 > 320 and (x2 - x1) >= 15 and (y2 - y1) >= 15:
+            key = ((x1 + x2) // 2, (y1 + y2) // 2)
+            if key not in seen:
+                seen.add(key)
+                tiles.append(key)
+    if len(tiles) >= 3:
+        return sorted(tiles, key=lambda p: (p[1], p[0]))
+    # ② 退化：下半屏近正方形可点击块
+    try:
+        _h = d.window_size()[1]
+    except Exception:
+        _h = 2400
+    _y_min = int(_h * 0.40)
+    cand = []
+    for m in re.finditer(r'<node[^>]*>', xml_now or ""):
+        tag = m.group(0)
+        # ★ 字母块常是 CheckBox 且 clickable="false"（真机验证，见图片题分支注释），
+        #   故不能只收 clickable="true"；点坐标 d.click(x,y) 不依赖 clickable 属性。
+        _is_cb = 'class="android.widget.CheckBox"' in tag
+        if not (_is_cb or 'clickable="true"' in tag):
+            continue
+        bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+        if not bm:
+            continue
+        x1, y1, x2, y2 = map(int, bm.groups())
+        w, hh = x2 - x1, y2 - y1
+        if y1 < _y_min:
+            continue
+        if not (60 <= w <= 420 and 60 <= hh <= 420):
+            continue
+        if abs(w - hh) > max(w, hh) * 0.6:   # 近正方形（排除底部宽按钮）
+            continue
+        key = ((x1 + x2) // 2, (y1 + y2) // 2)
+        if key in seen:
+            continue
+        seen.add(key)
+        cand.append(key)
+    if len(cand) >= 3:
+        return sorted(cand, key=lambda p: (p[1], p[0]))
+    return sorted(tiles, key=lambda p: (p[1], p[0]))
+
+
+def _handle_word_build(d, tiles, stop_check=None):
+    """逐个点字母块 → 一旦冒出「检查」立刻停手 → 点检查。返回已点击块数。
+
+    ★ 用户约定：不必点完所有字母，点几个后「检查」就会出现；
+      点完检查后由主循环的「下一题」分支推进（答对会自动跳题）。
+    """
+    clicked = 0
+    for _x, _y in tiles:
+        if stop_check is not None and stop_check():
+            break
+        try:
+            d.click(_x, _y)
+            clicked += 1
+        except Exception:
+            pass
+        time.sleep(0.15)
+        # ★ 点几个后出现「检查」即停手，不必点完
+        try:
+            if d(text="检查").exists(timeout=0.2):
+                break
+        except Exception:
+            pass
+    # 点「检查」
+    for _ in range(8):
+        try:
+            if d(text="检查").exists(timeout=0.2):
+                d(text="检查").click()
+                print("      → 检查")
+                time.sleep(0.35)
+                break
+        except Exception:
+            pass
+        time.sleep(0.15)
+    return clicked
+
+
+def _test_answer_loop(d, max_q=45, stop_check=None):
     """测试卷答题循环：点选项→检查→(答对自动跳/答错点下一题)→最后一题查看报告
     
     处理题型：选择/判断(TF)、匹配(点方框+字母)、排序(点方框+序号)、中途"继续答题"弹窗
@@ -156,7 +287,45 @@ def _test_answer_loop(d, max_q=45):
     _ev_q = -1  # 已发证据卡的题号（每题只发一次）
     total_q = 0   # 总题数（界面右上角 "当前/总" 的右边数字，用户指出总题数在右上角右边）
     cur_q = 0     # 当前题号
+
+    def _is_instruction_page(xml):
+        """判断当前页是否为大题/题型说明页（非真正题目页）。
+
+        核心规则：
+          1) 页面右上角有题号 "X/Y"（text 或 content-desc，如 6/16）→ 真实题目页。
+          2) 有选项字母 A/B/C/D/T/F（含 A./A、/A. xxx 等）→ 真实题目页。
+          3) 有输入框/CheckBox → 真实题目页。
+          4) 无题号、无选项，但有"继续答题"/"分值"/"共N分"/大题序号 → 说明页。
+        """
+        if not xml:
+            return False
+        # 1) 有题号 → 真实题目页
+        if re.search(r'(text|content-desc)="\d+\s*/\s*\d+"', xml):
+            return False
+        # 2) 有选项字母 → 真实题目页（注意不强制结尾引号，可匹配 A. xxx 完整选项）
+        if re.search(r'text="[TFABCDE][\.、．]?', xml):
+            return False
+        # 3) 有输入框/CheckBox → 真实题目页
+        if 'class="android.widget.EditText"' in xml or 'class="android.widget.CheckBox"' in xml:
+            return False
+        # 4) 有"继续答题"按钮 → 说明页
+        if '继续答题' in xml:
+            return True
+        # 5) 无题号、无选项，但有说明页文字 → 说明页
+        texts = "".join(re.findall(r'text="([^"]+)"', xml))
+        if ('分值' in texts or re.search(r'[（(]共\s*\d+\s*分[）)]', texts)) \
+                and ('听' in texts or 'listen' in texts.lower()):
+            return True
+        if re.search(r'[ⅠⅡⅢⅣⅤ][\.．、]\s*听', texts):
+            return True
+        return False
+
     for i in range(max_q):
+        # ★ 停止信号检查：前端点"停止"会置 _STOP_REQUESTED=True，这里命中即中断答题循环
+        #   避免填空题/无选项分支死等时停止按钮无效（同步循环不检查则无法中断）
+        if stop_check is not None and stop_check():
+            step_log(f"⏹ 收到停止信号，终止答题（已答 {q} 题）", "warning")
+            return q
         # ★ 提速：整轮只 dump 一次（原来证据卡再 dump 一次 + 4 个 exists 各查一次，
         #   无弹窗时每题白等 ~3.2s）。弹窗/结束/选项判断全部用字符串匹配同一份 xml_now。
         # ★ 加保护：设备端 uiautomator 偶发异常（如 Errno 22）时重试 dump，不冒泡崩溃
@@ -178,11 +347,30 @@ def _test_answer_loop(d, max_q=45):
         # ★ evidence 收集移到"反馈消失后"块（见下方）—— 防止 dump 到反馈页导致题干误提取
         if q != _ev_q:
             pass  # 占位：evidence 在反馈等待循环之后收集
-        # 中途弹窗"继续答题（0S）" → 点击（textContains 语义 → 子串匹配）
-        if '继续答题' in xml_now:
-            d(textContains="继续答题").click()
-            print("      → 继续答题弹窗")
-            time.sleep(0.6)
+        # ★ 中途弹窗/大题说明页"继续答题（XS）" → 跳过，不当作题目计数
+        #   测试卷每完成一个大题（如Ⅰ.听单词）进入下一个大题（如Ⅱ.听句子）前，
+        #   会出现题型说明页；若把它当题，会导致真实题号整体错位。
+        if _is_instruction_page(xml_now):
+            # ★ 调试：输出被判定为说明页时的页面文本，便于判断是否误杀真实题目
+            try:
+                _dbg_texts = [t for t in re.findall(r'text="([^"]+)"', xml_now) if t.strip()][:15]
+                _dbg_msg = f"[DEBUG-说明页] 第{q+1}题位置，页面文本: {_dbg_texts}"
+                print(f"      {_dbg_msg}")
+                step_log(_dbg_msg, "warning")
+            except Exception:
+                pass
+            # 循环点击"继续答题"直到真正离开说明页（倒计时未结束可能需多点几次）
+            for _ic in range(5):
+                if '继续答题' in xml_now:
+                    try:
+                        d(textContains="继续答题").click()
+                        print("      → 跳过题型说明页，点击继续答题")
+                    except Exception as _e:
+                        print(f"      ⚠ 点击继续答题失败: {_e}")
+                time.sleep(0.7)
+                xml_now = d.dump_hierarchy() if d else ""
+                if not _is_instruction_page(xml_now):
+                    break
             _idle = 0
             continue
         # 练习子模块完成 → 练习报告（防卡：测试循环误入练习部分时）
@@ -204,36 +392,11 @@ def _test_answer_loop(d, max_q=45):
             time.sleep(0.8)
             return q
         # 答错后"下一题" → 点它
+        # ★ 截图依据已改：不再"答错就截图"。题目截图在每题完整性检查前抓取(qshot)，
+        #   只有当 AI六维 或 LLM 审查判出错时，才由 web_server 把该截图贴到审查结果。
         if 'text="下一题"' in xml_now:
-            # ★ 答错题目截图：捕获当前答错画面（含反馈+题目），供人工核验错题，
-            #   并同步到前端「最近截图」展示（web_server 识别 evidence 写入面板）
-            _wrong_shot = ""
-            try:
-                # ★ 截图前等 0.8s：题目内容（排序项/选项）渲染有延迟，
-                #   立即截图会截到空白/半渲染画面（用户实测"排序题内容还没出来"）
-                time.sleep(0.8)
-                _shot_dir = os.path.join(
-                    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                    "screenshots")
-                os.makedirs(_shot_dir, exist_ok=True)
-                _wrong_shot = f"wrong_q{q+1:02d}.png"
-                # ★ 截图重试3次（uiautomator2 设备端截图偶发 Errno 22，重试可自愈）
-                for _r in range(3):
-                    try:
-                        d.screenshot(os.path.join(_shot_dir, _wrong_shot))
-                        break
-                    except OSError:
-                        if _r >= 2:
-                            raise
-                        time.sleep(0.5)
-                print(f"      → 答错截图: {_wrong_shot}")
-            except Exception as _e:
-                print(f"      ⚠ 答错截图失败: {_e}")
             d(text="下一题").click()
             print("      → 下一题(答错)")
-            step_log(f"  第{q+1}题 答错截图", "warning",
-                     evidence=[{"field": "错题截图", "type": "wrong_shot",
-                                "screenshot": _wrong_shot}] if _wrong_shot else None)
             # ★ 竞态修复：等新题加载（"下一题"消失 或 出现选项/录音/查看报告），
             #   替代固定 sleep(0.6)——快则省时，慢则防 dump 到过渡页误判
             _t_w = time.time()
@@ -264,63 +427,57 @@ def _test_answer_loop(d, max_q=45):
                 xml_now = d.dump_hierarchy() if d else ""
             else:
                 break
-        # ★ 2026-08-30 修复：过渡页/大题封面误识别为答题页（用户反馈 Q11 "听句子"题
-        #   页面只有"分值:10分 + 继续答题(1S)"按钮，没真正题目内容，但旧逻辑发了证据卡
-        #   → 审查卡显示"音频控件未检测到/选项未检测到"，加大检查人员工作量）
-        #   判断：页面有"继续答题"/"开始答题"按钮 OR 仅有"分值"且无任何作答元素 → 过渡页
-        if "继续答题" in xml_now or "开始答题" in xml_now or "测试题目选题" in xml_now:
-            _is_transition = True
-        else:
-            # 有分值但没题目内容（无字母选项/CheckBox/EditText/录音按钮/序号按钮）→ 过渡页
-            _has_score = "分值" in xml_now
-            _has_no_q_elm = (
-                not re.search(r'text="[TFABCDE]"', xml_now)
-                and "EditText" not in xml_now
-                and "CheckBox" not in xml_now
-                and "点击录音" not in xml_now and "原音" not in xml_now
-                and "img_sort_btn" not in xml_now
-                and "排序" not in xml_now
-            )
-            _is_transition = _has_score and _has_no_q_elm
-        if _is_transition:
-            # 过渡页：跳过 evidence 收集（不计数 +1，避免污染题数）
-            if "继续答题" in xml_now:
-                d(textContains="继续答题").click()
-                time.sleep(0.5)
-            elif "开始答题" in xml_now:
-                # 试卷封面"开始答题"→ 点进入（避免空转退出）
-                try:
-                    d(text="开始答题").click(); time.sleep(0.8)
-                except Exception:
-                    pass
-            _idle = 0
-            continue
-
-        # ★ 反馈浮层消失后再发 evidence（用户实测：旧逻辑循环开头 dump，可能 dump 到
-        #   反馈页"恭喜你，答对了"，题干就提取不到题目而是反馈文字 → 证据卡"未提取到题干文字"）
-        if q != _ev_q:
-            try:
-                from common.evidence import collect_ui_evidence
-                # ★ 过滤反馈残留：若 xml_now 仍含"恭喜你/回答正确/回答错误/很遗憾"，
-                #   再等 0.5s 重 dump（防止答错后立即转新题时新题题干还没渲染完）
-                for _ed in range(3):
-                    if '恭喜你' not in xml_now and '回答正确' not in xml_now \
-                            and '回答错误' not in xml_now and '很遗憾' not in xml_now:
-                        break
-                    time.sleep(0.5)
+        # ★ 基于当前页面题号收集 evidence：说明页跳过，真实题目页按右上角题号记录。
+        #   避免"一题答对+evidence 收集后 _ev_q 追上 q，导致下一题被跳过"的问题。
+        try:
+            from common.evidence import collect_ui_evidence
+            # 说明页/过渡页直接跳过
+            if _is_instruction_page(xml_now):
+                continue
+            # 真实题目页：从右上角题号读取当前题号
+            _m_qno = re.search(r'text="(\d+)\s*/\s*\d+"', xml_now)
+            if _m_qno:
+                cur_page_q = int(_m_qno.group(1))
+                if _ev_q < cur_page_q:
+                    # 稳定等待，确保题干渲染完成（首题更长 2s：试卷说明→答题页）
+                    if q == 0:
+                        time.sleep(2.0)
+                    else:
+                        time.sleep(0.8)
                     xml_now = d.dump_hierarchy() if d else ""
-                # ★ 稳定等待：dump 后固定等 0.8s 再重新 dump 作为 evidence 源，
-                #   确保题干渲染完成（首题更长 2s：试卷说明→答题页）
-                if q == 0:
-                    time.sleep(2.0)
-                else:
-                    time.sleep(0.8)
-                xml_now = d.dump_hierarchy() if d else ""
-                step_log(f"  第{q+1}题 完整性检查", "info",
-                         collect_ui_evidence(xml_now, qtype="听力专项测试"))
-                _ev_q = q
-            except Exception:
-                pass
+                    # 等待后再次确认不是说明页
+                    if _is_instruction_page(xml_now):
+                        continue
+                    # ★ 每题抓一张题目截图（答题前，含题干+选项，无反馈浮层）。
+                    #   是否显示在审查结果由 AI/LLM 审查是否出错决定（不再以"答错"为依据）
+                    _qshot = ""
+                    try:
+                        # ★ 截图存到 项目根/screenshots（与 web_server 的 /api/screenshot 一致，否则前端读不到）
+                        _proj = os.path.dirname(os.path.abspath(__file__))
+                        while _proj and os.path.dirname(_proj) != _proj \
+                                and not os.path.exists(os.path.join(_proj, "web_server.py")):
+                            _proj = os.path.dirname(_proj)
+                        _sd = os.path.join(_proj, "screenshots")
+                        os.makedirs(_sd, exist_ok=True)
+                        _qshot = f"q{cur_page_q:02d}.png"
+                        for _r in range(3):
+                            try:
+                                d.screenshot(os.path.join(_sd, _qshot))
+                                break
+                            except OSError:
+                                if _r >= 2:
+                                    raise
+                                time.sleep(0.5)
+                    except Exception as _se:
+                        print(f"      ⚠ 题目截图失败: {_se}")
+                        _qshot = ""
+                    _ev = collect_ui_evidence(xml_now, qtype="听力专项测试")
+                    if _qshot:
+                        _ev.append({"field": "题目截图", "type": "q_shot", "screenshot": _qshot})
+                    step_log(f"  第{cur_page_q}题 完整性检查", "info", _ev)
+                    _ev_q = cur_page_q
+        except Exception:
+            pass
         # 新题：找选项（复用上面的 xml_now）
         # ⚠ 关键修复：上一版正则 `text="X"[^>]*clickable="true"` 要求「同一节点」同时有
         #   字母 text 和 clickable。但真实 App 选项字母在【不可点击的子 TextView】上，
@@ -373,6 +530,18 @@ def _test_answer_loop(d, max_q=45):
                     return q
                 time.sleep(0.4)
             continue
+
+        # ★ 组合单词题（听录音 → 点绿色字母块拼词）
+        #   ★ 必须放在「字母选项」与「图片题 CheckBox 兜底」之前：
+        #     该页字母块常是 CheckBox，会被图片题分支误当成"图片选项"只点一个 → 拼不成词。
+        if _is_word_build_page(xml_now):
+            _tiles = _collect_word_tiles(d, xml_now)
+            if _tiles:
+                q += 1
+                step_log(f"  第{q}题: 组合单词题（{len(_tiles)}个字母块）", "info")
+                _handle_word_build(d, _tiles, stop_check)
+                _idle = 0
+                continue
 
         opt = None
         opt_xy = None
@@ -466,6 +635,42 @@ def _test_answer_loop(d, max_q=45):
                     break
                 time.sleep(0.1)
             continue
+        # ★ 填空题（听录音填写单词/完成句子/补全短文）：页面有 EditText + 题干含关键词
+        #   测试卷常见："听录音，填写单词，完成句子。" → 用 FastInputIME 注入占位词，避免空转卡死
+        _texts_all = " ".join(re.findall(r'text="([^"]+)"', xml_now))
+        if 'class="android.widget.EditText"' in xml_now and any(kw in _texts_all for kw in ("填写单词", "完成句子", "填空", "补全短文", "填写", "完成小短文", "写单词", "写句子", "听录音，写", "看图写", "写一写")):
+            # ★ 停止信号：填空题分支也检查，保证卡在此类题时仍能中断
+            if stop_check is not None and stop_check():
+                step_log(f"⏹ 收到停止信号，终止答题（已答 {q} 题）", "warning")
+                return q
+            q += 1
+            print(f"      → 第{q}题识别为填空/填写题")
+            step_log(f"  第{q}题: 填空/填写题 → 自动填入占位词", "info")
+            try:
+                from engine import _handle_fill_blank
+                _handle_fill_blank(d, {})
+            except Exception as _e:
+                print(f"      ⚠ 填空处理异常: {_e}")
+                step_log(f"  第{q}题 填空处理异常，跳过", "warning")
+            _idle = 0
+            # ★ 兜底提交：部分测试卷填空题无"检查"按钮，只有"下一题/提交/完成"，
+            #   _handle_fill_blank 找不到检查就会返回且不前进；若下一轮仍识别为填空题
+            #   会再次填空 → 死循环。这里主动找"下一题/提交/完成"并点击，让流程前进。
+            #   （若 _handle_fill_blank 已点"检查"并进入反馈页，则"下一题"会被命中并点击）
+            time.sleep(0.6)
+            for _sb in ("下一题", "提交", "完成", "确定"):
+                try:
+                    if d(text=_sb).exists(timeout=0.6):
+                        d(text=_sb).click()
+                        print(f"      → 填空后点 {_sb}")
+                        step_log(f"  第{q}题 填空提交：{_sb}", "info")
+                        break
+                except Exception:
+                    pass
+            # 等一帧，让反馈/新题出现
+            time.sleep(0.8)
+            continue
+
         # 匹配题：点第一个方框 → 点字母（★ 提速：用 xml_now 正则提取文本，省一次 xpath 查询）
         texts = " ".join(re.findall(r'text="([^"]+)"', xml_now))
         if any(kw in texts for kw in ("匹配", "配对")):
@@ -481,6 +686,11 @@ def _test_answer_loop(d, max_q=45):
         #   再检测一次"查看报告/完成"再退出，避免漏答/提前 back
         # ★ 提速：文本提取用 xml_now 正则，省掉 xpath 全量查询；查看报告保留一次
         #   新 dump 兜底（报告页可能在迭代中途才出现，等价原 exists(0.5) 的新鲜度）
+        # ★ 兜底：说明页漏到此处，直接跳过不走空转
+        if _is_instruction_page(xml_now):
+            print("      → 兜底跳过说明页")
+            _idle = 0
+            continue
         _no_opt_list = re.findall(r'text="([^"]+)"', xml_now)
         _no_opt_text = "".join(_no_opt_list)
         if ('text="查看报告"' in xml_now or "查看报告" in _no_opt_text
@@ -542,110 +752,247 @@ def _test_answer_loop(d, max_q=45):
     return q
 
 
-def _unit_is_split(d, unit_num):
-    """测试列表中该单元/关键词是否分 A/B 卷（存在（A）/（B）(A)/(B) 标记卡片）"""
+# ═══════════ 测试选择器解析与匹配 ═══════════
+def _parse_test_selectors(test_units):
+    """前端/旧调用传入的 test_units → 选择器列表 [{tab,units,papers}]；
+    返回 None 表示『枚举全部』（全部 tab 下所有卷）。"""
+    raw = test_units
+    if isinstance(raw, (list, tuple)):
+        raw = ','.join(str(x) for x in raw)
+    raw = (raw or '').strip()
+    if raw in ('', 'all', '全部'):
+        return None
+    if raw == '考前突破':
+        return [{'tab': '考前突破', 'units': None, 'papers': None}]
+    if '|' in raw:
+        sels = []
+        for part in raw.split(';'):
+            seg = part.strip()
+            if not seg:
+                continue
+            bits = seg.split('|')
+            tab = (bits[0].strip() or None) if len(bits) > 0 else None
+            units = (bits[1].strip() or None) if len(bits) > 1 else None
+            papers = (bits[2].strip() or None) if len(bits) > 2 else None
+            sels.append({'tab': tab, 'units': units, 'papers': papers})
+        return sels or None
+    if re.fullmatch(r'(\d+(-\d+)?)(,\d+(-\d+)?)*', raw):
+        return [{'tab': '单元', 'units': raw, 'papers': None}]
+    return [{'tab': raw, 'units': None, 'papers': None}]
+
+
+_TAB_ALIAS = {
+    '全部': ['全部'],
+    '单元': ['单元'],
+    '期中': ['期中', '期中评价'],
+    '期末': ['期末', '期末评价', '期末测评'],
+    '考前突破': ['考前突破'],
+}
+
+
+def _click_test_tab(d, tab):
+    """点测试页筛选 tab；tab=None/『全部』→ 点『全部』。找不到返回 False。"""
+    name = tab or '全部'
+    for c in _TAB_ALIAS.get(name, [name]):
+        try:
+            if d(text=c).exists(timeout=1.5):
+                d(text=c).click(); time.sleep(1.0)
+                return True
+        except Exception:
+            pass
     try:
-        xml = d.dump_hierarchy()
+        if d(text=name).exists(timeout=1.5):
+            d(text=name).click(); time.sleep(1.0)
+            return True
     except Exception:
-        xml = ""
-    return ("（A）" in xml) or ("（B）" in xml) or ("(A)" in xml) or ("(B)" in xml)
+        pass
+    return False
 
 
-def _expand_papers(d, unit_num, paper):
-    """根据 paper 参数展开成待跑卷列表:
-       'A'/'B' → 单张; 'AB'/None → 列表里有 A/B 标记则 [A, B]，否则单卡"""
-    if paper in ("A", "B"):
-        return [paper]
-    if _unit_is_split(d, unit_num):   # AB 或 未指定 且确为拆卷 → 跑两张
-        return ["A", "B"]
-    return [None]                     # 单卷，不区分
+_PAPER_KW = ('阶段评价', '期末评价', '期中评价', '单元评价', '阶段测评',
+             '期末测评', '期中测评', 'Units', 'Unit ')
 
 
-def _run_one_test_card(d, unit_num, paper):
-    """在测试 tab 内定位并作答一张卡片（含 A/B 卷过滤），返回题数(0=未找到)"""
-    found = smart_find_unit_row(d, unit_num, click_text="去答题", paper=paper)
-    if not found:
-        return 0
-    time.sleep(0.8)
-    if d(text="好的，我知道啦~").exists(timeout=3):
-        d(text="好的，我知道啦~").click(); time.sleep(0.8)
-    if d(text="开始答题").exists(timeout=3):
-        d(text="开始答题").click(); time.sleep(1.2)
-    q = _test_answer_loop(d)
-    for _ in range(3):               # back 回测试列表
-        if d(text="去答题").exists(timeout=1.5):
-            break
-        d.press("back"); time.sleep(0.6)
-    return q
+def _is_paper_title(t):
+    tab_names = {'全部', '单元', '期中', '期末', '考前突破', '阶段测评',
+                 '期末测评', '专项', '月测', '月度'}
+    if not t or t in tab_names:
+        return False
+    return any(k in t for k in _PAPER_KW)
 
 
-def run_test_module(d, test_units=None, paper=None):
-    """第二部分：测试模块——测试 tab 遍历指定单元，返回题数
+def _unit_match(t, units):
+    if not units:
+        return True
+    m = re.match(r'^(\d+)\s*-\s*(\d+)$', units)
+    if m:
+        a, b = int(m.group(1)), int(m.group(2))
+        if re.search(r'Units?\s*%d\s*[-–~]\s*%d' % (a, b), t, re.I):
+            return True
+        for n in range(a, b + 1):
+            if re.search(r'Unit\s*%d(?:\D|$)' % n, t, re.I):
+                return True
+        return False
+    for part in units.split(','):
+        part = part.strip()
+        if re.fullmatch(r'\d+', part):
+            n = int(part)
+            if re.search(r'Unit\s*%d(?:\D|$)' % n, t, re.I):
+                return True
+    return False
 
-    test_units: 单元范围，如 [1,2] 或 '1-2'；None=默认全部
-    paper: A/B/AB/None —— 指定 A 卷 / B 卷 / AB 两卷
-           （阶段评价/期中/期末 的 (A)/(B) 卡片区分）
+
+def _paper_match(t, papers):
+    if not papers:
+        return True
+    p = papers.upper()
+    if 'A' in p and 'B' in p:
+        return True
+    if p == 'A':
+        return ('（A）' in t) or ('(A)' in t) or ('A卷' in t)
+    if p == 'B':
+        return ('（B）' in t) or ('(B)' in t) or ('B卷' in t)
+    return True
+
+
+def _paper_has_ab(t):
+    """标题是否含 A/B 卷字样（用于判断当前版本是否分卷）。"""
+    return (('（A）' in t) or ('(A)' in t) or ('A卷' in t)
+            or ('（B）' in t) or ('(B)' in t) or ('B卷' in t))
+
+
+def _collect_papers_current(d):
+    """测试页当前视图：收集所有 (卷标题, 去答题按钮) 对
+    ★ 配对规则：卷标题在上、去答题按钮在其【下方最近】。只接受位于标题下方
+      （按钮 top >= 标题 bottom - 80）的按钮，避免误配到上方卷的按钮。
+      末项卷标题贴屏底时按钮在屏外未渲染（best=None），由调用方滑动加载。"""
+    try:
+        els = d.xpath('//*[@text!=""]').all()
+    except Exception:
+        return []
+    out = []
+    for e in els:
+        t = (e.text or '').strip()
+        if not _is_paper_title(t):
+            continue
+        row_bottom = e.bounds[3]
+        cand = [b for b in els
+                if (b.text or '').strip() in ('去答题', '重新答题', '继续答题')
+                and b.bounds[1] >= row_bottom - 80]
+        if cand:
+            best = min(cand, key=lambda b: b.bounds[1])  # 最靠上（离标题最近）
+            out.append((t, best))
+    return out
+
+
+def run_test_module(d, test_units=None, grade=None, version=None, stop_check=None):
+    """第二部分：测试模块——按选择器点对应筛选 tab 与卷（支持 A/B 卷、单元范围）
+
+    选择器字符串（前端弹窗产出）：TAB|UNITS|PAPERS
+      TAB   : 全部/单元/期中/期末/考前突破（点对应筛选 tab）
+      UNITS : 单元范围——'1-5'/'6-10'（六下阶段评价）或 '2,3'（三下 Unit N）
+      PAPERS: A / B / AB（默认 AB；三下无分卷时自动忽略）
+    兼容旧式：纯数字/区间 → 单元 tab 按单元号；关键词 → 直接作为 tab 名；
+              ''/all/全部 → 枚举全部 tab 下所有卷。
     """
+    grade, version = resolve_grade_version(grade, version)
+    try:
+        ensure_grade(d, grade, version)
+    except Exception as e:
+        print(f"  ⚠ 年级确认异常(继续): {e}")
     t0 = time.time()
     total = 0
-    _tunits = _resolve_units(test_units, TEST_UNITS)
-    _desc = "、".join(str(x) for x in _tunits)
-    print(f"\n📋 听力专项·测试 · 目标: {_desc} · {len(_tunits)}项")
 
     # 确认在听力专项页 → 点"测试" tab
     if not d(text="测试").exists(timeout=3):
-        if not scroll_and_find(d, "听力专项"):
-            print("  ❌ 找不到听力专项入口"); return 0
-        # ★ 广告延迟加载（冷重启后 4-6s 甚至更晚才弹出）：点击入口前先关广告，
-        #   避免"点空 / 广告刚弹出瞬间误点"→ 导航被带歪（用户实测根因）
-        settle_ads(d, wait_total=6)
-        d(text="听力专项").click(); time.sleep(1.2)
-        # ★ 系统验证弹窗（点到广告触发，用户定位：只有点广告才会弹）→ 先等自动消失；
-        #   持续不退 → back 关闭 + 清广告重试一次
-        if applock_blocked(d):
-            _cleared = False
-            for _lk in range(10):
-                time.sleep(0.5)
-                if not applock_blocked(d):
-                    _cleared = True
-                    break
-            if _cleared:
-                print("  ⏳ 系统验证弹窗已自动消失，继续…")
-            else:
-                d.press("back"); time.sleep(0.8)
-                settle_ads(d, wait_total=6)
-                if not applock_blocked(d):
-                    print("  ⏳ 系统验证弹窗已关闭（疑似点到广告），已清广告，继续…")
-                else:
-                    print("  ❌ 被系统验证（使用面部验证/密码验证）挡住，请先解锁「听力专项」，再重新运行")
-                    return 0
-        # ★ 进入模块页后广告可能刚好弹出 → 再关干净一次再找 tab
+        if not enter_module_by_entry(d, "听力专项"):
+            print("  ❌ 找不到/进不去听力专项入口"); return 0
         settle_ads(d, wait_total=6)
     if not d(text="测试").exists(timeout=3):
         print("  ❌ 找不到测试 tab"); return 0
-    # ★ 点"测试" tab 前再确认无广告（广告常在页面切换瞬间弹出）
     settle_ads(d, wait_total=4)
     d(text="测试").click(); time.sleep(1.2)
     print("  ✅ 已进入测试 tab")
 
-    for ui, unit_num in enumerate(_tunits):
-        print(f"  🎯 测试目标 [{unit_num}] [{ui+1}/{len(_tunits)}]")
-        _papers = _expand_papers(d, unit_num, paper)
-        _uq = 0
-        for _p in _papers:
-            _tag = f"({_p}卷)" if _p else ""
-            print(f"    · 跑{_tag or '默认卷'}")
-            _q = _run_one_test_card(d, unit_num, _p)
-            if _q == 0:
-                print(f"  ❌ 找不到目标 [{unit_num}]{_tag} 的去答题")
+    selectors = _parse_test_selectors(test_units)
+    if selectors is None:
+        selectors = [{'tab': '全部', 'units': None, 'papers': None}]
+
+    for sel in selectors:
+        tab = sel.get('tab')
+        units = sel.get('units')
+        papers = sel.get('papers')
+        clicked = _click_test_tab(d, tab)
+        if tab and tab != '全部' and not clicked:
+            step_log(f"⚠ 测试页无『{tab}』分类（当前版本可能未提供），跳过", "warning")
+            continue
+        processed = set()
+        _scroll_attempts = 0
+        _max_scroll = 12
+        _last_titles = None
+        _no_new_count = 0
+        while True:
+            # 每次回到该 tab 视图，保证元素新鲜
+            _click_test_tab(d, tab)
+            all_p = _collect_papers_current(d)
+            # 统计当前屏卷标题，检测是否滑到底（连续2屏无新卷则认为到底）
+            _current_titles = tuple(sorted({t for (t, b) in all_p}))
+            if _last_titles == _current_titles:
+                _no_new_count += 1
             else:
-                print(f"  ✅ U{unit_num}{_tag} 测试完成: {_q} 题")
-            _uq += _q
-            # 回到测试 tab（下一张卷/下一单元前）
+                _no_new_count = 0
+                _last_titles = _current_titles
+            matched = [(t, b) for (t, b) in all_p
+                       if _unit_match(t, units) and _paper_match(t, papers)
+                       and t not in processed]
+            if not matched and papers:
+                # ★ fallback：用户选了 A/B 卷，但当前版本测试页根本没有 A/B 卷字样
+                #   （如湘鲁版 2024 六上听力专项测试只有「Unit N 单元评价」），
+                #   则退化成「忽略卷限制，直接按单元找去答题按钮点进去」。
+                _has_ab = any(_paper_has_ab(t) for (t, b) in all_p)
+                if not _has_ab:
+                    step_log(f"  ℹ 测试页无 A/B 卷字样，按单元直接点『去答题』（忽略卷限制）", "info")
+                    matched = [(t, b) for (t, b) in all_p
+                               if _unit_match(t, units) and t not in processed]
+            if not matched:
+                # 未找到目标卷 → 向下滑动查看更多（处理 WebView 懒加载列表）
+                if _no_new_count >= 2 or _scroll_attempts >= _max_scroll:
+                    step_log(f"⚠ 测试列表已滑到底或未找到目标卷（units={units}, papers={papers}），停止", "warning")
+                    break
+                step_log("→ 未找到目标卷，向下滑动查看更多", "info")
+                S_swipe(d, 540, 2000, 540, 700, 0.4)
+                time.sleep(1.0)
+                _scroll_attempts += 1
+                continue
+            title, btn = matched[0]
+            processed.add(title)
+            step_log(f"  🎯 测试目标卷「{title}」", "info")
+            try:
+                bx = (btn.bounds[0] + btn.bounds[2]) // 2
+                by = (btn.bounds[1] + btn.bounds[3]) // 2
+                try:
+                    btn.click()
+                except Exception:
+                    d.click(bx, by)
+            except Exception as e:
+                step_log(f"  ❌ 点击「{title}」去答题失败: {e}", "error")
+                continue
+            time.sleep(0.8)
+            if d(text="好的，我知道啦~").exists(timeout=3):
+                d(text="好的，我知道啦~").click(); time.sleep(0.8)
+            if d(text="开始答题").exists(timeout=3):
+                d(text="开始答题").click(); time.sleep(1.2)
+            q = _test_answer_loop(d, stop_check=stop_check)
+            total += q
+            step_log(f"  ✅ {title} 测试完成: {q} 题", "info")
+            # back 回测试列表
+            for _ in range(4):
+                if d(text="去答题").exists(timeout=1.5) or d(text="重新答题").exists(timeout=1.5):
+                    break
+                d.press("back"); time.sleep(0.6)
+            # 回到测试页（点测试 tab 恢复筛选视图）
             if d(text="测试").exists(timeout=2):
                 d(text="测试").click(); time.sleep(0.8)
-        total += _uq
-        print(f"  📊 [{unit_num}] 合计 {_uq} 题")
 
     print(f"✅ 测试部分完成: {total} 题, 耗时 {time.time()-t0:.0f}s")
     return total
@@ -670,8 +1017,9 @@ def main():
 
     # 2. 关广告 + 确认年级（★ settle_ads 循环关，消除"点空/广告刚弹出时误点"竞态）
     settle_ads(d, wait_total=12)
-    # ★ 仅命令行单跑时需要；多模块调度器已在开头统一切换一次，不重复
-    if not ensure_grade(d, GRADE_LEVEL, BOOK_VERSION):
+    # ★ 命令行单跑时按 UI/环境变量所选年级切换；多模块调度器已在开头统一切换一次
+    _grade, _version = resolve_grade_version()
+    if not ensure_grade(d, _grade, _version):
         print("❌ 年级切换失败")
         return 1
 
