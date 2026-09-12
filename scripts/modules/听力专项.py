@@ -275,6 +275,65 @@ def _handle_word_build(d, tiles, stop_check=None):
     return clicked
 
 
+def _handle_select_fill(d):
+    """选词填空（听力专项新题型）：逐一点击带绿色左上标的空格(select_tv)，
+       每次弹出词库(option_cb)点第一个单词填入，直到全部填满再点「检查」。
+       ★ 必须放在「字母选项」分支之前：否则题干 "A girl..." 的字母 'A' 会被误判为
+          选项 A → 误点/卡死/计数超过总题数（用户实测：16/16 题被当选择题意判致 q 越界）。
+    """
+    for _r in range(24):
+        # 每次重新查询，避免填入后坐标/文本漂移导致命中已填空格
+        try:
+            blanks = d(resourceId="com.dinoenglish.yyb:id/select_tv")
+            _n = blanks.count
+        except Exception:
+            _n = 0
+        _empty = None
+        for _i in range(_n):
+            try:
+                if not (blanks[_i].get_text() or "").strip():
+                    _empty = _i
+                    break
+            except Exception:
+                pass
+        if _empty is None:
+            break  # 全部填完
+        try:
+            blanks[_empty].click()
+        except Exception:
+            pass
+        time.sleep(0.6)
+        # 等词库弹出（最长 ~3.6s）
+        _opts = None
+        for _w in range(24):
+            try:
+                _o = d(resourceId="com.dinoenglish.yyb:id/option_cb")
+                if _o.count > 0:
+                    _opts = _o
+                    break
+            except Exception:
+                pass
+            time.sleep(0.15)
+        if not _opts or _opts.count == 0:
+            continue  # 未弹出，下一轮重新找空（round 上限防死循环）
+        # 点第一个单词（"有单词就点"）
+        try:
+            _opts[0].click()
+        except Exception:
+            pass
+        time.sleep(0.6)
+    # 填完 → 点「检查」
+    for _ in range(8):
+        try:
+            if d(text="检查").exists(timeout=0.2):
+                d(text="检查").click()
+                time.sleep(0.3)
+                break
+        except Exception:
+            pass
+        time.sleep(0.1)
+
+
 def _test_answer_loop(d, max_q=45, stop_check=None):
     """测试卷答题循环：点选项→检查→(答对自动跳/答错点下一题)→最后一题查看报告
     
@@ -542,6 +601,17 @@ def _test_answer_loop(d, max_q=45, stop_check=None):
                 _handle_word_build(d, _tiles, stop_check)
                 _idle = 0
                 continue
+
+        # ★ 选词填空（听力专项新题型）：带绿色左上标的空格(select_tv)
+        #   点空格 → 底部弹出词库(option_cb) → 点单词填入。
+        #   ★ 必须在「字母选项」之前：否则题干 "A girl..." 的 'A' 会被误判为选项 A →
+        #      误点/卡死/计数超过总题数（用户实测 16/16 题命中此坑）。
+        if 'com.dinoenglish.yyb:id/select_tv' in xml_now:
+            q += 1
+            step_log(f"  第{q}题: 选词填空（点击空格选词）", "info")
+            _handle_select_fill(d)
+            _idle = 0
+            continue
 
         opt = None
         opt_xy = None
