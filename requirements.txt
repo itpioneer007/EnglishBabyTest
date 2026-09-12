@@ -1,7 +1,9 @@
 pyyaml>=6.0
 Pillow>=10.0.0
 Flask>=3.0.0
+uiautomator2>=2.16.0        # 连接/控制手机（连真机必备）
+python-docx>=1.1.0          # 解析上传的 .docx 审查脚本
 
-# OCR 引擎（用于题目内容校验，二选一即可）
+# OCR 引擎（用于题目内容校验，二选一即可，默认不启用）
 # paddleocr                     # 中文识别最佳（推荐）
 # easyocr                       # 开箱即用（备选）

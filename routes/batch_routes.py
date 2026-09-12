@@ -31,7 +31,7 @@ _batch_plan 结构（B 的输入）:
     "version": "新湘鲁六上",
     "units": [6, 7, 8, 9],
     "stages": ["基础巩固", "综合进阶"],
-    "docx": "260717新湘鲁六上听力专项(已二校).docx",
+    "docx": "260717湘鲁版2024审六上听力专项练习U6-9(已二校).docx",
     "email_to": "teacher@school.com"   // 可选：跑完自动发给谁
 }
 

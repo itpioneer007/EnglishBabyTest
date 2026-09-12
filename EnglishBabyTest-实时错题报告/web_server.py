@@ -331,57 +331,30 @@ def log_msg(msg: str, level: str = "info", evidence: list = None):
         print(f"[{entry['time']}] [{level}] {safe_msg}")
 
     # ★ 每题界面级完整性检查证据 → 同步写入审查结果区（多模块检测也能看到 AI 判断）
-    #   触发条件：消息含"第N题 检查"且带 evidence（来自 engine.py _collect_ui_evidence）
+    #   触发条件：消息含"第N题 检查"(兼容"第N大题·第M小题 完整性检查"、带前导空格) 且带 evidence
+    #   提取运行时每题抓取的题目截图 q_shot，传给 _record_module_evidence
+    #   （AI六维 / LLM 审查判出错时才贴到审查结果，不再以"答错"为依据）
     if evidence and isinstance(evidence, list) and evidence:
         try:
-            # ★ 修复：兼容实际消息格式——"第1题 检查"(可能带前导空格) 与
-            #   "第1题 完整性检查"(测试循环) 都能命中
-            m = re.match(r"\s*第(\d+)题\s*(?:完整性)?\s*检查", msg)
+            m = re.match(
+                r"\s*(?:第(\d+)大题·)?第(\d+)(?:题|小题)\s*"
+                r"(?:（[^）]*）)?\s*(?:完整性)?\s*检查", msg)
             if m:
-                qidx = int(m.group(1))
-                _record_module_evidence(qidx, msg, evidence)
+                _big = int(m.group(1)) if m.group(1) else None
+                qidx = int(m.group(2))
+                # ★ 提取本题目截图文件名（运行时每题抓取，AI/LLM 审查出错时才贴到审查结果）
+                _qshot = ""
+                for e in evidence:
+                    if e.get("type") == "q_shot":
+                        _qshot = e.get("screenshot", "") or ""
+                        break
+                _record_module_evidence(qidx, msg, evidence, big=_big, qshot=_qshot)
         except Exception:
             pass
 
-    # ★ 答错题目截图 → 同步到审查结果区（前端「最近截图」展示）
-    #   触发条件：消息含"第N题 答错截图"且 evidence 带 type="wrong_shot" + screenshot 文件名
-    if evidence and isinstance(evidence, list) and evidence:
-        try:
-            m = re.match(r"\s*第(\d+)题\s*答错截图", msg)
-            if m:
-                qidx = int(m.group(1))
-                shot = ""
-                for e in evidence:
-                    if e.get("type") == "wrong_shot":
-                        shot = e.get("screenshot", "") or ""
-                        break
-                if shot:
-                    key = f"auto-Q{qidx:03d}"
-                    qs = _inspection_state.setdefault("questions", {})
-                    if key in qs:
-                        qs[key]["screenshot"] = shot
-                    else:
-                        # 该题无完整性检查记录（答题循环未发证据）→ 建一条错题记录
-                        qs[key] = {
-                            "idx": qidx,
-                            "total": len(qs) + 1,
-                            "question_type": "错题截图",
-                            "screenshot": shot,
-                            "progress": f"Q{qidx}",
-                            "ai_stem": None, "ai_content": None, "ai_image": None,
-                            "ai_answer": None, "ai_audio": None, "ai_post_error": None,
-                            "overall_passed": None, "overall_score": 0.0,
-                            "stem_reason": "", "content_reason": "", "image_reason": "",
-                            "answer_reason": "", "audio_reason": "", "post_error_reason": "",
-                            "stem": f"第{qidx}题（答错，已截图）", "options": "",
-                            "script_answer": "", "note": "",
-                        }
-                    try:
-                        _save_inspection_state()
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+    # ★ 答错截图(wrong_shot)逻辑已移除：截图不再以"答错"为依据。
+    #   现改为运行时每题抓一张题目截图(qshot)，由 AI六维 / LLM 审查判出错时
+    #   经 _attach_review_shots() 贴到审查结果（见下方 _attach_review_shots 定义）。
 
 # 注入共享日志通道：让 scheduler 和模块内部的流程日志也能送到前端
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
@@ -2625,21 +2598,34 @@ def _live_regen_error_report():
 
 
 # ★ 多模块检测每题界面级证据 → 审查结果区（无脚本也能展示 AI 通过/不通过）
-def _record_module_evidence(qidx: int, msg: str, evidence: list):
+def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None, qshot: str = None):
     """把 engine.py 每题收集的 5 维界面证据（题型/题干/选项/音频/作答）
     映射成前端六维卡片字段写入 _inspection_state["questions"]。
 
     判定规则：
       - text_ok → 通过(true)；text_mismatch → 不通过(false)；skip → 未检(None)
       - overall: 可查维度≥3且无不通过 → 通过；否则 → 不通过；全是 skip → 未审
+    big: 大题号（口语训练"第2大题·第3小题"精确定位；None=无大题概念）
+    qshot: 运行时每题抓取的题目截图文件名（AI/LLM 审查出错时贴到审查结果）
     """
     global _inspection_state
+    # ★ 模块上下文（scheduler/引擎设置）：模块名/子模块/模块内题号
+    try:
+        from common.logger import get_current_module
+        _current_module_name, _current_stage_name = get_current_module()
+    except Exception:
+        _current_module_name, _current_stage_name = "", ""
+    if not _current_module_name:
+        _current_module_name = _inspection_state.get("module", "")
+        _current_stage_name = _inspection_state.get("stage", "")
+    _current_module_qno = qidx
     # 证据维度 → 前端六维映射（"题型"不映射到任何六维，仅作为元信息）
     field_map = {
         "题干": "stem",
         "选项": "content",
         "音频": "audio",
         "作答": "answer",
+        "作答匹配": "answer",   # ★ 题型-作答一致性（判断题给ABC等）→ 作答维度
     }
     dims = {"stem": None, "content": None, "image": None,
             "answer": None, "audio": None, "post_error": None}
@@ -2653,6 +2639,12 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list):
 
     for e in evidence:
         field = e.get("field", "")
+        # ★ 分值等附加信息：写入 note（不参与六维判定），供检查人员参考
+        if field == "分值":
+            _sc = (e.get("actual") or e.get("diff") or "").strip()
+            if _sc:
+                _inspection_state["_last_score_info"] = _sc
+            continue
         # 题型识别 → 只更新 question_type
         if field == "题型":
             diff = e.get("diff") or ""
@@ -2717,19 +2709,52 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list):
     else:
         overall = None   # 检查不足3维 → 标未审
 
+    # ★ 截图依据改为：AI六维审查(本题 overall) 或 LLM 审查出错时才把题目截图贴到审查结果，
+    #   不再以"答错"为依据。运行时每题已抓一张题目截图(qshot，见 听力专项.py)，这里直接复用，
+    #   避免事后重新连设备截图（页面早已翻走，截不到原题）。
+    _auto_shot = ""
+    if overall is False and qshot:
+        _auto_shot = qshot
+
     total = len(_inspection_state.get("questions", {})) + 1
-    qid = f"auto-Q{qidx:03d}"
+    # ★ 口语训练"第N大题·第M小题"结构下，不同大题的小题号重复 → "auto-Q{小题号}" 会被覆盖，
+    #   改为 "auto-Q{大题:02d}-{小题:02d}" 保证每题唯一；
+    #   ★ 听力专项练习含多个子模块（基础巩固/综合进阶/难点突破），每个子模块题号都从 1 开始，
+    #     同样会互相覆盖。无 big 时按子模块名加前缀（auto-基/综/难）。
+    if big:
+        qid = f"auto-Q{big:02d}-{qidx:02d}"
+    else:
+        if _current_module_name == "听力专项" and _current_stage_name:
+            _stage_tag = _current_stage_name[:2]  # 基础/综合/难点
+            qid = f"auto-{_stage_tag}{qidx:03d}"
+        else:
+            qid = f"auto-Q{qidx:03d}"
 
     # ★ 描述文字：让检查人员知道题目大概内容和位置
     if not stem_text:
         stem_text = f"第{qidx}题（{question_type}）"
+    # ★ 大题号定位（口语训练"第2大题·第3小题"）：错题报告能定位到 大题·小题
+    if big:
+        stem_text = f"第{big}大题·{stem_text}" if not stem_text.startswith("第") else f"第{big}大题·{stem_text}"
+        progress_str = f"大{big}-Q{qidx}"
+    else:
+        progress_str = f"Q{qidx}"
+    _loc = {"big": big} if big else {}
 
     _inspection_state["questions"][qid] = {
         "idx": qidx,
         "total": total,
         "question_type": question_type,
-        "screenshot": "",
-        "progress": f"Q{qidx}",
+        "screenshot": _auto_shot,  # ★ 审查出错(overall=False)才贴的题目截图
+        "qshot": qshot or "",      # ★ 运行时每题抓取的题目截图（AI/LLM 出错时复用）
+        "progress": progress_str,
+        # ★ 分值信息（evidence 附加项，供检查人员参考）
+        "score_info": _inspection_state.get("_last_score_info", ""),
+        # ★ 模块定位信息（哪个模块·哪个子模块·模块内第几题）→ 错题报告按此分组
+        "module": _current_module_name,
+        "stage": _current_stage_name,
+        "module_qno": _current_module_qno,
+        **_loc,
         # 六维判定
         "ai_stem": dims["stem"], "ai_content": dims["content"],
         "ai_image": dims["image"], "ai_answer": dims["answer"],
@@ -2754,6 +2779,55 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list):
     if total % 10 == 0:
         try:
             _save_inspection_state()
+        except Exception:
+            pass
+    # ★ 检测过程中出现错题 → 触发实时错题报告（前端「📑 查看报告」实时更新）
+    if overall is False:
+        try:
+            _live_regen_error_report()
+        except Exception:
+            pass
+
+
+def _attach_review_shots():
+    """审查出错(任一 AI 维度不通过)的题目，把运行时抓的题目截图(qshot)贴到审查结果。
+
+    截图依据改为 AI六维 / LLM 审查结果，而不再是"答错"。运行时每题已抓一张题目截图
+    存入 questions[qid]["qshot"]；LLM 全量脚本审查记录(若用 module-脚本-Qxx)本身无 qshot，
+    先按 module+stage+idx 从运行时记录复制，再统一贴到出错题。
+    """
+    global _inspection_state
+    qs = _inspection_state.get("questions", {})
+    if not qs:
+        return
+    # 1) 为脚本全量审查记录补 qshot（按 module+stage+idx 匹配运行时记录）
+    for qid, q in qs.items():
+        if q.get("qshot"):
+            continue
+        if "-脚本-Q" in qid:
+            _m = q.get("module", ""); _s = q.get("stage", ""); _i = q.get("idx")
+            for _k, _v in qs.items():
+                if _v.get("qshot") and _v.get("module") == _m \
+                        and (_v.get("stage") or "") == (_s or "") and _v.get("idx") == _i:
+                    q["qshot"] = _v["qshot"]
+                    break
+    # 2) 任一 AI 维度不通过 且 尚无截图 → 贴上 qshot
+    _dims = ("ai_stem", "ai_content", "ai_image", "ai_answer", "ai_audio", "ai_post_error")
+    _changed = False
+    for q in qs.values():
+        _failed = q.get("overall_passed") is False or any(q.get(k) is False for k in _dims)
+        if _failed and not q.get("screenshot") and q.get("qshot"):
+            q["screenshot"] = q["qshot"]
+            _changed = True
+    if _changed:
+        try:
+            _save_inspection_state()
+        except Exception:
+            pass
+    # ★ 检测过程中出现错题 → 触发实时错题报告（前端「📑 查看报告」实时更新）
+    if any((q.get("overall_passed") is False) for q in qs.values()):
+        try:
+            _live_regen_error_report()
         except Exception:
             pass
 
@@ -3008,8 +3082,15 @@ def api_inspect_question_result():
     if not qid:
         return jsonify({"error": "缺少题号"}), 400
 
+    # ★ 截图依据改为：AI/LLM 审查判出错时才把题目截图贴到审查结果，不再每题都贴。
+    #   运行时每题截图(data["screenshot"])存为 qshot 始终保留；仅当 overall_passed 为 False 时
+    #   才作为审查结果截图(screenshot)显示；通过的题不再显示截图。
+    _shot = data.get("screenshot", "") or ""
+    _auto_shot = _shot if data.get("overall_passed") is False else ""
     _inspection_state["questions"][qid] = {
         **data,
+        "qshot": _shot,            # ★ 运行时每题抓取的题目截图（AI/LLM 出错时复用）
+        "screenshot": _auto_shot,  # ★ 仅审查出错(overall_passed=False)才显示
         "human_label": None,  # 等待人工标注
         "human_note": "",
         "timestamp": datetime.now().isoformat(),

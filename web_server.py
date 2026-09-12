@@ -36,7 +36,7 @@ from datetime import datetime
 PROJECT_ROOT = Path(__file__).parent.absolute()
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from flask import Flask, jsonify, request, send_from_directory, render_template, Response
+from flask import Flask, jsonify, request, send_from_directory, render_template, Response, make_response
 try:
     from adb_controller import ADBController
 except ImportError:
@@ -250,12 +250,10 @@ def detect_screen_resolution(adb_serial: str = ""):
                    encoding="utf-8", errors="replace")
         output = (r.stdout or "") + (r.stderr or "")
         print(f"  [坐标缩放] adb wm size 原始输出: {output!r}")
-
-        # 优先取实际生效的 Override size，没有则取 Physical size
-        override = re.search(r"Override\s+size:\s*(\d+)x(\d+)", output, re.IGNORECASE)
-        physical = re.search(r"Physical\s+size:\s*(\d+)x(\d+)", output, re.IGNORECASE)
-        plain = re.search(r"(\d+)x(\d+)", output)
-        m = override or physical or plain
+        # 优先取 Override size（实际生效），再取 Physical size，最后裸匹配
+        m = re.search(r"Override size:\s*(\d+)x(\d+)", output) or \
+            re.search(r"Physical size:\s*(\d+)x(\d+)", output) or \
+            re.search(r"(\d+)x(\d+)", output)
         if m:
             w, h = int(m.group(1)), int(m.group(2))
             _detected_res = (w, h)
@@ -263,7 +261,7 @@ def detect_screen_resolution(adb_serial: str = ""):
             _scale_y = h / REFERENCE_RES[1]
             print(f"  [坐标缩放] 检测到分辨率 {w}x{h}, 缩放比 X={_scale_x:.3f} Y={_scale_y:.3f}")
         else:
-            print(f"  [坐标缩放] 无法解析分辨率，原始输出: {output!r}")
+            print(f"  [坐标缩放] 无法解析分辨率: stdout={r.stdout!r} stderr={r.stderr!r}")
     except Exception as e:
         print(f"  [坐标缩放] 检测失败: {e}, 使用默认1:1")
 
@@ -275,35 +273,36 @@ def sc_xy(xy: tuple) -> tuple:
     """缩放一个 (x, y) 元组"""
     return sc(xy[0], xy[1])
 
+_coords_scaled = False
+
 def scale_all_coords():
-    """原地缩放所有坐标字典，使之适配当前手机分辨率"""
-    global MODULE_COORDS, TABS, SETTINGS_ICON, AD_CLOSE, MODULE_PATTERNS
+    """原地缩放所有坐标字典，使之适配当前手机分辨率（只执行一次，幂等）"""
+    global MODULE_COORDS, TABS, SETTINGS_ICON, AD_CLOSE, _coords_scaled
+    if _coords_scaled:
+        return
     if _scale_x == 1.0 and _scale_y == 1.0:
+        _coords_scaled = True
         return
     MODULE_COORDS = {k: sc_xy(v) for k, v in MODULE_COORDS.items()}
     TABS = {k: sc_xy(v) for k, v in TABS.items()}
     SETTINGS_ICON = sc_xy(SETTINGS_ICON)
     AD_CLOSE = sc_xy(AD_CLOSE)
-    # ★ 修复：MODULE_PATTERNS 中的坐标也需要缩放
-    MODULE_PATTERNS = {k: (v[0], v[1], sc_xy(v[2]) if v[2] else None)
-                       for k, v in MODULE_PATTERNS.items()}
+    _coords_scaled = True
     print(f"  [坐标缩放] 所有坐标已缩放 ({REFERENCE_RES[0]}x{REFERENCE_RES[1]} -> {_detected_res})")
 
 
 def get_adb():
     """获取 ADBController 实例 (截图保存到 screenshots/)"""
     config = load_config()
+    # ★ 确保分辨率缩放已应用（任何入口调用本函数都会自动 detect+缩放，幂等）
+    detect_screen_resolution(config.device.serial)
+    scale_all_coords()
     # 用相对路径避免 adb pull 在 Windows 上拼接出错
     return ADBController(serial=config.device.serial, screenshot_dir="screenshots")
 
 
 
 
-# ★ 2026-08-30 修复脚本审查日志重复：模块级去重 + "完成"字严格匹配
-    #   之前任何消息含"完成"就触发，导致"全部检测完成"也触发了一次重查。改成按
-    #   (模块, 阶段) 维度去重 + 严格"模块完成"正则匹配。
-_detect_content_invoked: set = set()
-_DIM_INVOKED_KW = re.compile(r"^[✅⏹❌]*\s*[A-Za-z0-9一-鿿·（）()]+?\s*完成[:：]")  # 形如"巧记单词 完成："
 def _detect_content_dimension(module: str = ""):
     """自动补充内容检查（LLM 批量知识性审查）
 
@@ -311,21 +310,10 @@ def _detect_content_dimension(module: str = ""):
       - module 为空 → 不比对（无模块上下文）
       - 该模块在 docx_map 中无匹配脚本 → 跳过（仅基础完整性）
       - 有匹配脚本 → 用该模块的脚本比对
-    ★ 2026-08-30 修复：模块级去重（_detect_content_invoked 集合）
     """
     try:
         if not module:
             return
-        # ★ 模块级去重：同一模块的脚本审查只触发一次
-        _cur_stage = ""
-        try:
-            from common.logger import get_current_module as _gcm2
-            _, _cur_stage = _gcm2()
-        except Exception:
-            pass
-        _key = (module, _cur_stage)
-        if _key in _detect_content_invoked:
-            return  # 同一模块同一阶段已审查过 → 跳过（不再因后续"完成"字触发）
         # ★ 该模块的匹配脚本（多模块检测时 docx_map 已构建；单模块/快速检查无映射则跳过）
         _docx = (_GLOBAL_DOCX_MAP or {}).get(module, "")
         if not _docx:
@@ -344,7 +332,6 @@ def _detect_content_dimension(module: str = ""):
         cfg = ReviewConfig(docx_path=str(docx_path), unit=_unit_cur, screenshot_dir="", verbose=False)
         agent = ReviewAgent(cfg)
         if not agent.script_questions: return
-        _detect_content_invoked.add(_key)
         log_msg(f"📄 {module} 自动补充内容检查 (批量, {_docx}, 单元{_unit_cur or '全部'}, {len(agent.script_questions)}题)", "info")
         batch = []; qid_map = {}
         # ★ 听力专项多子模块：只审查当前 stage 的题（用户反馈：错题日志错误记录
@@ -357,21 +344,32 @@ def _detect_content_dimension(module: str = ""):
             pass
         for qid, q in list(_inspection_state.get("questions", {}).items()):
             # ★ stage 过滤：仅审查当前回调对应的 stage 题目
+            #   ⚠ 命名体系注意：回调 _cur_stage 可能是顶层「练习/测试」，
+            #     而自动点击每题记录的 stage 是子阶段「基础巩固/综合进阶/难点突破」。
+            #     只有两者同为子阶段名时才做互斥过滤（避免把练习题拿去和测试脚本比对）；
+            #     顶层「练习/测试」不互斥子阶段（自动点击会跑完三个子阶段，都应比对）。
             _q_stage = (q or {}).get("stage", "") or ""
-            if _cur_stage and _q_stage and _q_stage != _cur_stage:
+            _SUB_STAGES = ("基础巩固", "综合进阶", "难点突破")
+            if (_cur_stage in _SUB_STAGES and _q_stage in _SUB_STAGES
+                    and _q_stage != _cur_stage):
                 continue
             idx = (q or {}).get("idx", 0)
             if not idx: continue
-            # ★ 口语训练题卡对齐（2026-08-24 修复"脚本审查乱报"根因二）：
-            #   口语训练模块记录 idx=小题号(1-5)+big(1-4)，而脚本 global_idx 是全局题号(1-20)。
-            #   ⚠ 不能先按 global_idx 匹配：第3大题·第2小题(idx=2)会错配到脚本 Q02（朗读单词），
-            #   必须优先按 (unit, big, stage_idx) 精确定位；无 big 的题卡（听力专项等）再走 global_idx。
+            # ★ 匹配脚本题目：优先精确三元组定位，避免 global_idx 跨阶段串题
+            #   - 口语训练：有 big → (unit, big, stage_idx)
+            #   - 听力专项等无 big、但有子阶段 → (unit, stage, stage_idx)
+            #     （关键修复：综合进阶第1题 stage_idx=1，若走 global_idx==1 会错配到
+            #      基础巩固第1题，导致"综合进阶匹配到最前面的基础巩固"）
+            #   - 兜底：global_idx == idx（无 stage/big 的老数据）
             _q_big = (q or {}).get("big") or 0
-            _q_no = (q or {}).get("module_qno") or 0
+            _q_no = (q or {}).get("module_qno") or (q or {}).get("idx") or 0
             sqs = []
             if _q_big and _q_no:
                 sqs = [s for s in agent.script_questions
                        if s.unit == _unit_cur and s.big == _q_big and s.stage_idx == _q_no]
+            if not sqs and _q_stage and _q_no:
+                sqs = [s for s in agent.script_questions
+                       if s.unit == _unit_cur and s.stage == _q_stage and s.stage_idx == _q_no]
             if not sqs:
                 sqs = [s for s in agent.script_questions if s.global_idx == idx]
             if not sqs: continue
@@ -477,6 +475,8 @@ def _detect_content_dimension(module: str = ""):
                 q_obj["content_reason"] = d[:300]
                 count += 1
             log_msg(f"🧪 内容检查已补充: {count}题 ({'通过' if count > 0 else ''})", "success")
+            # ★ 审查出错(任一维度不通过)的题目，把运行时题目截图贴到审查结果（替代"答错截图"）
+            _attach_review_shots()
         except Exception as e:
             _err = str(e)
             # ★ 友好识别常见 LLM 错误（配额/密钥/网络），给出可操作提示而非笼统报错
@@ -502,16 +502,15 @@ def log_msg(msg: str, level: str = "info", evidence: list = None):
         "time": datetime.now().strftime("%H:%M:%S"),
         "msg": msg,
         "level": level,
+        # ★ 会话号 + 会话内序号：前端据此判断「后端是否清空重开」，避免增量偏移卡死漏题
+        "sid": task_status.get("log_session", 0),
+        "seq": len(task_status["log"]),
     }
     if evidence:
         entry["evidence"] = evidence
     task_status["log"].append(entry)
 
-    # ★ 2026-08-30 修复重复日志：模块完成才能触发内容补充检查（不是任意"完成"字串）。
-    #   用户实测 14:39:36 "巧记单词 自动补充内容检查 (批量 ...)" 重复2次：一次因为
-    #   "巧记单词 完成：0题" 触发，另一次因为后面的"全部检测完成！..." 误触发了。
-    #   改为:仅"X模块 完成"开头才触发（不会匹配"全部检测完成"）
-    if isinstance(msg, str) and _DIM_INVOKED_KW.match(msg.strip()):
+    if any(k in msg for k in ("完成",)):
         # ★ 传当前模块：_detect_content_dimension 只在该模块有匹配脚本时比对
         _cm_cur = ""
         try:
@@ -544,60 +543,19 @@ def log_msg(msg: str, level: str = "info", evidence: list = None):
             if m:
                 _big = int(m.group(1)) if m.group(1) else None
                 qidx = int(m.group(2))
-                _record_module_evidence(qidx, msg, evidence, big=_big)
+                # ★ 提取本题目截图文件名（运行时每题抓取，AI/LLM 审查出错时才贴到审查结果）
+                _qshot = ""
+                for e in evidence:
+                    if e.get("type") == "q_shot":
+                        _qshot = e.get("screenshot", "") or ""
+                        break
+                _record_module_evidence(qidx, msg, evidence, big=_big, qshot=_qshot)
         except Exception:
             pass
 
-    # ★ 答错题目截图 → 同步到审查结果区（前端「最近截图」展示）
-    #   触发条件：消息含"第N题 答错截图"且 evidence 带 type="wrong_shot" + screenshot 文件名
-    if evidence and isinstance(evidence, list) and evidence:
-        try:
-            m = re.match(r"\s*(?:第(\d+)大题·)?第(\d+)(?:题|小题)\s*答错截图", msg)
-            if m:
-                qidx = int(m.group(2))
-                shot = ""
-                for e in evidence:
-                    if e.get("type") == "wrong_shot":
-                        shot = e.get("screenshot", "") or ""
-                        break
-                if shot:
-                    key = f"auto-Q{qidx:03d}"
-                    qs = _inspection_state.setdefault("questions", {})
-                    # ★ 模块上下文（错题定位用）
-                    try:
-                        from common.logger import get_current_module
-                        _cm, _cs = get_current_module()
-                    except Exception:
-                        _cm, _cs = "", ""
-                    if not _cm:
-                        _cm = _inspection_state.get("module", "")
-                    if key in qs:
-                        qs[key]["screenshot"] = shot
-                    else:
-                        # 该题无完整性检查记录（答题循环未发证据）→ 建一条错题记录
-                        qs[key] = {
-                            "idx": qidx,
-                            "total": len(qs) + 1,
-                            "module": _cm,
-                            "stage": _cs,
-                            "module_qno": qidx,
-                            "question_type": "错题截图",
-                            "screenshot": shot,
-                            "progress": f"Q{qidx}",
-                            "ai_stem": None, "ai_content": None, "ai_image": None,
-                            "ai_answer": None, "ai_audio": None, "ai_post_error": None,
-                            "overall_passed": None, "overall_score": 0.0,
-                            "stem_reason": "", "content_reason": "", "image_reason": "",
-                            "answer_reason": "", "audio_reason": "", "post_error_reason": "",
-                            "stem": f"第{qidx}题（答错，已截图）", "options": "",
-                            "script_answer": "", "note": "",
-                        }
-                    try:
-                        _save_inspection_state()
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+    # ★ 答错截图(wrong_shot)逻辑已移除：截图不再以"答错"为依据。
+    #   现改为运行时每题抓一张题目截图(qshot)，由 AI六维 / LLM 审查判出错时
+    #   经 _attach_review_shots() 贴到审查结果（见下方 _attach_review_shots 定义）。
 
 # 注入共享日志通道：让 scheduler 和模块内部的流程日志也能送到前端
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
@@ -643,7 +601,14 @@ def _connect_device():
                     return
             except ImportError:
                 pass
-            d = u2.connect()
+            # ★ 多设备环境下必须指定 serial，否则 u2.connect() 报 "more than one device"
+            #   从 config.yaml 读取 device.serial（与 ADBController 同源）
+            _serial = None
+            try:
+                _serial = load_config().device.serial
+            except Exception:
+                pass
+            d = u2.connect(_serial) if _serial else u2.connect()
             if not d.info:
                 result["err"] = "设备连接失败（u2 无响应）"
                 return
@@ -671,11 +636,17 @@ def clear_status():
     task_status["start_time"] = ""
     task_status["end_time"] = ""
     task_status["log"] = []
+    # ★ 每次清空日志都开一个新会话，前端据此整段重拉，避免增量偏移卡死漏掉前几题
+    task_status["log_session"] = task_status.get("log_session", 0) + 1
 
 
 def set_running(task_name: str):
     """设置为运行中"""
+    global _STOP_REQUESTED
     clear_status()
+    # ★ 启动新任务时强制重置停止标志，防止上次"立即停止"残留导致新任务被误中断
+    with _STOP_LOCK:
+        _STOP_REQUESTED = False
     task_status["running"] = True
     task_status["current_task"] = task_name
     task_status["start_time"] = datetime.now().strftime("%H:%M:%S")
@@ -685,6 +656,9 @@ def set_done():
     """设置为完成"""
     task_status["running"] = False
     task_status["end_time"] = datetime.now().strftime("%H:%M:%S")
+    # ★ 清空 current_task：否则前端会残留上一次任务名（既无"运行中"也无"空闲"），
+    #   停止按钮也因 running=False 被隐藏，用户误以为卡死无法停止
+    task_status["current_task"] = ""
 
 
 def _cleanup_task_state():
@@ -731,7 +705,7 @@ def run_login_task():
         update_progress(4, 6, "点击登录")
         # 先按 exact 尝试
         if not adb.click_element(text="登录", exact=True):
-            adb.tap(*sc(540, 1232))  # fallback: 登录按钮已知坐标
+            adb.tap(540, 1232)  # fallback: 登录按钮已知坐标
         time.sleep(3)
 
         log_msg("处理协议弹窗...")
@@ -845,7 +819,7 @@ def run_full_task(version: str, grade: str, modules: list):
             adb.click_element(text="登录", exact=True)
             time.sleep(2)
             if adb.wait_for_element(text="同意", timeout=3):
-                adb.tap(*sc(540, 1550))
+                adb.tap(540, 1550)
                 time.sleep(1.5)
         else:
             log_msg(f"  已登录, 跳过", "success")
@@ -868,7 +842,7 @@ def run_full_task(version: str, grade: str, modules: list):
             log_msg(f"  已是 {version}, 跳过切换", "success")
         else:
             adb.tap(*TABS["我"]); time.sleep(2)
-            adb.tap(*SETTINGS_ICON); time.sleep(1.5)
+            adb.tap(1000, 170); time.sleep(1.5)
             adb.click_element(text="个人信息", exact=True); time.sleep(1.5)
             adb.click_element(text="英语所学教材版本", exact=True); time.sleep(1.5)
             adb.click_element(text=version, exact=True); time.sleep(1.5)
@@ -885,7 +859,7 @@ def run_full_task(version: str, grade: str, modules: list):
         if grade:
             cur += 1
             log_msg(f"{cur}/{total} 选择年级: {grade}")
-            adb.tap(*sc(346, 275)); time.sleep(1.5)
+            adb.tap(346, 275); time.sleep(1.5)
 
             found = False
             for attempt in range(4):
@@ -897,7 +871,7 @@ def run_full_task(version: str, grade: str, modules: list):
                         found = True
                         break
                 if found: break
-                adb.swipe(*sc(540, 1700), *sc(540, 900), 300); time.sleep(1)
+                adb.swipe(540, 1700, 540, 900, 300); time.sleep(1)
 
             # 关闭弹窗
             adb.press_back(); time.sleep(1)
@@ -912,45 +886,32 @@ def run_full_task(version: str, grade: str, modules: list):
 
         # 8. 测试模块
         for i, module in enumerate(modules):
-            if module not in MODULE_COORDS:
-                log_msg(f"⚠ 跳过: {module}", "warning")
-                continue
-
-            cx, cy = MODULE_COORDS[module]
-
-            if module in DEEP_MODULES:
-                log_msg(f"  ⏬ 滚动到 {module}")
-                found_deep = False
-                # ★ 2026-08-30 修复：滚动寻找更稳健——
-                #   1) 找到"教材精学/专项突破"提示才认为进入正确区
-                #   2) 找不到模块时字符串化日志 "未找到模块X,跳过" 含banner标题,便于定位换年级bug
-                _section_banner = ""
-                for scroll_step in range(5):
-                    adb.swipe(*sc(200, 1600), *sc(200, 1200), 400)
-                    time.sleep(1)
-                    elements = adb.dump_ui()
-                    for e in elements:
-                        if e.text and '专项突破' in (e.text or ''):
-                            _section_banner = "专项突破"; break
-                        if e.text and '教材精学' in (e.text or ''):
-                            _section_banner = "教材精学"; break
-                    for e in elements:
-                        if e.text and e.text.strip() == module:
-                            cx, cy = e.center
-                            log_msg(f"    滚{scroll_step+1}次找到 {module}（{_section_banner or '未标识区'}）", "success")
-                            found_deep = True; break
-                    if found_deep: break
-                    if not any('专项突破' in (e.text or '') for e in elements) and \
-                       not any('教材精学' in (e.text or '') for e in elements):
-                        # ★ 不在"教材精学/专项突破"两个 banner 下，意味着该年级根本无此模块
-                        break
-                if not found_deep:
-                    log_msg(f"    ⚠ 未找到模块「{module}」(年级={grade}, 区={_section_banner or '未识别'}) → 跳过此模块，继续下一个", "warning")
-                    continue
-
             cur += 1
             log_msg(f"[{i+1}/{len(modules)}] 进入: {module} ({cur}/{total})")
-            adb.tap(cx, cy); time.sleep(1.5)
+
+            # ★ 统一策略：先滚动查找可见区域，再动态文本点击，最后兜底（缩放后）坐标
+            # 修复前：普通模块（基础训练/口语训练等需滚动才可见）直接 click_element，
+            #        首屏找不到就走硬编码坐标，而真机分辨率≠基准时坐标有纵向偏差 → 点不到
+            clicked = False
+            for attempt in range(10):
+                elements = adb.dump_ui()
+                if any(e.text and e.text.strip() == module for e in elements):
+                    if adb.click_element(text=module, exact=True):
+                        clicked = True
+                        log_msg(f"  🎯 动态点击 {module} 成功", "success")
+                        break
+                # 未在当前可视区域：向下滚动继续查找（专项突破/深度模块在下方）
+                adb.swipe(540, 2050, 540, 700, 400)
+                time.sleep(1)
+            if not clicked:
+                if module in MODULE_COORDS:
+                    cx, cy = MODULE_COORDS[module]   # 已按当前分辨率缩放
+                    log_msg(f"  📍 兜底坐标点击 {module} ({cx},{cy})")
+                    adb.tap(cx, cy)
+                else:
+                    log_msg(f"    ⚠ 未找到 {module}", "warning")
+
+            time.sleep(1.5)
 
             cur += 1
             safe_name = f"mod_{i+1:02d}.png"
@@ -1068,7 +1029,7 @@ def run_grade_scan_task():
             cur += 1
             log_msg(f"6/{total} 选择年级: {grade}")
             update_progress(cur, total, f"选择年级: {grade}")
-            adb.tap(*sc(346, 275))
+            adb.tap(346, 275)
             time.sleep(3)
 
             # 动态查找年级文字（支持滚动）
@@ -1084,14 +1045,14 @@ def run_grade_scan_task():
                 if found:
                     break
                 # 没找到，滚屏
-                adb.swipe(*sc(540, 1700), *sc(540, 900), 300)
+                adb.swipe(540, 1700, 540, 900, 300)
                 time.sleep(2)
 
             if not found:
                 log_msg(f"  ⚠ 未找到年级 \"{grade}\"", "warning")
             time.sleep(3)
             # 关闭弹窗（点左上角）
-            adb.tap(*sc(108, 100))
+            adb.tap(108, 100)
             time.sleep(1)
             adb.screenshot("03_grade_selected.png")
 
@@ -1103,30 +1064,34 @@ def run_grade_scan_task():
 
         # 8. 逐模块检测
         for i, module in enumerate(modules):
-            if module not in MODULE_COORDS:
-                log_msg(f"⚠ 跳过未知模块: {module}", "warning")
-                continue
-
-            cx, cy = MODULE_COORDS[module]
-
-            # 深度模块需先滚到专项突破底部
-            if module in DEEP_MODULES:
-                log_msg(f"  ⏬ 滚动到深度模块 {module}")
-                for _ in range(2):
-                    adb.swipe(*sc(540, 1900), *sc(540, 600), 500)
-                    time.sleep(2)
-                # 重新读取位置 (滚动后坐标可能变)
-                elements = adb.dump_ui()
-                for elem in elements:
-                    if elem.text and elem.text.strip() == module:
-                        cx, cy = elem.center
-                        log_msg(f"  📍 找到 {module} at ({cx},{cy})", "success")
-                        break
-
             cur += 1
             log_msg(f"[{i+1}/{len(modules)}] 进入: {module} ({cur}/{total})")
             update_progress(cur, total, f"进入 {module}")
-            adb.tap(cx, cy)
+
+            # ★ 优先用动态文本查找点击（最准，避免硬编码坐标错位/缩放不准导致点不到模块）
+            clicked = False
+            if module in DEEP_MODULES:
+                # 深度模块：先滚到专项突破底部，再按文本动态查找
+                log_msg(f"  ⏬ 滚动到深度模块 {module}")
+                for _ in range(2):
+                    adb.swipe(540, 1900, 540, 600, 500)
+                    time.sleep(2)
+            try:
+                if adb.click_element(text=module, exact=True):
+                    clicked = True
+                    log_msg(f"  🎯 动态点击 {module} 成功", "success")
+            except Exception as e:
+                log_msg(f"  ⚠ 动态点击异常: {e}", "warning")
+
+            # 兜底：动态查找失败时用（缩放后的）硬编码坐标
+            if not clicked:
+                if module not in MODULE_COORDS:
+                    log_msg(f"⚠ 跳过未知模块(且无坐标兜底): {module}", "warning")
+                    continue
+                cx, cy = MODULE_COORDS[module]
+                log_msg(f"  📍 兜底坐标点击 {module} ({cx},{cy})")
+                adb.tap(cx, cy)
+
             time.sleep(3)
 
             cur += 1
@@ -1186,7 +1151,7 @@ def run_inspect_loop():
         # 2. 滚到单元自检
         log_msg("滚动到单元自检")
         for i in range(4):
-            adb.swipe(*sc(200, 1600), *sc(200, 1200), 400)
+            adb.swipe(200, 1600, 200, 1200, 400)
             time.sleep(0.5)
             elements = adb.dump_ui()
             for e in elements:
@@ -1209,9 +1174,9 @@ def run_inspect_loop():
         time.sleep(5)
 
         # 4. 关规则弹窗 + 开始答题
-        adb.tap(*sc(540, 1578))
+        adb.tap(540, 1578)
         time.sleep(0.5)
-        adb.tap(*sc(554, 2116))
+        adb.tap(554, 2116)
         time.sleep(10)
 
         # 5. 逐题巡检
@@ -1255,9 +1220,9 @@ def run_inspect_loop():
             time.sleep(1)
 
             # 连点两次底部按钮 (检查→下一题)
-            adb.tap(*sc(540, 2174))
+            adb.tap(540, 2174)
             time.sleep(1.5)
-            adb.tap(*sc(540, 2174))
+            adb.tap(540, 2174)
             time.sleep(1.5)
 
             if cur >= 40:
@@ -1317,38 +1282,6 @@ def run_quick_inspect_task(docx_file: str = "", unit: int = 0):
                 log_msg(f"⚠ 脚本不存在: {docx_path}，降级为仅截图", "warning")
         else:
             log_msg("⚡ 未指定脚本，仅截图+推进（选脚本可开启AI六维审查）", "info")
-
-        # ★ 2026-08-30 修复：快速检查优先走"模块真实答题循环"（听力专项 _test_answer_loop），
-        #   废弃的简易"点选项→点按钮x2"逻辑不识别图片选项(卡Q1)/不收集evidence/不设模块上下文。
-        #   判断当前是否听力专项答题页：有题号 X/Y + 题干含"听" + 无封面按钮(去练习/开始答题)
-        try:
-            _els0 = adb.dump_ui(retries=2)
-            _t_all0 = " ".join((e.text or "") for e in _els0)
-            _m_xy0 = re.search(r"(\d+)/(\d+)", _t_all0)
-            _no_cover0 = ("去练习" not in _t_all0 and "开始答题" not in _t_all0
-                          and "重新答题" not in _t_all0)
-            if _m_xy0 and "听" in _t_all0 and _no_cover0:
-                log_msg(f"✅ 检测到听力专项答题页（{_m_xy0.group(0)}），走真实答题循环…", "success")
-                try:
-                    from common.logger import set_current_module
-                    set_current_module("听力专项", "快速检查")
-                    # ★ 同时写 _inspection_state 的 module/stage（_record_module_evidence
-                    #   fallback 读取；线程间 logger 全局偶尔读不到，双保险）
-                    _inspection_state["module"] = "听力专项"
-                    _inspection_state["stage"] = "快速检查"
-                    _dd = _connect_device()
-                    sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
-                    from modules.听力专项 import _test_answer_loop as _listen_loop
-                    _q_done = _listen_loop(_dd, max_q=60)
-                    log_msg(f"✅ 听力专项快速检查完成: {_q_done} 题", "success")
-                except Exception as _e2:
-                    log_msg(f"⚠ 听力专项答题循环异常: {_e2}", "warning")
-                    import traceback
-                    traceback.print_exc()
-                set_done()
-                return
-        except Exception:
-            pass
 
         log_msg("⚡ 快速检查启动（从当前页面开始，跳过导航）", "success")
         time.sleep(1)
@@ -1539,16 +1472,17 @@ def run_inspect_questions_task():
         set_running("inspect_questions")
         config = load_config()
         adb = get_adb()
+        adb_path = ADBController._find_adb()  # ★ 自动从 PATH 定位 adb，跨机器无需写死路径
 
         # 1. 启动APP
         log_msg("启动APP...")
-        sp.run(['C:/Users/bunana/AppData/Local/Microsoft/WinGet/Packages/Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe/platform-tools/adb.exe', '-s', config.device.serial, 'shell', 'am', 'force-stop', 'com.dinoenglish.yyb'])
+        sp.run([adb_path, '-s', config.device.serial, 'shell', 'am', 'force-stop', 'com.dinoenglish.yyb'])
         time.sleep(2)
-        sp.run(['C:/Users/bunana/AppData/Local/Microsoft/WinGet/Packages/Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe/platform-tools/adb.exe', '-s', config.device.serial, 'shell', 'am', 'start', '-n', 'com.dinoenglish.yyb/.base.SplashActivity'])
+        sp.run([adb_path, '-s', config.device.serial, 'shell', 'am', 'start', '-n', 'com.dinoenglish.yyb/.base.SplashActivity'])
         time.sleep(5)
         adb.tap(*AD_CLOSE)  # 关启动广告
         time.sleep(3)
-        adb.tap(*sc(948, 1821))  # 关可能的第二个
+        adb.tap(948, 1821)  # 关可能的第二个
         time.sleep(2)
 
         # 2. 滚到专项突破底部 → 单元自检
@@ -1556,10 +1490,10 @@ def run_inspect_questions_task():
         adb.tap(*TABS["英语"])  # 英语tab
         time.sleep(5)
         for _ in range(2):
-            adb.swipe(*sc(540, 1500), *sc(540, 800), 400)
+            adb.swipe(540, 1500, 540, 800, 400)
             time.sleep(2)
         # 小幅调整
-        adb.swipe(*sc(540, 1500), *sc(540, 1100), 400)
+        adb.swipe(540, 1500, 540, 1100, 400)
         time.sleep(2)
 
         # 动态找 单元自检
@@ -1573,17 +1507,17 @@ def run_inspect_questions_task():
 
         # 3. 点 AI检测的 去答题
         log_msg("点 AI检测 去答题...")
-        adb.tap(*sc(870, 756))
+        adb.tap(870, 756)
         time.sleep(6)
 
         # 4. 关规则弹窗
         log_msg("关闭训练规则弹窗...")
-        adb.tap(*sc(540, 1578))
+        adb.tap(540, 1578)
         time.sleep(2)
 
         # 5. 点开始答题
         log_msg("点开始答题...")
-        adb.tap(*sc(554, 2116))
+        adb.tap(554, 2116)
         time.sleep(8)  # AI生成题目
 
         # 6. 逐题巡检
@@ -1606,9 +1540,9 @@ def run_inspect_questions_task():
 
             # 截图
             shot_path = out_dir / f"q_{q_idx+1:02d}.png"
-            sp.run(['C:/Users/bunana/AppData/Local/Microsoft/WinGet/Packages/Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe/platform-tools/adb.exe', '-s', config.device.serial, 'shell', 'screencap', '-p', '/sdcard/_q.png'])
-            sp.run(['C:/Users/bunana/AppData/Local/Microsoft/WinGet/Packages/Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe/platform-tools/adb.exe', '-s', config.device.serial, 'pull', '/sdcard/_q.png', str(shot_path)])
-            sp.run(['C:/Users/bunana/AppData/Local/Microsoft/WinGet/Packages/Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe/platform-tools/adb.exe', '-s', config.device.serial, 'shell', 'rm', '/sdcard/_q.png'])
+            sp.run([adb_path, '-s', config.device.serial, 'shell', 'screencap', '-p', '/sdcard/_q.png'])
+            sp.run([adb_path, '-s', config.device.serial, 'pull', '/sdcard/_q.png', str(shot_path)])
+            sp.run([adb_path, '-s', config.device.serial, 'shell', 'rm', '/sdcard/_q.png'])
 
             # 检测题目类型
             question_type = "未知"
@@ -1644,7 +1578,7 @@ def run_inspect_questions_task():
                         pass
 
             # 假设"下一题"按钮在右下角 (约 950, 1700~1900)
-            adb.tap(*sc(960, 1850))
+            adb.tap(960, 1850)
             time.sleep(2)
 
             # 检查是否还在题目页 (有 X/40)
@@ -1688,8 +1622,12 @@ def _no_cache(resp):
 
 @app.route("/")
 def index():
-    """前端页面"""
-    return render_template("index.html")
+    """前端页面（禁用缓存，确保模板修改后刷新立即生效）"""
+    resp = make_response(render_template("index.html"))
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 
 @app.route("/trace")
@@ -1846,128 +1784,98 @@ def api_errors_summary():
         return jsonify({"error": str(e)}), 500
 
 
+def _norm_ver(s):
+    """版本归一化：全角括号→半角、去全/半角空格，用于精确去重。
+    例：'湘少版（2024审定）' → '湘少版(2024审定)'，与前端 '湘少版(2024审定)' 完全相等。
+    注意：只做归一化，不做前缀合并，'湘少版' 与 '湘少版（2024审定）' 保持为两个不同版本。"""
+    if not s:
+        return ""
+    s = str(s).strip()
+    s = s.replace('（', '(').replace('）', ')')
+    s = s.replace(' ', '').replace('　', '')
+    return s
+
+
 @app.route("/api/versions/available")
 def api_versions_available():
-    """★ 动态可用版本列表（2026-09-06 改为动态合并 → App 加版本无需再改前端代码）
-
-    合并来源（去重，preset 优先保证默认项稳定）：
-      1) preset：App 2026-08-26 确认的 5 个 2024审定版（兜底 + 默认选中）
-      2) 年级配置表 outputs/web/versions_grades.json 的 key（scan_versions_grades.py 生成）
-      3) 切换课本分组 outputs/web/switchbook_groups.json 的标题（App 真实名称，去 "|学段" 后缀）
-      4) App 实时扫描缓存 outputs/web/versions.json（POST /api/versions 触发重扫）
-      5) 知识库 key（形如 "湘少版:五上" → "湘少版五上"）
-    返回: {"versions": [...], "preset": preset, "sources": {来源: 新增条数}}
+    """可用版本列表（动态合并多数据源，秒回，无需连手机）：
+      - preset 预设（新湘鲁四册）
+      - outputs/web/versions_grades.json（scan_versions_grades.py 扫描结果，含 审定/未审定 变体）
+      - outputs/web/switchbook_groups.json（切换课本分组）
+      - outputs/web/versions.json（App 实时扫描缓存）
+      - 知识库 src/knowledge_base
+    去重：按归一化后【完全相等】去重，确保 '湘少版' 与 '湘少版（2024审定）' 是两个独立版本。
     """
-    preset = [
-        "湘少版(2024审定)", "湘鲁版(2024审定)", "人教版(PEP)(2024审定)",
-        "教科版(2024审定)", "教研版(2024审定)",
-    ]
-    versions = list(preset)
-    sources = {"preset": len(preset)}
-
-    def _norm(x):
-        # 全角括号/空格归一化（与 scripts/common/setup.py:_norm_ver 保持一致）
-        return (
-            (x or "")
-            .replace("（", "(")
-            .replace("）", ")")
-            .replace("　", "")
-            .replace(" ", "")
-            .strip()
-        )
+    preset = ["新湘鲁五上", "新湘鲁五下", "新湘鲁六上", "新湘鲁六下"]
+    versions = []
+    seen = set()
 
     def _add(name):
-        """仅按「归一化后完全相等」去重。
-
-        ★ 重要：人教版 与 人教版(2024审定) 是两个不同版本，绝不能用前缀去重，
-          否则非2024审定版会被2024审定版吞掉。归一化只消除全/半角括号与空格差异
-          （如 "人教版（PEP）" 与 "人教版(PEP)" 视为同一项）。
-        """
         name = (name or "").strip()
         if not name:
-            return False
-        n = _norm(name)
-        if any(n == _norm(v) for v in versions):
-            return False
+            return
+        # 去掉分组后缀（如 "人教版（PEP）|小学" → "人教版（PEP）"）
+        if "|" in name:
+            name = name.split("|", 1)[0].strip()
+        key = _norm_ver(name)
+        if not key or key in seen:
+            return
+        seen.add(key)
         versions.append(name)
-        return True
 
-    def _clean(t):
-        # "人教版（PEP）|小学" → "人教版（PEP）"（去掉学段后缀/空白）
-        return (t or "").strip().split("|")[0].strip()
+    for v in preset:
+        _add(v)
 
-    def _ver_like(t):
-        # 只收"像版本名"的条目，过滤年级/按钮等噪声
-        return bool(t) and ("版" in t or "审定" in t) and len(t) <= 30
-
-    def _from_json(rel):
-        f = PROJECT_ROOT / "outputs" / "web" / rel
-        if not f.exists():
-            return None
+    # 1) versions_grades.json（最权威的扫描结果，含 审定/未审定 变体）
+    vg_file = PROJECT_ROOT / "outputs" / "web" / "versions_grades.json"
+    if vg_file.exists():
         try:
-            return json.loads(f.read_text(encoding="utf-8"))
+            with open(vg_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            table = data.get("table", data) if isinstance(data, dict) else {}
+            for ver in table.keys():
+                _add(ver)
         except Exception:
-            return None
+            pass
 
-    # 2) 年级配置表（已规范化 + 带年级数据）
-    try:
-        data = _from_json("versions_grades.json")
-        table = (data or {}).get("table", data) if isinstance(data, dict) else None
-        n = 0
-        for k in (table or {}):
-            if isinstance(k, str):
-                n += 1 if _add(k) else 0
-        sources["grades_table"] = n
-    except Exception:
-        pass
+    # 2) switchbook_groups.json（切换课本分组）
+    sg_file = PROJECT_ROOT / "outputs" / "web" / "switchbook_groups.json"
+    if sg_file.exists():
+        try:
+            with open(sg_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            groups = data.get("groups", data) if isinstance(data, dict) else {}
+            for g in groups.keys():
+                _add(g)
+        except Exception:
+            pass
 
-    # 3) 切换课本分组（App 真实标题，可能含全角括号）
-    try:
-        data = _from_json("switchbook_groups.json")
-        groups = (data or {}).get("groups", {}) if isinstance(data, dict) else {}
-        n = 0
-        for k in groups:
-            t = _clean(k)
-            if _ver_like(t):
-                n += 1 if _add(t) else 0
-        sources["switchbook"] = n
-    except Exception:
-        pass
+    # 3) versions.json（App 实时扫描缓存）
+    vs_file = PROJECT_ROOT / "outputs" / "web" / "versions.json"
+    if vs_file.exists():
+        try:
+            with open(vs_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            lst = data.get("versions", data) if isinstance(data, dict) else data
+            if isinstance(lst, list):
+                for v in lst:
+                    _add(v)
+        except Exception:
+            pass
 
-    # 4) App 实时扫描缓存（元素是 {"text":..,"center":..} 或纯字符串）
+    # 4) 知识库
     try:
-        data = _from_json("versions.json")
-        items = data if isinstance(data, list) else (
-            (data or {}).get("versions") if isinstance(data, dict) else [])
-        n = 0
-        for it in (items or []):
-            t = it.get("text", "") if isinstance(it, dict) else str(it)
-            t = _clean(t)
-            if _ver_like(t):
-                n += 1 if _add(t) else 0
-        sources["app_scan"] = n
-    except Exception:
-        pass
-
-    # 5) 知识库（key 形如 "湘少版:五上" → 取冒号前的【版本名】；
-    #    冒号后是年级，拼进去会变成"湘少版五上"这种非版本条目，必须去掉）
-    try:
-        import re as _re
         from src.knowledge_base import KnowledgeBase
-        n = 0
-        for s_ in KnowledgeBase().summary():
-            key = s_.get("key", "") or ""
-            vpart = key.split(":")[0].strip() if ":" in key else key.strip()
-            # 跳过仍带年级后缀的脏数据（如 "湘少版五上"）
-            if not vpart or _re.search(r"[一二三四五六][上下]$", vpart) or "年级" in vpart:
-                continue
-            if _ver_like(vpart):
-                n += 1 if _add(vpart) else 0
-        sources["kb"] = n
+        kb = KnowledgeBase()
+        for s in kb.summary():
+            key = s.get("key", "")
+            # 知识库key形如 "湘少版:五上" / "湘鲁版:六上" → 转成 "湘少版五上"
+            label = key.replace(":", "") if ":" in key else key
+            _add(label)
     except Exception:
         pass
 
-    return jsonify({"versions": versions, "preset": preset, "sources": sources})
+    return jsonify({"versions": versions, "preset": preset})
 
 
 @app.route("/api/versions", methods=["GET", "POST"])
@@ -1988,6 +1896,59 @@ def api_versions():
     t = threading.Thread(target=run_version_detect_task, daemon=True)
     t.start()
     return jsonify({"status": "started", "task": "version_detect"})
+
+
+def _read_cached_grades(target_version=""):
+    """从 versions_grades.json 缓存里读年级列表（不需要 adb/App）
+
+    返回 {"version": ..., "grades": [...], "current_grade": ...}；没找到返回 None
+    ★ 2026-09-08 加：用于 /api/version-grades/current 在 任务在跑/设备未连接时回退
+    """
+    import re as _re_g
+    vg_file = PROJECT_ROOT / "outputs" / "web" / "versions_grades.json"
+    if not vg_file.exists():
+        return None
+    try:
+        with open(vg_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        table = data.get("table", data) if isinstance(data, dict) else {}
+    except Exception:
+        return None
+    if not isinstance(table, dict) or not table:
+        return None
+
+    # 1) 精确命中 target（按归一化全角括号→半角 + 去空格）
+    def _norm(s):
+        s = (s or "").strip().replace("（", "(").replace("）", ")").replace(" ", "").replace("　", "")
+        return s
+    if target_version:
+        nt = _norm(target_version)
+        for k, v in table.items():
+            if _norm(k) == nt and isinstance(v, dict):
+                grades = v.get("grades") or []
+                return {
+                    "version": k,
+                    "grades": grades,
+                    "current_grade": v.get("current", "") or "",
+                }
+        # 2) 子串兜底（target 是 "湘鲁版" 找不到精确，但 "湘鲁版（2024审定）" 命中）
+        for k, v in table.items():
+            if (nt in _norm(k)) and isinstance(v, dict):
+                grades = v.get("grades") or []
+                return {
+                    "version": k,
+                    "grades": grades,
+                    "current_grade": v.get("current", "") or "",
+                }
+    # 3) 都没传 target → 返回第一个有 grades 的版本
+    for k, v in table.items():
+        if isinstance(v, dict) and v.get("grades"):
+            return {
+                "version": k,
+                "grades": v["grades"],
+                "current_grade": v.get("current", "") or "",
+            }
+    return None
 
 
 @app.route("/api/version-grades")
@@ -2027,16 +1988,49 @@ def api_version_grades_current():
     """
     data = request.get_json(silent=True) or {}
     target = (data.get("version") or "").strip()
+    # ★ 2026-09-08：任务在跑时不要直接 409（用户体验差，年级下拉不该被任务锁卡住）。
+    #   回退读 versions_grades.json 缓存里的年级（按 target 找），保证下拉能填充。
     if task_status["running"]:
-        return jsonify({"error": "已有任务在运行"}), 409
+        _cached = _read_cached_grades(target)
+        if _cached and _cached.get("grades"):
+            return jsonify({
+                "version": target or _cached.get("version", ""),
+                "grades": _cached["grades"],
+                "current_grade": _cached.get("current_grade", ""),
+                "source": "cache_fallback_task_running",
+            })
+        return jsonify({"error": "已有任务在运行，且无缓存年级数据可回退"}), 409
     try:
         d = _connect_device()
     except Exception as e:
+        # 设备未连接 → 也回退读缓存（让下拉至少能用，只是可能不是 App 最新数据）
+        _cached = _read_cached_grades(target)
+        if _cached and _cached.get("grades"):
+            return jsonify({
+                "version": target or _cached.get("version", ""),
+                "grades": _cached["grades"],
+                "current_grade": _cached.get("current_grade", ""),
+                "source": "cache_fallback_no_device",
+            })
         return jsonify({"error": f"设备未连接: {e}"}), 400
     try:
         import importlib
         sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
         setup = importlib.import_module("common.setup")
+
+        # ★ 2026-09-08：先确保「亮屏 + 解锁 + 英语宝在前台主页」，
+        #   否则手机停在桌面/AOD/其他 App 时，下面 dump 什么都读不到，
+        #   前端就一直显示「年级 读取中…」。
+        if not setup.ensure_app_ready(d):
+            _cached = _read_cached_grades(target)
+            if _cached and _cached.get("grades"):
+                return jsonify({
+                    "version": target or _cached.get("version", ""),
+                    "grades": _cached["grades"],
+                    "current_grade": _cached.get("current_grade", ""),
+                    "source": "cache_fallback_app_not_ready",
+                })
+            return jsonify({"error": "未能进入英语宝主页（请确认已解锁、已登录）"}), 500
 
         def _homebar_text():
             """主页顶部版本+年级栏文本（resource-id=switch_textbook_tv，属性顺序不固定）"""
@@ -2169,6 +2163,129 @@ def api_run_full():
     })
 
 
+@app.route("/api/check/version", methods=["POST"])
+def api_check_version():
+    """检查手机「切换课本」页是否存在指定教材版本（默认外研版）；
+    扫描过程与结论通过 log_msg 实时推到前端「运行日志」Tab。"""
+    if task_status.get("running"):
+        return jsonify({"error": "已有任务在运行"}), 409
+    data = request.get_json(silent=True) or {}
+    target = (data.get("version") or "外研版").strip() or "外研版"
+    task_status["log"] = []
+    # ★ 每次清空日志都开一个新会话，前端据此整段重拉，避免增量偏移卡死漏掉前几题
+    task_status["log_session"] = task_status.get("log_session", 0) + 1
+    threading.Thread(target=check_version_task, args=(target,), daemon=True).start()
+    return jsonify({"status": "started", "version": target})
+
+
+def check_version_task(target: str):
+    """后台：真机进入切换课本页，扫描所有教材系列，判断是否含 target 版本。
+    自带总超时保护（90s），避免卡死网站；逐步 log_msg 推到前端运行日志。"""
+    import uiautomator2 as u2
+    import re as _re
+    task_status["running"] = True
+    task_status["phase"] = "check_version"
+    _deadline = time.time() + 90  # 总超时（秒），防止永久卡住网站
+    try:
+        sys.path.insert(0, str(Path(__file__).parent / "scripts"))
+        from common.setup import _is_home, _norm, S_swipe, _back_home, S
+        cfg = load_config()
+        serial = os.environ.get("ANDROID_SERIAL") or (cfg.device.serial if cfg else "")
+        log_msg(f"▶ 开始检查手机上是否存在「{target}」版本", "info")
+        if not serial:
+            log_msg("✘ 未配置设备序列号，终止检查", "error")
+            return
+        d = u2.connect(serial)
+        log_msg(f"✔ 已连接设备: {serial}", "info")
+        PKG = "com.dinoenglish.yyb"
+        try:
+            cur = d.current_app()
+            log_msg(f"  当前前台应用: {cur.get('package') if isinstance(cur, dict) else cur}", "info")
+        except Exception:
+            pass
+        try:
+            d.app_start(PKG)
+        except Exception:
+            try:
+                d.app_resume(PKG)
+            except Exception:
+                pass
+        time.sleep(4)
+        # 确保主页
+        if not _is_home(d):
+            log_msg("▶ 当前不在主页，尝试返回主页…", "info")
+            _back_home(d); time.sleep(1.2)
+        # 进入切换课本页（自实现，带逐步日志 + 重试，总超时保护）
+        entered = False
+        for _r in range(3):
+            if time.time() > _deadline:
+                log_msg("⚠ 检查超时，终止", "warning"); return
+            xml = d.dump_hierarchy() or ""
+            m = _re.search(r'<node[^>]*resource-id="[^"]*switch_textbook_tv"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml)
+            if m:
+                x1, y1, x2, y2 = map(int, m.groups())
+                cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+                d.click(cx, cy)
+                log_msg(f"▶ 点击顶部栏进入切换课本页 ({cx},{cy})", "info")
+            else:
+                cx, cy = 363, 309
+                d.click(cx, cy)
+                log_msg("▶ 点击顶部栏(坐标兜底 363,309)", "info")
+            time.sleep(2.5)
+            if '切换课本' in (d.dump_hierarchy() or ""):
+                entered = True; break
+            log_msg("↻ 未进入切换课本页，返回重试…", "warning")
+            _back_home(d); time.sleep(1.0)
+        if not entered:
+            log_msg("✘ 无法进入切换课本页，终止检查", "error")
+            return
+        log_msg("✔ 已进入切换课本页，开始扫描所有教材系列…", "info")
+        for _ in range(3):
+            S_swipe(d, 540, 650, 540, 1850, 0.3); time.sleep(0.4)
+        versions, seen_norm = [], set()
+        for _scan in range(15):
+            if time.time() > _deadline:
+                log_msg("⚠ 扫描超时，提前结束", "warning"); break
+            try:
+                elems = d.xpath('//*[@text!=""]').all()
+            except Exception:
+                elems = []
+            for e in elems:
+                t = (e.text or "").strip()
+                if not t:
+                    continue
+                tn = _norm(t)
+                try:
+                    b = e.bounds
+                except Exception:
+                    b = None
+                if not b:
+                    continue
+                # 仅收集「版本标题」（含版/审定，且不含年级/册/切换/如何），不收集年级封面
+                if (('版' in t or '审定' in t) and '年级' not in t and '册' not in t
+                        and '切换' not in t and '如何' not in t and len(t) <= 20):
+                    if tn not in seen_norm:
+                        seen_norm.add(tn); versions.append(t)
+            S_swipe(d, 540, 1850, 540, 650, 0.45); time.sleep(0.7)
+        log_msg(f"扫描到教材系列（共 {len(versions)} 个）：" + "、".join(versions), "info")
+        found = [v for v in versions if target in _norm(v)]
+        if found:
+            log_msg(f"✅ 已找到「{target}」：{found}", "success")
+            log_msg(f"✔ {target} 存在，可继续测评。", "success")
+        else:
+            log_msg(f"⚠ 未找到该版本（{target}），运行测试结束。", "warning")
+        try:
+            _back_home(d)
+        except Exception:
+            pass
+        log_msg("✔ 已返回主页。", "info")
+    except Exception as _e:
+        log_msg(f"✘ 检查异常: {_e}", "error")
+    finally:
+        task_status["running"] = False
+        task_status["phase"] = ""
+
+
 @app.route("/api/inspect-questions", methods=["POST"])
 def api_inspect_questions():
     """AI检测单元自检题目巡检：一题一截图+识别"""
@@ -2206,6 +2323,8 @@ _current_screenshot = ""
 def api_log_clear():
     """清空操作日志"""
     task_status["log"] = []
+    # ★ 每次清空日志都开一个新会话，前端据此整段重拉，避免增量偏移卡死漏掉前几题
+    task_status["log_session"] = task_status.get("log_session", 0) + 1
     return jsonify({"status": "cleared"})
 
 @app.route("/api/inspect/listening-run", methods=["POST"])
@@ -2237,6 +2356,8 @@ def api_inspect_listening_run():
 
     # 新巡检自动清空日志和检查状态（多阶段只清一次，后面各阶段结果累积）
     task_status["log"] = []
+    # ★ 每次清空日志都开一个新会话，前端据此整段重拉，避免增量偏移卡死漏掉前几题
+    task_status["log_session"] = task_status.get("log_session", 0) + 1
     _inspection_state["questions"] = {}
     _inspection_state["workflow_steps"] = []
     _inspection_state["current_question_idx"] = 0
@@ -2374,7 +2495,7 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
                 has_main = any('英语' in (e.text or '') for e in elements)
                 if has_main:
                     break  # 已在APP首页
-                adb.tap(*sc(900, 2200))  # 教程页"下一步"通常在右下
+                adb.tap(900, 2200)  # 教程页"下一步"通常在右下
                 time.sleep(1.5)
         record_step("1.5关闭教程", "done", "")
 
@@ -2404,9 +2525,9 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
                     break
             if not found_close:
                 # 只在屏幕顶部边缘点击, 绝不到底部(会触发HOME)
-                adb.tap(*sc(540, 40))
+                adb.tap(540, 40)
                 time.sleep(0.5)
-                adb.tap(*sc(540, 80))
+                adb.tap(540, 80)
             time.sleep(1)
         record_step("2.关闭广告", "done", "")
 
@@ -2508,10 +2629,10 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
                             break
                 if found:
                     break
-                adb.swipe(*sc(540, 1500), *sc(540, 1000), 300)
+                adb.swipe(540, 1500, 540, 1000, 300)
                 time.sleep(1)
             if not found:
-                adb.tap(*sc(414, 1700))
+                adb.tap(414, 1700)
             time.sleep(3)
             record_step("4.专项突破", "done", "")
 
@@ -2533,7 +2654,7 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
                             break
                 if found_module:
                     break
-                adb.swipe(*sc(540, 1600), *sc(540, 600), 500)
+                adb.swipe(540, 1600, 540, 600, 500)
                 time.sleep(1)
             if not found_module:
                 log_msg(f"  ⚠ 未找到模块 '{module_name}', 尝试搜索全部文本", "warning")
@@ -2602,7 +2723,7 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
                         break
             if not found_grade:
                 log_msg(f"  ⚠ 未找到 {target_kw}, 尝试兜底", "warning")
-                adb.tap(*sc(540, 1200))
+                adb.tap(540, 1200)
             time.sleep(3)
         elif version_already_set:
             log_msg(f"  版本一致, 跳过选择")
@@ -2623,51 +2744,76 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
         elements = adb.dump_ui()
         # 找到Unit文本的位置 (如果不在当前屏幕, 滚动查找)
         unit_y = None
-        for scroll_attempt in range(6):  # 最多滚动5次
+        unit_elem = None
+        for scroll_attempt in range(8):  # 最多滚动7次 (覆盖懒加载列表)
             for e in elements:
-                if e.text and re.match(rf'^Unit {unit}\b', (e.text or '').strip()):
+                t = (e.text or '').strip()
+                if not t: continue
+                # 支持 Unit 6 / Unit6 / U 6 / U6 / 第6单元 / 第六单元 等写法
+                if (re.match(rf'^Unit\s*{unit}\b', t) or
+                    re.match(rf'^U\s*{unit}\b', t) or
+                    re.match(rf'^第\s*{unit}\s*单元', t) or
+                    re.match(rf'^第\s*六\s*单元', t)):
                     unit_y = e.center[1]
+                    unit_elem = e
                     log_msg(f"  Unit {unit} 文本 at y={unit_y} (scroll={scroll_attempt})")
                     break
             if unit_y:
                 break
-            # 没找到, 向下滚动
-            if scroll_attempt < 5:
-                adb.swipe(*sc(540, 1800), *sc(540, 500), 400)  # 大幅下滚
-                time.sleep(0.8)
+            # 没找到, 向下滚动 (手指从下往上滑, 内容向下滚, 露出更下面的单元)
+            if scroll_attempt < 7:
+                adb.swipe(612, 2300, 612, 700, 450)  # 大幅下滚
+                time.sleep(1.0)
                 elements = adb.dump_ui()
         # 兜底: 模糊匹配 (针对Unit数字小但文本格式不同)
         if not unit_y:
             for e in elements:
-                if e.text and f"Unit {unit}" in (e.text or ''):
+                t = (e.text or '').strip()
+                if not t: continue
+                _hit = (f"Unit {unit}" in t or f"Unit{unit}" in t or
+                        f"U {unit}" in t or f"U{unit}" in t or
+                        f"第{unit}单元" in t or f"第{unit}单元" in t.replace(' ',''))
+                if _hit:
                     unit_y = e.center[1]
+                    unit_elem = e
                     log_msg(f"  Unit {unit} 文本(模糊) at y={unit_y}")
                     break
 
         found_unit = False
         if unit_y:
-            # Unit行的"去练习"按钮固定在该unit文本下方~100px处
-            # 直接找 y 在 (unit_y + 50, unit_y + 150) 范围内的"去练习"
-            btn_y_min = unit_y + 40
-            btn_y_max = unit_y + 160
+            # 关键修复: 重新抓一次最新界面, 用'滚动后/最新'的元素去找按钮
+            # 而非用滚动前那份旧快照, 避免 WebView 列表坐标错位导致点不进去
+            elements = adb.dump_ui()
+            # 在所有'去练习/去答题'按钮中, 选位于该单元文字正下方且最接近的那个
+            candidates = []
             for e in elements:
                 t = (e.text or '').strip()
+                if not t: continue
                 if '去练习' in t or '去答题' in t:
                     cy = e.center[1]
-                    if btn_y_min < cy < btn_y_max and e.center[0] > 0:
-                        adb.tap(e.center[0], e.center[1])
-                        log_msg(f"  点'去练习' for Unit {unit} at {e.center}")
-                        found_unit = True
-                        break
-            if not found_unit:
-                # 兜底: 直接用固定偏移量点
-                btn_x = 881  # 常见右侧按钮x
-                log_msg(f"  兜底: 点({btn_x}, {unit_y + 99})", "warning")
-                adb.tap(btn_x, unit_y + 99)
+                    cx = e.center[0]
+                    # 按钮必须在该单元文字下方(cy>unit_y), 且不超过一屏(600px内都算同一单元区域)
+                    if cy > unit_y and cy < unit_y + 600 and cx > 0:
+                        candidates.append((cy, cx, e))
+            if candidates:
+                candidates.sort(key=lambda x: x[0])  # 最接近单元文字(cy最小)的排前面
+                cy, cx, e = candidates[0]
+                adb.tap(cx, cy)
+                log_msg(f"  点'去练习' for Unit {unit} at ({cx},{cy})")
+                found_unit = True
+            elif unit_elem is not None:
+                # 退路1: 直接点单元文字卡片本身 (很多列表点单元行即可进入)
+                adb.tap(unit_elem.center[0], unit_elem.center[1])
+                log_msg(f"  兜底: 点 Unit {unit} 文本行 at {unit_elem.center}")
+                found_unit = True
+            else:
+                # 退路2: 固定偏移 (最后手段)
+                log_msg(f"  兜底: 点(881, {unit_y + 99})", "warning")
+                adb.tap(881, unit_y + 99)
                 found_unit = True
         else:
             log_msg(f"  ⚠ 没找到 Unit {unit} 文本", "warning")
-            adb.tap(*sc(540, 1400))
+            adb.tap(540, 1400)
         time.sleep(4)
 
         # 8. 现在应该在阶段选择页 (基础巩固/综合进阶/难点突破)
@@ -2726,9 +2872,9 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
             if not found_btn:
                 # 可能已经进入题目但还没加载, 或弹窗挡住了
                 # 尝试点屏幕底部中间 (有些APP的确认在底部)
-                adb.tap(*sc(540, 2100))
+                adb.tap(540, 2100)
                 # 关可能存在的弹窗
-                adb.tap(*sc(540, 1800))
+                adb.tap(540, 1800)
             time.sleep(2)
 
         # 再多等一会儿, 确保题目渲染完成
@@ -2786,7 +2932,7 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
                         found_next = True
                         break
                 if not found_next:
-                    adb.tap(*sc(540, 2100))  # 底部兜底
+                    adb.tap(540, 2100)  # 底部兜底
                 time.sleep(1.5)
                 continue
 
@@ -2933,7 +3079,7 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
                         found_option = True
                         break
             if not found_option:
-                adb.tap(*sc(540, 800))
+                adb.tap(540, 800)
             time.sleep(1.5)
 
             # 找"检查"按钮, 点它
@@ -2949,7 +3095,7 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
                         break
                 if found_check:
                     break
-                adb.tap(*sc(540, 2100))
+                adb.tap(540, 2100)
                 time.sleep(0.5)
             time.sleep(1.5)
 
@@ -3034,47 +3180,10 @@ _inspection_state = {
     "unit": "全部",
     "stage": "全部",   # ★ 不能用 "?"（Windows 文件名非法字符）
     "live_report_path": "",    # ★ 实时错题报告(report_live.html)路径（借鉴队友）
-    "_reuse_info": "",         # ★ 审查体系改造：复用标记（如"巧记单词 U1 已于2026-08-26审查，本次复用结论")
 }
 
 # ★ 实时报告重生成锁（避免多线程下并发写同一文件）
 _live_report_lock = threading.Lock()
-
-# ============================================================
-# ★ 审查体系改造：脚本审查索引（script_review_index.json）
-#   每个（模块+单元）只认真审一次，结论沉淀复用。
-#   索引 key = "<版本>/<年级>/<模块>/<单元>"
-# ============================================================
-SCRIPT_REVIEW_INDEX_PATH = PROJECT_ROOT / "data" / "script_review_index.json"
-
-def load_script_review_index() -> dict:
-    """加载脚本审查索引"""
-    import json
-    try:
-        if SCRIPT_REVIEW_INDEX_PATH.exists():
-            return json.loads(SCRIPT_REVIEW_INDEX_PATH.read_text(encoding="utf-8") or "{}")
-    except Exception:
-        pass
-    return {}
-
-def save_script_review_index(index: dict):
-    """保存脚本审查索引"""
-    import json
-    SCRIPT_REVIEW_INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
-    SCRIPT_REVIEW_INDEX_PATH.write_text(
-        json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8")
-
-def _script_file_hash(docx_path) -> str:
-    """计算脚本文件 md5 hash，用于检测脚本是否变更"""
-    import hashlib
-    try:
-        return hashlib.md5(open(docx_path, "rb").read()).hexdigest()
-    except Exception:
-        return ""
-
-# ★ 自动生成脚本的存放目录（与手动上传的 uploads/ 区分）
-GENERATED_SCRIPTS_DIR = PROJECT_ROOT / "uploads" / "generated"
-GENERATED_SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
 
 def _save_inspection_state():
     """保存巡检状态到文件, 审查智能体下次学习"""
@@ -3144,7 +3253,7 @@ def _live_regen_error_report():
 # ★ 多模块检测每题界面级证据 → 审查结果区（无脚本也能展示 AI 通过/不通过）
 _SCRIPT_CACHE = {}  # ★ 脚本解析缓存 {docx名: script_questions}，避免每题重复解析100题
 
-def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None):
+def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None, qshot: str = None):
     """把 engine.py 每题收集的 5 维界面证据（题型/题干/选项/音频/作答）
     映射成前端六维卡片字段写入 _inspection_state["questions"]。
 
@@ -3192,12 +3301,6 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
             if _sc:
                 _inspection_state["_last_score_info"] = _sc
             continue
-        # ★ 2026-08-26 扬声器播放内容（听音题）：存到状态供脚本比对/题干后展示
-        if field == "扬声器":
-            _spk = (e.get("actual") or "").strip()
-            if _spk:
-                _inspection_state["_last_speaker_word"] = _spk
-            continue
         # 题型识别 → 只更新 question_type
         if field == "题型":
             diff = e.get("diff") or ""
@@ -3237,42 +3340,20 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
             if dims[dim] is not False:
                 reasons[dim] = _fmt_reason(field, diff_str, "通过")
         else:
-            reasons[dim] = f"{field}未检" if diff_str else ""
+            reasons[dim] = f"{field}未检（需截图/脚本对照）" if diff_str else ""
 
-    # ★ 审查体系改造：不适用维度直接省略，不再填"需连手机截图"等占位文案
-    #   配图/答错后/音频 在不适用维度时，reasons 留空 → 前端不渲染该维度
+    # 配图/答错后 两维在多模块检测中不可查（需连手机截图）
+    if dims["image"] is None:
+        reasons["image"] = "需连手机截图检查配图"
+    if dims["post_error"] is None:
+        reasons["post_error"] = "需答错后截图验证"
+    # 音频非必须（听力题才要求）
+    if dims["audio"] is None:
+        reasons["audio"] = "非听力题，无需检查"
 
-    # 2026-08-25 新增：App 实际题干 ↔ 脚本题干 匹配校验（口语训练核心需求：
+    # ★ 2026-08-25 新增：App 实际题干 ↔ 脚本题干 匹配校验（口语训练核心需求：
     #   txt 流程第8步"答案与关键词是否正确/听力材料是否正确"→ 每道小题必须核对
     #   App 显示的题干是否与脚本一致，如"第1大题第1小题脚本=then，App 也必须显示 then"）
-    # ★ 2026-08-26 巧记单词：抽题模式无序号对应，改为"内容匹配"——
-    #   ① 题干类型一致：App 题干（如"听录音选释义"）在脚本同单元能找到同类题型
-    #   ② 内容一致：App 关键词/选项/录音词 在脚本该题型下能找到对应单词
-    def _script_match_qiaoji(_sq_list, _u_cur):
-        """巧记单词内容匹配：返回 (匹配到的脚本题 or None, 相似度)。
-        匹配策略：按 App 题干在脚本同单元找最相似题。
-          - ratio ≥ 0.6 → 同题型，返回该题（上层写"✅题干类型一致"）
-          - ratio < 0.6 → 无同类题（App 题型/题干与脚本不符），返回 None（上层报不通过）
-        """
-        import difflib as _dl
-        _app_all = (stem_text + " " + option_text).strip()
-        _cands = [s for s in _sq_list if _u_cur and s.unit == _u_cur]
-        if not _cands:
-            _cands = _sq_list
-        _best, _best_ratio = None, 0.0
-        for s in _cands:
-            _ss = (getattr(s, "stem", "") or "").strip()
-            if not _ss:
-                continue
-            _r = _dl.SequenceMatcher(None, _ss[:20], stem_text[:20]).ratio() if stem_text else 0.0
-            if _r > _best_ratio:
-                _best_ratio, _best = _r, s
-        if _best is not None and _best_ratio >= 0.6:
-            return _best, _best_ratio
-        return None, _best_ratio
-
-    _sq_cur = None          # ★ 审查体系改造：命中的脚本题（供脚本层标记/合并）
-    _sq_stem_hit = ""       # 命中的脚本题干（供记录展示）
     try:
         _docx_cur = (_GLOBAL_DOCX_MAP or {}).get(_current_module_name, "")
         if _docx_cur and stem_text and stem_text not in ("(无题干文字)", "(无)"):
@@ -3285,73 +3366,27 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
                         docx_path=str(_docx_path_cur), unit=0, screenshot_dir="", verbose=False))
                     _SCRIPT_CACHE[_docx_cur] = _agent_cur.script_questions
                 _sq_list = _SCRIPT_CACHE[_docx_cur]
-                # ★ 当前单元号
+                # ★ 按 (unit, big, stage_idx) 定位脚本小题（口语训练结构）
                 _u_cur = _inspection_state.get("unit", 0)
                 try:
                     _u_cur = int(str(_u_cur).split("-")[0])
                 except Exception:
                     _u_cur = 0
-                # ★ 巧记单词：内容匹配（无序号，按题型+内容找）
-                _qiaoji_ratio = 0.0
-                if _current_module_name == "巧记单词":
-                    _sq_cur, _qiaoji_ratio = _script_match_qiaoji(_sq_list, _u_cur)
-                    if _sq_cur is None:
-                        # ★ 题干类型与脚本不符（App 题型在脚本中找不到同类）
-                        #   → 题干维度不通过，原因写清楚（用户要求：App看图填单词但脚本听录音填单词）
-                        dims["stem"] = False
-                        _script_types = sorted({getattr(s, "type_2", "") or "未知"
-                                                for s in (_sq_list if _u_cur else _sq_list)
-                                                if getattr(s, "unit", 0) == _u_cur and (getattr(s, "type_2", "") or "") not in ("", "/")})[:5]
-                        reasons["stem"] = (f"❌ 题型与脚本不符：App 题干「{stem_text[:40]}」在脚本中无同类题"
-                                           f"（脚本该单元题型: {_script_types or '未知'}）")
-                        _sq_cur = None
-                else:
-                    _sq_cur = None
-                    # ★ 按 (unit, big, stage_idx) 定位脚本小题（口语训练结构）
-                    if big and _u_cur:
-                        for _s in _sq_list:
-                            if _s.unit == _u_cur and _s.big == big and _s.stage_idx == qidx:
-                                _sq_cur = _s
-                                break
-                    if not _sq_cur:
-                        for _s in _sq_list:
-                            if _s.global_idx == qidx:
-                                _sq_cur = _s
-                                break
+                _sq_cur = None
+                if big and _u_cur:
+                    for _s in _sq_list:
+                        if _s.unit == _u_cur and _s.big == big and _s.stage_idx == qidx:
+                            _sq_cur = _s
+                            break
+                if not _sq_cur:
+                    for _s in _sq_list:
+                        if _s.global_idx == qidx:
+                            _sq_cur = _s
+                            break
                 if _sq_cur:
                     _script_stem = (getattr(_sq_cur, "stem", "") or "").strip()
-                    _sq_stem_hit = _script_stem
                     _script_rec = (getattr(_sq_cur, "recording", "") or "").strip()
-                    if _current_module_name == "巧记单词":
-                        # ★ 巧记单词匹配成功：题干类型一致
-                        if dims["stem"] is not False:
-                            dims["stem"] = True
-                            reasons["stem"] = (f"✅ 题干类型与脚本一致（脚本同类题「{_script_stem[:40]}」，"
-                                               f"App：「{stem_text[:40]}」）")
-                        # ★ 2026-08-26 扬声器播放内容 ↔ 脚本 recording 对比（ASR）
-                        #   扬声器词 = 从题干后提取的英文单词（_last_speaker_word，由模块写入）
-                        _spk = _inspection_state.get("_last_speaker_word", "")
-                        if _script_rec:
-                            try:
-                                from common.asr import compare_against_script
-                                _cmp = compare_against_script(_spk, _script_rec)
-                                _audio_reason = _cmp.get("reason", "")
-                                # 扬声器内容 append 到题干原因后（用户要求：放题干后面展示）
-                                if _cmp.get("consistent") is False and dims["audio"] is not False:
-                                    dims["audio"] = False
-                                if dims["audio"] is None and _audio_reason:
-                                    reasons["audio"] = _audio_reason
-                                if dims["stem"] is not False and _spk:
-                                    reasons["stem"] += f"（扬声器：{_spk}）"
-                            except Exception:
-                                pass
-                            # 扬声器词为空（页面无英文词）→ 提示需接入 ASR 才能核对
-                            if not _spk and dims["audio"] is None:
-                                reasons["audio"] = (f"脚本录音「{_script_rec[:60]}」；"
-                                                    f"扬声器内容需接入 ASR 才能核对（当前未识别到）")
-                        elif dims["audio"] is None:
-                            reasons["audio"] = f"脚本录音「{_script_rec[:60]}」"
-                    elif _script_stem:
+                    if _script_stem:
                         # ★ 相似度比对（App 提取文字可能带噪音，用包含/相似而非全等）
                         _app_stem = stem_text.strip()
                         _ok = (_script_stem in _app_stem) or (_app_stem in _script_stem)
@@ -3361,19 +3396,17 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
                             _ok = _ratio >= 0.85
                         if not _ok:
                             dims["stem"] = False   # ★ mismatch 优先：脚本比对不通过 → 题干不通过
-                            # ★ 2026-08-30 修复：big=None（听力专项等无大题概念）时只显示"第N题"，
-                            #   不渲染"第None大题·第N小题"
-                            _pos = f"第{big}大题·第{qidx}小题" if big else f"第{qidx}题"
                             reasons["stem"] = (f"❌ 题干与脚本不符：App 显示「{_app_stem[:60]}」，"
-                                               f"脚本应为「{_script_stem[:60]}」（位置：{_pos}）")
+                                               f"脚本应为「{_script_stem[:60]}」（位置：第{big}大题·第{qidx}小题）")
                         else:
                             # ★ 通过也写比对原因（检查人员知道这题已核对过脚本）
                             if dims["stem"] is not False:
                                 dims["stem"] = True
                                 reasons["stem"] = f"✅ 题干与脚本一致（脚本：{_script_stem[:50]}，App：{stem_text[:50]}）"
                     if _script_rec and dims["audio"] is None:
-                        # ★ 听力材料（脚本 recording）有内容但无音频证据 → 留空不渲染
-                        pass
+                        # ★ 听力材料（脚本 recording）与 App 实际内容：本题无音频证据可查，
+                        #   但脚本有听力材料 → 提示检查人员（不判不通过，缺截图）
+                        reasons["audio"] = f"脚本听力材料「{_script_rec[:60]}」，需连手机核对 App 听力内容"
     except Exception:
         pass
 
@@ -3391,54 +3424,28 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
     else:
         overall = None   # 检查不足3维 → 标未审
 
-    # ★ 自动截图：错题（overall=False）自动抓当前页面截图，供错题报告嵌入。
-    #   用户要求"错题日志中的每道错题都要有截图"；听力专项有答错截图，
-    #   口语训练等模块没有 → 这里统一兜底（每题判定不通过即截图）。
+    # ★ 截图依据改为：AI六维审查(本题 overall) 或 LLM 审查出错时才把题目截图贴到审查结果，
+    #   不再以"答错"为依据。运行时每题已抓一张题目截图(qshot，见 听力专项.py)，这里直接复用，
+    #   避免事后重新连设备截图（页面早已翻走，截不到原题）。
     _auto_shot = ""
-    if overall is False:
-        try:
-            # ★ 截图前等 0.8s：页面内容（排序项/选项）渲染有延迟，立即截图
-            #   会截到空白/半渲染画面（用户实测"排序题内容还没出来"）
-            time.sleep(0.8)
-            _shot_dir = PROJECT_ROOT / "screenshots"
-            _shot_dir.mkdir(parents=True, exist_ok=True)
-            _auto_shot = f"auto_{_current_module_name or 'mod'}_q{qidx:03d}_{datetime.now().strftime('%H%M%S')}.png"
-            _conn = _connect_device()
-            if _conn is not None:
-                for _r in range(3):
-                    try:
-                        _conn.screenshot(str(_shot_dir / _auto_shot))
-                        break
-                    except OSError:
-                        if _r >= 2:
-                            raise
-                        time.sleep(0.5)
-        except Exception:
-            _auto_shot = ""
+    if overall is False and qshot:
+        _auto_shot = qshot
 
     total = len(_inspection_state.get("questions", {})) + 1
-    # ★ 2026-08-30 修复：按 (模块·stage) 维护题数，total 改为"各模块总题数"列表渲染，
-    #   而非单一总数字（用户要求"测了听力专项的练习+测试，总览要分开展示各自动态题数"）
-    _mod_key = f"{_current_module_name or '未知'}{'·' + _current_stage_name if _current_stage_name else ''}"
-    _mods_total = _inspection_state.setdefault("_modules_total", {})
-    # 每题只在首次 evidence 时 +1（用 qid 去重防重复）
-    _qid = f"auto-Q{qidx:03d}"  # 先粗略 qid 做去重 key
-    if big:
-        _qid = f"auto-Q{big:02d}-{qidx:02d}"
-    # ★ 去重集合用 dict（JSON 不支持 set → _save_inspection_state 会整体序列化失败丢状态！）
-    _seen = _inspection_state.setdefault("_seen_qids", {})
-    _seen_key = _qid + "@" + _mod_key
-    if not _seen.get(_seen_key):
-        _seen[_seen_key] = 1
-        _mods_total[_mod_key] = _mods_total.get(_mod_key, 0) + 1
     # ★ 2026-08-25 修复：口语训练"第N大题·第M小题"结构下，不同大题的小题号重复
     #   （每个大题都有小题1-5）→ 旧 qid "auto-Q{小题号}" 会被后面大题的同号小题覆盖，
     #   只剩最后一大题。改为 "auto-Q{大题:02d}-{小题:02d}" 保证每题唯一；
-    #   无 big（听力专项/单元自检等）保持旧格式 auto-Q{idx:03d}（与 summary 统计兼容）。
+    # ★ 2026-08-30 修复：听力专项练习含多个子模块（基础巩固/综合进阶/难点突破），
+    #   每个子模块题号都从 1 开始，同样会互相覆盖。无 big 时按子模块名加前缀。
     if big:
         qid = f"auto-Q{big:02d}-{qidx:02d}"
     else:
-        qid = f"auto-Q{qidx:03d}"
+        # 听力专项练习：子模块名前缀区分，避免基础巩固/综合进阶/难点突破互相覆盖
+        if _current_module_name == "听力专项" and _current_stage_name:
+            _stage_tag = _current_stage_name[:2]  # 基础/综合/难点
+            qid = f"auto-{_stage_tag}{qidx:03d}"
+        else:
+            qid = f"auto-Q{qidx:03d}"
 
     # ★ 描述文字：让检查人员知道题目大概内容和位置
     # ★ 描述文字：让检查人员知道题目大概内容和位置
@@ -3456,7 +3463,8 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
         "idx": qidx,
         "total": total,
         "question_type": question_type,
-        "screenshot": _auto_shot,  # ★ 错题自动截图（听力专项答错截图 + 通用兜底）
+        "screenshot": _auto_shot,  # ★ 审查出错(overall=False)才贴的题目截图
+        "qshot": qshot or "",      # ★ 运行时每题抓取的题目截图（AI/LLM 出错时复用）
         "progress": progress_str,
         # ★ 分值信息（evidence 附加项，供检查人员参考）
         "score_info": _inspection_state.get("_last_score_info", ""),
@@ -3465,7 +3473,7 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
         "stage": _current_stage_name,
         "module_qno": _current_module_qno,
         **_loc,
-        # 六维判定（旧格式，兼容已有消费者）
+        # 六维判定
         "ai_stem": dims["stem"], "ai_content": dims["content"],
         "ai_image": dims["image"], "ai_answer": dims["answer"],
         "ai_audio": dims["audio"], "ai_post_error": dims["post_error"],
@@ -3475,19 +3483,6 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
         "stem_reason": reasons["stem"], "content_reason": reasons["content"],
         "image_reason": reasons["image"], "answer_reason": reasons["answer"],
         "audio_reason": reasons["audio"], "post_error_reason": reasons["post_error"],
-        # ★ 审查体系改造：新结构——统一结论字典（旧字段兼容保留，迁移期并存）
-        #   每个维度含 status(pass/fail/na) + detail(具体结论文本)
-        #   na = 不适用（该维度无需检查），前端不渲染
-        "conclusions": {
-            "stem":        {"status": "pass" if dims["stem"] is True else ("fail" if dims["stem"] is False else "na"), "detail": reasons["stem"]},
-            "content":     {"status": "pass" if dims["content"] is True else ("fail" if dims["content"] is False else "na"), "detail": reasons["content"]},
-            "image":       {"status": "pass" if dims["image"] is True else ("fail" if dims["image"] is False else "na"), "detail": reasons["image"]},
-            "answerable":  {"status": "pass" if dims["answer"] is True else ("fail" if dims["answer"] is False else "na"), "detail": reasons["answer"]},
-            "answer_knowledge": {"status": "na", "detail": ""},
-            "audio":       {"status": "pass" if dims["audio"] is True else ("fail" if dims["audio"] is False else "na"), "detail": reasons["audio"]},
-            "flow":        {"status": "pass" if overall is True else ("fail" if overall is False else "na"), "detail": "流程无卡顿" if overall is True else ""},
-            "report":      {"status": "na", "detail": ""},
-        },
         # ★ 题目内容展示文字
         "stem": stem_text,
         "options": option_text,
@@ -3496,17 +3491,57 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
         "human_label": None,
         "human_note": "",
         "timestamp": datetime.now().isoformat(),
-        # ★ 审查体系改造：分层标记（基础层 = UI 证据；脚本层 = 对照 docx 脚本）
-        #   有匹配脚本 → basic+script（脚本层待后置 LLM 审查回填合并）
-        #   无匹配脚本 → basic_only（仅基础层）
-        "layer": "basic+script" if _sq_cur else "basic_only",
-        "script": {
-            "matched": True,
-            "status": "pending",          # 待 LLM 脚本审查回填 → done
-            "script_stem": _sq_stem_hit,
-        } if _sq_cur else None,
     }
     _inspection_state["current_question_idx"] = qidx
+    # ★ 每 10 题保存一次到文件（供错题溯源 trace 页面读取，避免只存内存导致 trace 看不到）
+    if total % 10 == 0:
+        try:
+            _save_inspection_state()
+        except Exception:
+            pass
+    # ★ 检测过程中出现错题 → 触发实时错题报告（前端「📑 查看报告」实时更新）
+    if overall is False:
+        try:
+            _live_regen_error_report()
+        except Exception:
+            pass
+
+
+def _attach_review_shots():
+    """审查出错(任一 AI 维度不通过)的题目，把运行时抓的题目截图(qshot)贴到审查结果。
+
+    截图依据改为 AI六维 / LLM 审查结果，而不再是"答错"。运行时每题已抓一张题目截图
+    存入 questions[qid]["qshot"]；LLM 全量脚本审查记录(module-脚本-Qxx)本身无 qshot，
+    先按 module+stage+idx 从运行时记录复制，再统一贴到出错题。
+    """
+    global _inspection_state
+    qs = _inspection_state.get("questions", {})
+    if not qs:
+        return
+    # 1) 为脚本全量审查记录补 qshot（按 module+stage+idx 匹配运行时记录）
+    for qid, q in qs.items():
+        if q.get("qshot"):
+            continue
+        if "-脚本-Q" in qid:
+            _m = q.get("module", ""); _s = q.get("stage", ""); _i = q.get("idx")
+            for _k, _v in qs.items():
+                if _v.get("qshot") and _v.get("module") == _m \
+                        and (_v.get("stage") or "") == (_s or "") and _v.get("idx") == _i:
+                    q["qshot"] = _v["qshot"]
+                    break
+    # 2) 任一 AI 维度不通过 且 尚无截图 → 贴上 qshot
+    _dims = ("ai_stem", "ai_content", "ai_image", "ai_answer", "ai_audio", "ai_post_error")
+    _changed = False
+    for q in qs.values():
+        _failed = q.get("overall_passed") is False or any(q.get(k) is False for k in _dims)
+        if _failed and not q.get("screenshot") and q.get("qshot"):
+            q["screenshot"] = q["qshot"]
+            _changed = True
+    if _changed:
+        try:
+            _save_inspection_state()
+        except Exception:
+            pass
     # ★ 每 10 题保存一次到文件（供错题溯源 trace 页面读取，避免只存内存导致 trace 看不到）
     if total % 10 == 0:
         try:
@@ -3568,38 +3603,6 @@ def run_quick_inspect_task(docx_file: str = "", unit: int = 0):
                 log_msg(f"⚠ 脚本不存在: {docx_path}，降级为仅截图", "warning")
         else:
             log_msg("⚡ 未指定脚本，仅截图+推进（选脚本可开启AI六维审查）", "info")
-
-        # ★ 2026-08-30 修复：快速检查优先走"模块真实答题循环"（听力专项 _test_answer_loop），
-        #   废弃的简易"点选项→点按钮x2"逻辑不识别图片选项(卡Q1)/不收集evidence/不设模块上下文。
-        #   判断当前是否听力专项答题页：有题号 X/Y + 题干含"听" + 无封面按钮(去练习/开始答题)
-        try:
-            _els0 = adb.dump_ui(retries=2)
-            _t_all0 = " ".join((e.text or "") for e in _els0)
-            _m_xy0 = re.search(r"(\d+)/(\d+)", _t_all0)
-            _no_cover0 = ("去练习" not in _t_all0 and "开始答题" not in _t_all0
-                          and "重新答题" not in _t_all0)
-            if _m_xy0 and "听" in _t_all0 and _no_cover0:
-                log_msg(f"✅ 检测到听力专项答题页（{_m_xy0.group(0)}），走真实答题循环…", "success")
-                try:
-                    from common.logger import set_current_module
-                    set_current_module("听力专项", "快速检查")
-                    # ★ 同时写 _inspection_state 的 module/stage（_record_module_evidence
-                    #   fallback 读取；线程间 logger 全局偶尔读不到，双保险）
-                    _inspection_state["module"] = "听力专项"
-                    _inspection_state["stage"] = "快速检查"
-                    _dd = _connect_device()
-                    sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
-                    from modules.听力专项 import _test_answer_loop as _listen_loop
-                    _q_done = _listen_loop(_dd, max_q=60)
-                    log_msg(f"✅ 听力专项快速检查完成: {_q_done} 题", "success")
-                except Exception as _e2:
-                    log_msg(f"⚠ 听力专项答题循环异常: {_e2}", "warning")
-                    import traceback
-                    traceback.print_exc()
-                set_done()
-                return
-        except Exception:
-            pass
 
         log_msg("⚡ 快速检查启动（从当前页面开始，跳过导航）", "success")
         time.sleep(1)
@@ -3899,10 +3902,6 @@ def api_inspect_state():
         "stage": _inspection_state.get("stage", ""),
         "docx": _inspection_state.get("docx", ""),
         "live_report_path": _inspection_state.get("live_report_path", ""),
-        # ★ 2026-08-30 修复：总览按模块+单元分组 → 必须把 module/_modules_total 透出给前端
-        "module": _inspection_state.get("module", ""),
-        "_modules_total": _inspection_state.get("_modules_total", {}),
-        "_reuse_info": _inspection_state.get("_reuse_info", ""),
     }
     try:
         _enrich_inspect_state(state)
@@ -4074,7 +4073,7 @@ def api_grades():
 
     try:
         # 确保在主页，打开年级选择弹窗
-        adb.tap(*sc(346, 275))  # 切换器
+        adb.tap(346, 275)  # 切换器
         time.sleep(3)
 
         elements = adb.dump_ui()
@@ -4200,12 +4199,13 @@ def api_hardware_info():
     config = load_config()
     info = {"serial": config.device.serial, "screen": "1080x2400"}
     try:
-        r = sp.run(["C:/Users/bunana/AppData/Local/Microsoft/WinGet/Packages/Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe/platform-tools/adb.exe", "-s", config.device.serial, "shell", "getprop", "ro.product.model"],
+        adb_path = ADBController._find_adb()  # ★ 自动从 PATH 定位 adb，跨机器无需写死路径
+        r = sp.run([adb_path, "-s", config.device.serial, "shell", "getprop", "ro.product.model"],
                    capture_output=True, text=True, timeout=5,
                    encoding="utf-8", errors="replace")
         if r.returncode == 0:
             info["model"] = r.stdout.strip()
-        r2 = sp.run(["C:/Users/bunana/AppData/Local/Microsoft/WinGet/Packages/Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe/platform-tools/adb.exe", "-s", config.device.serial, "shell", "getprop", "ro.product.brand"],
+        r2 = sp.run([adb_path, "-s", config.device.serial, "shell", "getprop", "ro.product.brand"],
                     capture_output=True, text=True, timeout=5,
                     encoding="utf-8", errors="replace")
         if r2.returncode == 0:
@@ -4581,7 +4581,9 @@ _AUDIO_RUNNER = None  # 后台线程
 @app.route("/api/audio/run", methods=["POST"])
 def api_audio_run():
     """启动听力专项自动化（练习+测试）
-    请求: {"mode": "all"|"practice"|"test", "units": [1], "test_units": [1]}
+    请求: {"mode": "all"|"practice"|"test", "units": [1], "test_units": [1],
+          "version": "湘少版", "grade": "六年级上册"}
+    ★ version/grade 可选；未传时使用默认值（兼容旧调用），避免硬编码导致无法切到用户目标年级。
     """
     global _AUDIO_RUNNER
     if task_status["running"]:
@@ -4591,13 +4593,18 @@ def api_audio_run():
     mode = data.get("mode", "all")
     units = data.get("units", [1])
     test_units = data.get("test_units", units)
-    test_paper = data.get("paper")  # A/B/AB/None —— 测试 A/B 卷选择
+    # ★ 年级/版本必须以 UI 年级版本栏所选为准，不写死：
+    #   优先请求体（前端显式传入）> 环境变量（调度器设置的 YYB_VERSION/YYB_GRADE）> 缺失则报错
+    version = (data.get("version") or os.environ.get("YYB_VERSION") or "").strip()
+    grade = (data.get("grade") or os.environ.get("YYB_GRADE") or "").strip()
+    if not version or not grade:
+        return jsonify({"error": "请先在网页「年级/版本栏」选择版本和年级后再运行（听力专项不再写死年级）"}), 400
 
     def _run():
         _register_task_thread()  # 记录线程 id，供"立即停止"注入异常
         try:
             set_running(f"听力专项[{mode}]")
-            log_msg(f"启动听力专项 {mode} 模式: 练习单元{units} 测试单元{test_units}")
+            log_msg(f"启动听力专项 {mode} 模式: {version} {grade} | 练习单元{units} 测试单元{test_units}")
             sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
             from modules.听力专项 import run_module, run_test_module
             from common.tools import dismiss_global_popups, close_ad, ensure_grade, settle_ads
@@ -4606,20 +4613,24 @@ def api_audio_run():
             d = _connect_device()
             log_msg("设备已连接")
 
+            # ★ 把用户所选版本/年级写入环境变量，保证模块内部（ensure_grade）与脚本命名一致
+            os.environ["YYB_VERSION"] = version
+            os.environ["YYB_GRADE"] = grade
+
             # 关广告 + 确认年级
             # ★ 用 settle_ads 循环「检测→关闭→再检测」消除"点空/广告刚弹出时误点"竞态
             settle_ads(d, wait_total=12)
-            ok = ensure_grade(d, "五年级上册", "湘少版")
-            log_msg("年级确认: 湘少版 五年级上册" if ok else "⚠ 年级切换失败，继续尝试")
+            ok = ensure_grade(d, grade, version)
+            log_msg(f"年级确认: {version} {grade}" if ok else f"⚠ 年级切换失败，继续尝试 ({version} {grade})")
 
             q1 = q2 = 0
             if mode in ("all", "practice"):
                 log_msg("▶ 开始练习部分...")
-                q1 = run_module(d)
+                q1 = run_module(d, units=units, grade=grade, version=version)
                 log_msg(f"练习部分完成: {q1} 题")
             if mode in ("all", "test"):
                 log_msg("▶ 开始测试部分...")
-                q2 = run_test_module(d, paper=test_paper)
+                q2 = run_test_module(d, test_units=test_units, grade=grade, version=version)
                 log_msg(f"测试部分完成: {q2} 题")
 
             log_msg(f"✅ 听力专项全部完成: 练习{q1} + 测试{q2} = {q1+q2} 题")
@@ -4634,6 +4645,7 @@ def api_audio_run():
     _AUDIO_RUNNER = threading.Thread(target=_run, daemon=True)
     _AUDIO_RUNNER.start()
     return jsonify({"status": "started", "mode": mode,
+                    "version": version, "grade": grade,
                     "units": units, "test_units": test_units})
 
 
@@ -4709,9 +4721,6 @@ def api_unit_run():
 
     data = request.get_json() or {}
     units = data.get("units", [1])
-    # ★ 2026-08-26：年级/版本从请求读取（默认继承主页当前），不再写死五年级——用户切到六上后可测六上卷
-    _g = data.get("grade", "") or ""
-    _v = data.get("version", "") or ""
 
     def _run():
         _register_task_thread()  # 记录线程 id，供"立即停止"注入异常
@@ -4726,15 +4735,14 @@ def api_unit_run():
             d = _connect_device()
             log_msg("设备已连接")
 
-            # 关广告 + 确认年级（仅当请求传了 grade 才切换；默认继承当前，不强制）
+            # 关广告 + 确认年级
             for _ in range(3):
                 dismiss_global_popups(d)
             close_ad(d)
-            if _g:
-                ok = ensure_grade(d, _g, _v or "湘少版")
-                log_msg(f"年级确认: {_v or '湘少版'} {_g}" if ok else "⚠ 年级切换失败，继续尝试")
+            ok = ensure_grade(d, "五年级上册", "湘少版")
+            log_msg("年级确认: 湘少版 五年级上册" if ok else "⚠ 年级切换失败，继续尝试")
 
-            q = run_module(d, units=units)
+            q = run_module(d)
             log_msg(f"✅ 单元自检完成: {q} 题")
             set_done()
         except SystemExit:
@@ -5037,24 +5045,6 @@ def _qreview_to_state(module: str, docx: str, unit, r, stage: str = "", q=None) 
         # 部分检查（无 False 但未全过，如仅 1 维）→ 保持 None（未定），不误报不通过
     # ★ module_qno：脚本 idx（后续由 report_exporter 按 stage 分组重置显示）
     # ★ progress：含具体位置（口语训练·U3·第2大题·第4小题），方便错题日志快速定位
-    # ★ 审查体系改造：脚本层子结构（合并进同一条基础层记录时挂到 questions[qid]["script"]）
-    _kb = r.knowledge_check or {}
-    if isinstance(_kb, dict):
-        _kb_ok = _kb.get("passed")
-        _kb_sum = (_kb.get("detail") or _kb.get("reason") or "").strip()
-        if not _kb_sum:
-            _kb_sum = "知识库查证" + ("通过" if _kb_ok else ("未检" if _kb_ok is None else "异常"))
-    else:
-        _kb_ok = None
-        _kb_sum = str(_kb)[:200]
-    _dim_keys = ("stem", "content", "image", "answer", "audio", "post_error")
-    _fail_layers = [(k, dims[k][1]) for k in _dim_keys if dims[k][0] is False]
-    if _fail_layers:
-        _reason_summary = "脚本核验不通过：" + "；".join(
-            f"{k}:{d}" for k, d in _fail_layers[:3])[:300]
-    else:
-        _reason_summary = (f"脚本核验通过（{len(passed)}/{len(checked)} 维）"
-                           if checked else "脚本核验未检（LLM 不可用）")
     return {
         "idx": r.idx, "total": 0,
         "question_type": r.question_type or "脚本题",
@@ -5077,51 +5067,34 @@ def _qreview_to_state(module: str, docx: str, unit, r, stage: str = "", q=None) 
                 f"第{r.idx}题（{r.question_type or '脚本题'}）",
         "options": "", "script_answer": r.script_answer or "",
         "note": f"LLM 知识性审查 · 脚本 {docx}",
-        # ★ 审查体系改造：分层标记 + 脚本层结论（边跑边审 → 单记录双层）
-        "layer": "script_only",
-        "script": {
-            "matched": True,
-            "status": "done",
-            "stem": dims["stem"][0], "content": dims["content"][0],
-            "image": dims["image"][0], "answer": dims["answer"][0],
-            "audio": dims["audio"][0], "post_error": dims["post_error"][0],
-            "stem_reason": dims["stem"][1], "content_reason": dims["content"][1],
-            "image_reason": dims["image"][1], "answer_reason": dims["answer"][1],
-            "audio_reason": dims["audio"][1], "post_error_reason": dims["post_error"][1],
-            "knowledge": _kb_ok, "knowledge_reason": _kb_sum,
-            "reason": _reason_summary,
-            "overall_passed": overall,
-            "overall_score": round(len(passed) / max(len(checked), 1), 2) if checked else 0.0,
-        },
     }
 
 
-def _match_basic_qid(module: str, q, rr, stage: str = "") -> str:
-    """★ 审查体系改造：把脚本审查结果合并进同一条基础层记录（边跑边审 → 单记录双层）。
+def _extract_unit_numbers(u):
+    """从选择器字符串中提取单元号列表字符串；支持 '单元1|A' / '1' / '1-3' / 'U6-U10' / 'NONE'。
 
-    优先口语训练结构 (unit, big, stage_idx) → auto-Q{big:02d}-{stage_idx:02d}；
-    其他模块按脚本 idx → auto-Q{idx:03d}，要求模块名（+stage 若都有）一致才合并。
-    找不到匹配 → 返回 ""（脚本题未在 App 出现过 → 保留独立脚本记录）。
+    返回: 归一化单元字符串（如 '1' / '1,2,3'），无有效单元时返回 0。
     """
-    qs = _inspection_state.get("questions", {})
-    _big = getattr(q, "big", 0) or 0
-    _no = getattr(q, "stage_idx", 0) or 0
-    _idx = rr.idx or getattr(q, "global_idx", 0) or 0
-    cands = []
-    if _big and _no:
-        cands.append(f"auto-Q{_big:02d}-{_no:02d}")
-    cands.append(f"auto-Q{int(_idx):03d}")
-    for c in cands:
-        rec = qs.get(c)
-        if rec is None:
+    s = str(u or "").strip()
+    if not s or s.upper() == "NONE":
+        return 0
+    # 去掉卷信息（|A/B/AB）
+    s = s.split("|")[0]
+    nums = set()
+    for part in re.split(r"[,，]", s):
+        part = part.strip()
+        if not part:
             continue
-        if rec.get("module") and module and rec.get("module") != module:
-            continue
-        _rec_stage = rec.get("stage") or ""
-        if _rec_stage and stage and _rec_stage != stage:
-            continue
-        return c
-    return ""
+        # 去掉 "单元"/"U"/"Unit" 前缀
+        part = re.sub(r"^(单元|Unit|U)\s*", "", part, flags=re.I)
+        m = re.match(r"^(\d+)(?:\s*[-~]\s*(\d+))?$", part)
+        if m:
+            lo = int(m.group(1))
+            hi = int(m.group(2)) if m.group(2) else lo
+            nums.update(range(lo, hi + 1))
+    if not nums:
+        return 0
+    return ",".join(str(n) for n in sorted(nums))
 
 
 def _run_llm_script_review(module: str, docx: str, version: str, unit, stage: str = ""):
@@ -5138,66 +5111,7 @@ def _run_llm_script_review(module: str, docx: str, version: str, unit, stage: st
     if not docx_path.exists():
         log_msg(f"❌ 脚本文件不存在: {docx}（请在页面上传脚本）", "error")
         return
-    # ★ 2026-08-26 修复：后端也校验【脚本文件名 vs 模块名】是否匹配！
-    #   前端单模块手动脚本兜底曾直接绑 reviewDocx 下拉的脚本（不校验模块名）→
-    #   用户测"巧记单词"却拿到"听力专项U6"脚本做 LLM 审查（模块和脚本毫无关系）。
-    #   这里做最终防线：文件名不含本模块关键词 → 视为无匹配脚本，仅基础完整性。
-    try:
-        _mod_kws = {
-            "听力专项": ("听力专项", "听力"),
-            "口语训练": ("口语", "朗读"),
-            "单元自检": ("单元自检", "单元检测"),
-            "知识过关": ("知识过关", "知识", "重点词汇", "重点句型"),
-            "巧记单词": ("巧记", "单词"),
-            "语音评测": ("语音评测", "语音"),
-        }.get(module, (module,))
-        if not any(k in docx for k in _mod_kws):
-            log_msg(f"ℹ {module}：脚本「{docx}」不是{module}模块的脚本，无匹配脚本 → 仅做基础完整性检查", "info")
-            return
-    except Exception:
-        pass
     _stage_label = f"·{stage}" if stage else ""
-    # ★ 审查体系改造：索引复用检查（已审查且脚本未变 → 跳过 LLM，复用结论）
-    _version = _inspection_state.get("version", "未知版本")
-    _grade = _inspection_state.get("grade", "未知年级")
-    _unit_key = str(unit).strip() if unit not in (None, "", 0, "0", "NONE") else "全部"
-    _index_key = f"{_version}/{_grade}/{module}/{_unit_key}"
-    _index = load_script_review_index()
-    _docx_hash = _script_file_hash(docx_path)
-    _cached = _index.get(_index_key, {})
-    if _cached.get("status") == "done" and _cached.get("script_hash") == _docx_hash:
-        _reuse_msg = f"{module}（{_unit_key}）已于 {_cached.get('reviewed_at','?')} 审查过，脚本未变，本次复用结论"
-        log_msg(f"ℹ {_reuse_msg}", "info")
-        _inspection_state["_reuse_info"] = _reuse_msg
-        # 从缓存结果文件加载历史审查结论，合并到 _inspection_state["questions"]
-        _cache_path = PROJECT_ROOT / "data" / "script_review_cache" / f"{_index_key.replace('/','_').replace(' ','')}.json"
-        try:
-            import json
-            if _cache_path.exists():
-                _cached_qs = json.loads(_cache_path.read_text(encoding="utf-8"))
-                if isinstance(_cached_qs, dict):
-                    # ★ 审查体系改造：合并脚本层进本轮 fresh 基础记录，而非整体覆盖。
-                    #   重跑模块后 auto-* 基础记录是新的 UI 证据，脚本层复用缓存结论；
-                    #   独立脚本记录直接恢复。
-                    _merged_cache = 0
-                    for _k, _v in _cached_qs.items():
-                        _cur = _inspection_state["questions"].get(_k)
-                        if _cur is not None and isinstance(_v, dict) \
-                                and isinstance(_v.get("script"), dict) and _k.startswith("auto-"):
-                            _cur["script"] = _v["script"]
-                            _cur["layer"] = "basic+script"
-                            if _v.get("note"):
-                                _cur["note"] = _v["note"]
-                            _merged_cache += 1
-                        else:
-                            _inspection_state["questions"][_k] = _v
-                    log_msg(f"✅ 已加载 {len(_cached_qs)} 题历史审查结论"
-                            f"（其中 {_merged_cache} 题脚本层合并进基础记录）", "success")
-        except Exception as _e:
-            log_msg(f"⚠ 加载缓存审查结论失败: {_e}，将重新审查", "warning")
-            # 缓存加载失败 → 回退到完整审查，不 return
-        else:
-            return  # 复用成功，跳过 LLM 审查
     log_msg(f"🧠 {module}{_stage_label} 正在用脚本「{docx}」做 LLM 知识性审查…（逐题核对题干/选项/答案，耗时较长）", "info")
     # ★ 听力专项多子模块：临时切换 set_current_module 上下文，确保 questions 用对的 stage 标记
     if stage:
@@ -5224,10 +5138,11 @@ def _run_llm_script_review(module: str, docx: str, version: str, unit, stage: st
         #   （全不匹配才提示），选 U4+U8 而脚本只有 U6-U10 时，U4 不在范围被静默忽略。
         if not agent.script_questions:
             _units_ok = sorted(u for u in getattr(agent, "script_units", set()) if u > 0)
-            # ★ 2026-08-26 精简提示：用户期望直接说"无覆盖脚本"即可，
-            #   不再罗列脚本名/期望单元/实际单元等细节（检查人员只需要知道"没得审"）
-            log_msg(f"ℹ {module}：无覆盖所选单元的脚本 → 跳过 LLM 脚本审查，仅基础完整性"
-                    f"（脚本实际单元: {_units_ok if _units_ok else '未解析到'}）", "info")
+            _units_want = normalize_units(_u)
+            _note = (f"脚本「{docx}」不含所选单元 {sorted(_units_want) if _units_want else '全部'}！"
+                     f"脚本实际单元: {_units_ok if _units_ok else '未解析到'}"
+                     f"（该单元无脚本覆盖，跳过 LLM 脚本审查，仅基础完整性）")
+            log_msg(f"ℹ {module} {_note}", "info")
             return
         # ★ 部分覆盖提示：所选单元里只有部分被脚本覆盖（如选 4,8 脚本只有 8）
         _units_want2 = normalize_units(_u)
@@ -5235,67 +5150,31 @@ def _run_llm_script_review(module: str, docx: str, version: str, unit, stage: st
         if _units_want2:
             _missing = sorted(u for u in _units_want2 if u not in _units_ok2)
             if _missing:
-                # ★ 2026-08-26 精简提示：只说哪些单元没覆盖（去掉脚本名/细节）
-                log_msg(f"ℹ {module}：单元 {_missing} 无覆盖脚本，仅做基础完整性检查", "info")
+                log_msg(
+                    f"ℹ {module} 所选单元 {sorted(_units_want2)} 中，"
+                    f"脚本「{docx}」未覆盖: {_missing}"
+                    f"（脚本实际单元: {sorted(u for u in _units_ok2 if u > 0) or '未解析到'}；"
+                    f"未覆盖单元仅做基础完整性检查）", "info")
         # ★ 不传 screenshots：自动化过程只有答错截图，旧截图与本次题目对不上会误导 LLM 判定
         #   → 统一走 LLM 脚本审查（_review_script_llm：脚本信息 → LLM 六维判定，理由具体有说服力）
         results = agent.review(screenshots={})
         n_pass = sum(1 for rr in results if rr.overall_passed)
-        # ★ 审查体系改造：边跑边审 → 单记录双层。
-        #   脚本审查结果优先合并进同一条基础层记录（questions[auto-qid]["script"]）；
-        #   未在 App 出现过的脚本题 → 保留独立脚本记录（layer=script_only）。
-        _merged_cnt = 0
         for q, rr in zip(agent.script_questions, results):
             qid = f"{module}-脚本-Q{rr.idx:02d}"
-            _state = _qreview_to_state(
+            _inspection_state["questions"][qid] = _qreview_to_state(
                 module, docx, unit, rr, stage=getattr(q, "stage", "") or "", q=q)
-            _m = _match_basic_qid(module, q, rr, stage)
-            if _m and _m in _inspection_state["questions"]:
-                _basic = _inspection_state["questions"][_m]
-                _basic["script"] = _state["script"]
-                _basic["layer"] = "basic+script"
-                _basic["note"] = (_basic.get("note") or "") + \
-                    f"；脚本核验·{docx}" if _basic.get("note") else f"脚本核验·{docx}"
-                _merged_cnt += 1
-            else:
-                _inspection_state["questions"][qid] = _state
         _save_inspection_state_merge()
+        # ★ 审查出错(任一维度不通过)的题目，把运行时题目截图贴到审查结果（替代"答错截图"）
+        try:
+            _attach_review_shots()
+        except Exception:
+            pass
         # ★ 触发实时错题报告（前端「📑 查看报告」）
         try:
             _live_regen_error_report()
         except Exception:
             pass
-        log_msg(f"✅ {module} LLM 知识性审查完成: {len(results)}题"
-                f"（通过{n_pass}，未检维度不计入不通过，其中 {_merged_cnt} 题已合并进对应基础层记录）", "success")
-        # ★ 审查体系改造：审查完成后写入索引 + 缓存文件
-        #   缓存同时包含：独立脚本记录 + 已合并进 auto-* 基础记录（含 script 层），
-        #   供重跑同模块时复用脚本层结论（保留本轮 fresh 的 UI 证据）。
-        try:
-            _index = load_script_review_index()
-            _index[_index_key] = {
-                "script": docx, "script_hash": _docx_hash,
-                "reviewed_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                "questions": len(results),
-                "status": "done",
-            }
-            save_script_review_index(_index)
-            # 缓存审查结论到独立文件（后续复用可直接加载）
-            _cache_dir = PROJECT_ROOT / "data" / "script_review_cache"
-            _cache_dir.mkdir(parents=True, exist_ok=True)
-            _cache_path = _cache_dir / f"{_index_key.replace('/','_').replace(' ','')}.json"
-            _cache_payload = {}
-            for q, rr in zip(agent.script_questions, results):
-                _qid_s = f"{module}-脚本-Q{rr.idx:02d}"
-                _m_s = _match_basic_qid(module, q, rr, stage)
-                if _m_s and _m_s in _inspection_state["questions"]:
-                    _cache_payload[_m_s] = _inspection_state["questions"][_m_s]
-                elif _qid_s in _inspection_state["questions"]:
-                    _cache_payload[_qid_s] = _inspection_state["questions"][_qid_s]
-            _cache_path.write_text(
-                json.dumps(_cache_payload, ensure_ascii=False, indent=2),
-                encoding="utf-8")
-        except Exception as _e:
-            pass
+        log_msg(f"✅ {module} LLM 知识性审查完成: {len(results)}题（通过{n_pass}，未检维度不计入不通过）", "success")
     except Exception as e:
         log_msg(f"❌ {module} LLM 知识性审查失败: {e}", "error")
 
@@ -5359,8 +5238,12 @@ def api_modules_run():
     # ★ 设备就绪检查：没连设备直接报错返回，不启动线程（避免 u2.connect 挂起卡住）
     try:
         sys.path.insert(0, str(Path(__file__).parent / "scripts"))
-        from common.device import device_ok as _dev_ok
-        cur_serial = os.environ.get("ANDROID_SERIAL") or ""
+        from common.device import device_ok as _dev_ok, set_device as _set_device
+        # 优先用前端动态选择的设备，未选择则用 config.yaml 里的 serial 兜底
+        # （避免页面刷新/服务器重启后 ANDROID_SERIAL 丢失，导致显示“已连接”却无法开始）
+        cur_serial = os.environ.get("ANDROID_SERIAL") or load_config().device.serial or ""
+        if cur_serial:
+            _set_device(cur_serial)
         if not _dev_ok(cur_serial or None):
             log_msg(f"❌ 设备未连接，无法开始检测（当前设备: {cur_serial or '未选择'}）", "error")
             return jsonify({"error": f"设备未连接（当前设备: {cur_serial or '未选择'}），请先连接设备"}), 400
@@ -5408,20 +5291,16 @@ def api_modules_run():
             #   模块间 _back_to_home 切主页继续下一模块；LLM 审查经 on_module_done 回调
             global _GLOBAL_DOCX_MAP
             _GLOBAL_DOCX_MAP = docx_map or {}
-            # ★ 2026-08-30 修复：合并同模块的脚本匹配日志为一条（练习+测试同模块只打一次），
-            #   避免用户测听力专项·练习+·测试时看到 2 条相同"有匹配脚本"日志
-            _logged_mod = set()
             def _on_module_done(_mod, _res):
-                _docx = (docx_map or {}).get(_mod, "")
                 _stage = (_res or {}).get("stage", "")
-                if _mod in _logged_mod:
-                    return  # 同模块只打一次（不再按 stage 重复）
-                _logged_mod.add(_mod)
+                # ★ 2026-08-29：听力专项练习/测试脚本分开匹配
+                #   docxMap key: 听力专项_练习 / 听力专项_测试；回退到旧 key 听力专项 兼容
+                _docx_key = f"{_mod}_{_stage}" if _stage else _mod
+                _docx = (docx_map or {}).get(_docx_key, "") or (docx_map or {}).get(_mod, "")
                 if not _docx:
-                    log_msg(f"🔍 {_mod} 无匹配脚本 → 仅基础完整性检查", "info")
+                    log_msg(f"🔍 {_mod}{'·' + _stage if _stage else ''} 无匹配脚本 → 仅基础完整性检查", "info")
                     return
-                _stage_txt = f"（{_stage}）" if _stage else ""
-                log_msg(f"📖 {_mod}{_stage_txt} 有匹配脚本「{_docx}」→ 自动化后追加 LLM 知识性审查", "info")
+                log_msg(f"📖 {_mod}{'·' + _stage if _stage else ''} 有匹配脚本「{_docx}」→ 自动化后追加 LLM 知识性审查", "info")
                 # ★ 修复模块间卡顿：LLM 审查改异步线程，不阻塞 run_all 的模块循环
                 #   （原同步调用：听力专项完成后在主页面卡几分钟等逐题 LLM 审查，
                 #     审查完才继续口语训练 → 用户实测"主页卡好久"）
@@ -5429,19 +5308,11 @@ def api_modules_run():
                 #   ★ 2026-08-25 修复：传完整单元范围（"2,4"/"2-4"），不再截断成第一个单元
                 #     （用户选 U2、U4 时旧逻辑只审 U2，U4 被静默丢弃）
                 #   ★ 防御："NONE"哨兵（前端未勾选）→ 不是数字，忽略
-                _u = 0
                 if _stage == "测试":
                     _u_raw = units.get("听力专项_测试", "") or units.get(_mod, "")
                 else:
                     _u_raw = units.get(_mod, "") or 0
-                try:
-                    _u_str = str(_u_raw).strip()
-                    if _u_str and _u_str.upper() != "NONE" and _u_str[0].isdigit():
-                        _u = _u_str            # ★ 完整范围（"2,4" / "2-4"），归一化交给 review_agent
-                    else:
-                        _u = 0
-                except Exception:
-                    _u = 0
+                _u = _extract_unit_numbers(_u_raw)  # 支持 '单元1|A' / '1' / '1-3' / 'U6-U10'
                 try:
                     _t = threading.Thread(
                         target=_run_llm_script_review,

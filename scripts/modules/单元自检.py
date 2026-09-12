@@ -203,7 +203,7 @@ def _wait_page_ready(d, q, wait_s=10):
     return False
 
 
-def _wait_new_ready(d, q, max_wait=1.8):
+def _wait_new_ready(d, q, max_wait=2.5):
     """★ 速度优化：点"检查/下一题"后轮询等待新题就绪，就绪立即返回（不固定 sleep）。
     就绪条件（任一）：
       - 出现"下一题"按钮（答错状态）
@@ -240,7 +240,7 @@ def _wait_new_ready(d, q, max_wait=1.8):
                     return True
         except Exception:
             pass
-        time.sleep(0.2)
+        time.sleep(0.5)
     return False
 
 
@@ -267,10 +267,11 @@ def _answer_loop(d, max_q=200):
                 return
             from common.gen_script import _extract_ui_question
             _qi = _extract_ui_question(_xml_src)
+            # ★ 听音题直接跳过（题干含"听"字：听词汇/听句子/听对话/听录音），
+            #   不调 LLM 判定答案（避免无用功），add() 内部也会二次过滤
             _stem0 = (_qi["stem"] or "").strip()
-            # ★ 2026-08-26 不再因"听"字跳过：单元自检含听力题（题干可见），
-            #   也应收集进脚本（allow_listen=True 让 add() 放行听音题）。
-            #   仅当题干空且无答案时才不收集（add() 内部兜底）。
+            if not _stem0 or "听" in _stem0:
+                return
             _ans = _opt or ""
             # 若未提供答案（填空/排序等），用 LLM 判定（题目内容可见时可靠）
             if not _ans and _stem0:
@@ -278,28 +279,15 @@ def _answer_loop(d, max_q=200):
                     from src.reviewer_common import LLMClient
                     _opt_str = " ".join(_qi["options"]) if _qi["options"] else "（无选项）"
                     _llm_ans = (LLMClient.from_config().ask(
-                        f"六年级英语题，题干：{_stem0}，选项：{_opt_str}。"
+                        f"五年级英语题，题干：{_stem0}，选项：{_opt_str}。"
                         f"请直接回答正确答案是哪个选项（只输出选项内容，不要解释）") or "").strip()
                     if _llm_ans and len(_llm_ans) < 40:
                         _ans = _llm_ans
                 except Exception:
                     pass
-            # ★ 2026-08-30 修复：图文匹配/图文选择/图片题——选项为空 + 题干含题型关键词，
-            #   LLM 容易给借口（"请提供图片我才能判"），不应写入脚本答案。
-            #   改为统一的"人工核查（图片题）"标记，让检查员上传截图核查。
-            _PIC_QT_KW = ("图文匹配", "图文选择", "图文判断", "图片题", "图文对话", "看图选")
-            _is_picture_q = (not _qi.get("options")) and any(k in _stem0 for k in _PIC_QT_KW)
-            if _is_picture_q and _ans:
-                # LLM 显然给了"借口 / 套话" → 拒绝写入，避免污染脚本答案
-                if any(k in _ans for k in ("请提供", "发给我", "无法判断", "无法确定", "需要题目", "需要图片")):
-                    _ans = "人工核查（图片题）"
-                else:
-                    # 即使不是借口，无选项题也不强写字母答案
-                    _ans = "人工核查（图片题）"
             if _stem0 and _ans:
                 _coll.add(qno=q, stem=_stem0, options=_qi["options"],
-                          answer=_ans, qtype=_qi["qtype"] or "单元自检", unit=_cur_unit,
-                          allow_listen=True)
+                          answer=_ans, qtype=_qi["qtype"] or "单元自检", unit=_cur_unit)
         except Exception:
             pass
 
@@ -375,29 +363,9 @@ def _answer_loop(d, max_q=200):
         _has_letter = bool(re.search(r'text="[TFABCDE]"', xml0))
         _fill_hint = any(kw in xml0 for kw in
                          ('填空', '补全', '每空', '填写', '填词', '完成小短文'))
-        # ★ 选词填空优先：题干含"选词/方框/选词填空"且无 EditText → 用选词专用处理
-        #   ★ 2026-08-26 放宽触发条件：不依赖 'tv_sort'（部分题目空位用别的方式标识，
-        #     如 LinearLayout 方框/图片），仅凭"选词/从方框选择/选择单词填入"即可进入
-        #     ，避免落到"未知题型"导致答失败。_handle_word_fill 内部再按实际结构识别空位。
-        #   ★ 2026-08-30 再放宽：题干含"选择对应的单词/看图选词/读图片选词"等变体
-        #     （三年级单元自检"读图片，选择对应的单词"空位=select_tv 方框+底部 select_btn
-        #     单词栏，结构与选词填空一致），或页面已含 select_tv+select_btn 结构也进。
-        #   ★ 2026-08-30 二次放宽：29题"根据情景，选择合适的句子补全对话"选项是长句
-        #     select_btn 容器宽964，也走选词填空逻辑。关键词加"合适的句子/补全对话/情景"。
-        #   ★ 注意：需在填空(_fill_hint 含'补全')之前判断——否则"补全对话"被填空分支吃掉。
-        _word_fill_hint = (
-            (
-                any(kw in xml0 for kw in (
-                    '选词填空', '选词', '从方框中选择', '选择单词填入',
-                    '单词填入', '方框中选择',
-                    '选择对应的单词', '选择正确的单词', '看图选词', '看图片选词',
-                    '读图片', '看图选择', '选择对应',
-                    '合适的句子', '补全对话', '根据情景', '选择合适的句子',
-                ))
-                or ('select_tv' in xml0 and 'select_btn' in xml0)  # ★ 结构兜底：已有空位+词库
-            )
-            and not _has_edittext
-        )
+        # ★ 选词填空优先：题干含"选词"且页面有 tv_sort 空位结构 → 用选词专用处理
+        #   （选词填空不是打字输入，是点空位→选词栏→点单词；用户确认流程）
+        _word_fill_hint = ('选词' in xml0) and ('tv_sort' in xml0) and not _has_edittext
         if _word_fill_hint:
             from engine import _handle_word_fill
             if _handle_word_fill(d, {}):
@@ -496,9 +464,9 @@ def _answer_loop(d, max_q=200):
                 pass
             time.sleep(0.3)
             # 等"检查"出现并点击
-            for _ in range(5):
+            for _ in range(8):
                 try:
-                    if d(text="检查").exists(timeout=0.05):
+                    if d(text="检查").exists(timeout=0.1):
                         d(text="检查").click()
                         print(f"      → 检查")
                         time.sleep(0.3)
@@ -602,26 +570,41 @@ def _enter_unit(d, unit_num):
                 row = e
                 break
         if row:
-            row_y = row.bounds[1]
+            row_top = row.bounds[1]
+            row_bottom = row.bounds[3]
+            row_center_y = (row_top + row_bottom) // 2
             # 在该行附近找按钮（去答题/重新答题/继续答题/已评测 —— 多状态）
-            # ★ 用户确认：默认先测前面的单元（Unit1 就在最顶部），找到同行按钮
-            #   就**直接点击**，绝不下滑！（之前 y<350 遮挡区过滤 → 下滑反而把
-            #   Unit1 滚出屏幕 → 永远找不到 → 死循环）
-            # ★ 修复（用户实测）：标题行和按钮行距可能 >300（如标题在行首、按钮
-            #   在行尾），dy<300 不命中 → 下滑 → 目标滚出屏幕。放宽到 500。
+            # ★ 不再用 "第一个 y 差 < 500 就点"，因为上一行按钮可能落在 500 范围内
+            #   （如 Unit2 标题在 y=1313，Unit1 的"去答题"在 y=945，差 368 < 500，会误点 Unit1）。
+            #   改为：在所有候选按钮里选**垂直中心与标题中心最近**的一个，且距离 < 350；
+            #   若找不到，再放宽到按钮与标题行有垂直重叠。
+            candidates = []
             for e in elements:
                 t = (e.text or "").strip()
-                if t in ("去答题", "重新答题", "继续答题"):
-                    dy = abs(e.bounds[1] - row_y)
-                    if dy < 500:  # 同行/近行 → 直接点击（顶部版本条只是视觉覆盖，可点中）
-                        try:
-                            e.click()
-                        except Exception:
-                            d.click((e.bounds[0]+e.bounds[2])//2, (e.bounds[1]+e.bounds[3])//2)
-                        print(f"    ✅ 点击[{t}] (U{unit_num})")
-                        time.sleep(0.6)
-                        _after_enter_unit(d)
-                        return True
+                if t not in ("去答题", "重新答题", "继续答题"):
+                    continue
+                btn_top = e.bounds[1]
+                btn_bottom = e.bounds[3]
+                btn_center_y = (btn_top + btn_bottom) // 2
+                dy = abs(btn_center_y - row_center_y)
+                if dy < 350:
+                    candidates.append((dy, e, t))
+                    continue
+                if btn_top < row_bottom and btn_bottom > row_top:
+                    candidates.append((dy, e, t))
+            if candidates:
+                candidates.sort(key=lambda x: x[0])
+                _, best, t = candidates[0]
+                bx = (best.bounds[0] + best.bounds[2]) // 2
+                by = (best.bounds[1] + best.bounds[3]) // 2
+                print(f"    ✅ 点击[{t}] (U{unit_num}) @({bx},{by})，距标题中心 {candidates[0][0]}px")
+                try:
+                    best.click()
+                except Exception:
+                    d.click(bx, by)
+                time.sleep(0.6)
+                _after_enter_unit(d)
+                return True
         # 未找到目标行 → 下滑（只有找不到目标单元才下滑）
         S_swipe(d, 540, 1800, 540, 600, 0.3); time.sleep(0.4)
 

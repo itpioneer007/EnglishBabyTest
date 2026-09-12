@@ -403,7 +403,8 @@ class ListeningStrategy(DocxStrategy):
                 num = int(m.group(1))
                 pending = YingYuBaoQuestion(
                     unit=current_unit, stage=current_stage,
-                    stage_idx=num,   # ★ global_idx 由 _finalize 统一分配（全局唯一）
+                    stage_idx=num,   # ★ global_idx 由 _finalize 统一分配（全局唯一）；
+                                     #   stage_idx 原始为 docx 题号，parse 末尾统一重排为每阶段 1..N
                 )
                 if re.match(r'^[A-C]\.', content):
                     # 题干缺失：数字后直接是选项
@@ -477,6 +478,22 @@ class ListeningStrategy(DocxStrategy):
 
         # 最后一道题
         _finalize(pending)
+
+        # ★ 修复（2026-08-29）：stage_idx 重排为每 (unit, stage) 内按【文档出现顺序】1..N 连续编号
+        #   原因：docx 原始题号可能乱序（实测 260717 二校：综合进阶为 15,1,2,3,4,5,11,12,13,14；
+        #   难点突破为 15,1,2,3,7,8,9,10 —— 作者编辑时删掉部分题、第一题残留"15."）。
+        #   若直接用 docx 原始数字当 stage_idx，自动点击端按 App 显示顺序记为干净的 1,2,3... 时，
+        #   (unit, stage, stage_idx) 匹配会整段错位：综合进阶第1题(idx=1) 对到脚本"docx 1."（实际第2题），
+        #   而脚本首题(stage_idx=15) 永远无人命中。重排后脚本 stage_idx == App 阶段内显示序号，匹配才正确。
+        #   注意：重排在全部解析完成后进行，不影响上文口语训练句子合并等对原始 stage_idx 的依赖。
+        _stage_counter = {}
+        for q in questions:
+            if not q.unit or not q.stage:
+                continue
+            _k = (q.unit, q.stage)
+            _stage_counter[_k] = _stage_counter.get(_k, 0) + 1
+            q.stage_idx = _stage_counter[_k]
+
         return questions
 
     def _handle_extra_meta(self, t: str, pending) -> bool:

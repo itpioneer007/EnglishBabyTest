@@ -41,18 +41,25 @@ class ImageBank:
                         self.base_dirs = [Path(x) for x in d]
             except Exception:
                 pass
-        # 如果都没配, 用默认值并在DEFAULT_BASE下找 U*图片/ 目录
+        # 如果都没配, 仅在 DEFAULT_BASE 真实存在时才用它兜底；否则留空（可选项，不报错）
         if not self.base_dirs:
-            self.base_dirs = [Path(self.DEFAULT_BASE)]
+            _default = Path(self.DEFAULT_BASE)
+            if _default.exists():
+                self.base_dirs = [_default]
         self.index: dict = {}
         self._loaded = False
 
     def load(self, unit: int = None):
-        """加载所有目录中指定单元的图片"""
+        """加载所有目录中指定单元的图片（目录缺失自动跳过，不影响主流程）"""
+        # ★ 可选项：未配置或目录不存在时直接跳过，仅影响配图比对，不报错
+        if not self.base_dirs:
+            print("[ImageBank] 未配置参考图目录，跳过配图比对（不影响主流程）")
+            self._loaded = True
+            return
         dirs_found = []
         for base_dir in self.base_dirs:
             if not base_dir.exists():
-                print(f"[ImageBank] 目录不存在: {base_dir}")
+                print(f"[ImageBank] 参考图目录不存在，已跳过: {base_dir}")
                 continue
             if unit:
                 dirs_found.extend(base_dir.glob(f"U{unit}图片*"))
@@ -60,7 +67,8 @@ class ImageBank:
                 dirs_found.extend(base_dir.glob("U*图片*"))
 
         if not dirs_found:
-            print(f"[ImageBank] 在 {[str(d) for d in self.base_dirs]} 下未找到 U*图片* 目录")
+            print(f"[ImageBank] 在 {[str(d) for d in self.base_dirs]} 下未找到 U*图片* 目录，跳过配图比对")
+            self._loaded = True
             return
 
         for d in sorted(set(dirs_found)):

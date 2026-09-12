@@ -6,7 +6,7 @@ close_ad / ensure_grade / run_single_module 等核心逻辑
 import uiautomator2 as u2
 import os, time, re
 from config import MODULE_CONFIG, GLOBAL_POPUPS, APP_PACKAGE, GRADE_LEVEL, BOOK_VERSION
-from common.tools import S, S_swipe, S_h, S_w, applock_blocked, settle_ads
+from common.tools import S, S_swipe, S_h, S_w, applock_blocked, settle_ads, back_to_home, close_ad
 from common.logger import step_log, should_stop
 from question_types import detect_question_type
 
@@ -252,7 +252,7 @@ def safe_click(d, text, timeout=3) -> bool:
 def dismiss_global_popups(d):
     for t in GLOBAL_POPUPS:
         try:
-            if d(text=t).exists(timeout=0.05):
+            if d(text=t).exists(timeout=0.15):
                 d(text=t).click()
                 print(f"    🔔 全局弹窗: '{t}'")
                 time.sleep(0.35)
@@ -280,8 +280,14 @@ def scroll_and_find(d, text, max_swipes=8) -> bool:
 def ensure_grade(d, grade_level, book_version=""):
     """
     确保当前年级匹配。不匹配则自动切换。
-    流程：检测主页版本文字 → 不匹配则点版本号 → 选年级 → 确认
+    流程：确保在英语宝前台并回主页 → 检测主页版本文字 → 不匹配则点版本号 → 选年级 → 确认
     """
+    # ★ 先确保在英语宝前台：任务启动时手机可能在模块内部/答题页/弹窗/桌面，
+    #   直接点版本号会失败。先按 back 回主页（含冷启动兜底）。
+    if not back_to_home(d, grade_level=grade_level):
+        print("  ❌ 无法回到主页，切换中止")
+        return False
+
     # 主页版本号如 "湘少版（2024审定）五年级上册"
     if d(textContains=grade_level).exists(timeout=3):
         if d(text="教材精学").exists(timeout=1):
@@ -329,18 +335,51 @@ def ensure_grade(d, grade_level, book_version=""):
         print("❌ 年级切换失败")
     return ok
 
-def back_to_home(d, grade_level):
-    """从模块内部回到年级主页：按 back 直到看到年级文字"""
-    for _ in range(8):
-        dismiss_global_popups(d)
-        if d(textContains=grade_level).exists(timeout=1):
+def back_to_home(d, grade_level=""):
+    """从模块内部回到年级主页：按 back 直到看到年级文字或主页特征；
+    若按不回，则冷启动英语宝回主页。"""
+    home_keywords = ["我的练习", "专项突破", "教材精学", "学习计划", "成长记录"]
+    for _ in range(10):
+        try:
+            xml = d.dump_hierarchy() or ""
+        except Exception:
+            xml = ""
+        if grade_level and grade_level in xml:
+            return True
+        if any(kw in xml for kw in home_keywords):
             return True
         try:
             d.press("back")
         except Exception:
             pass
         time.sleep(0.5)
-    return d(textContains=grade_level).exists(timeout=2)
+    # 末轮兜底
+    try:
+        xml = d.dump_hierarchy() or ""
+    except Exception:
+        xml = ""
+    if grade_level and grade_level in xml:
+        return True
+    if any(kw in xml for kw in home_keywords):
+        return True
+    # ★ 兜底：冷启动英语宝回主页
+    print("  🔄 back 回主页失败，冷启动英语宝")
+    try:
+        d.press("home"); time.sleep(0.4)
+        d.app_start(APP_PACKAGE); time.sleep(3.5)
+    except Exception as _e:
+        print(f"  ⚠ 冷启动异常: {_e}")
+        return False
+    # 冷启动后再检查一次
+    try:
+        xml = d.dump_hierarchy() or ""
+    except Exception:
+        xml = ""
+    if grade_level and grade_level in xml:
+        return True
+    if any(kw in xml for kw in home_keywords):
+        return True
+    return False
 
 # ==================== ⑦ 核心：单模块检测 ====================
 
@@ -375,33 +414,24 @@ def _handle_sort_question(d, config):
     step_log("🔢 检测到排序题，开始处理…", "step")
 
     # ── 先区分两种子题型 ──
-    # ★ 2026-08-30 修复：图片排序定位用 img_sort_btn 节点（App 给图片加的特定 rid），
-    #   不再用"宽度 300-700"模糊匹配——后者会把序号圆圈/干扰元素误当图片，导致
-    #   模式A 点到错误元素（用户实测"点完①就点⑤"）
+    # 图片排序特征：y 700-1900 有宽度 300-700 的图片卡片
+    # （排除全屏大容器 宽>800，那是句子排序的整块布局）
+    has_big_image = False
     big_images = []
-    try:
-        for e in d.xpath('//*[contains(@resource-id,"img_sort_btn")]').all() or []:
+    for e in (d.xpath('//*[@clickable="true"]').all() or []):
+        b = e.bounds
+        w = b[2] - b[0]
+        if S_h(d, 700) < b[1] < S_h(d, 1900) and 300 < w < 700:
+            has_big_image = True
             big_images.append(e)
-    except Exception:
-        pass
-    if not big_images:
-        # 兜底：用 clickable + 大尺寸启发式（兼容旧版 App）
-        for e in (d.xpath('//*[@clickable="true"]').all() or []):
-            b = e.bounds
-            w = b[2] - b[0]
-            if S_h(d, 700) < b[1] < S_h(d, 1900) and 300 < w < 700:
-                big_images.append(e)
-    has_big_image = bool(big_images)
 
     if has_big_image:
         # ── 模式A：图片排序 ── 直接点图片，序号自动填充
         print(f"    🖼 图片排序（模式A）：直接点图片，序号自动填充")
         step_log("🖼 图片排序：直接点图片，序号自动填", "step")
         clicked_keys = set()
-        # ★ 2026-08-30 全局最大轮次保护：防死循环（用户实测 14:19 反复刷同一题
-        #   完整性检查/排序题日志）。任何 tab/层级不能再无限循环
-        _MAX_ROUNDS = len(big_images) * 3 + 8
-        for _round in range(_MAX_ROUNDS):
+        # 依次点击所有大图片（每张点一次）
+        for _ in range(len(big_images) + 2):
             progress = False
             for elem in big_images:
                 b = elem.bounds
@@ -417,10 +447,6 @@ def _handle_sort_question(d, config):
                 except Exception:
                     pass
             if not progress:
-                break
-            # ★ 限频：超过 max_轮强制跳出（防 dump 抖动把 clicked_keys 弄错）
-            if _round >= len(big_images) * 2 + 5:
-                print(f"    ⚠ 模式A 超过最大轮次 {_MAX_ROUNDS}，强制完成")
                 break
         # 点完所有图片 → 出现"检查" → 点它
         for _ in range(8):
@@ -466,43 +492,10 @@ def _handle_sort_question(d, config):
         """检测底部序号按钮位置。
         序号按钮特征：y 1680-2200、宽 200-300、x 起点为 0 或 242 的倍数（不是 58）
         ★ 关键：x 起点 58 是句子方框，必须排除！
-        ★ 2026-08-30 修复（30题"给句子排序"实测）：序号按钮是 CheckBox text=1/2/3/4
-          （y 1485-1611、宽 114），旧的"y1680-2200 宽200-300"启发式完全不匹配
-          → 走了终极兜底 5 等分点错位置(y2040 底部手势区)。
-          ★ 新策略：优先 dump 精确找 text=纯数字 1-9 的可点节点（y 400-2200），
-          这些就是序号按钮；找不到才回退旧启发式。
         ★ dump 找不到时（图片绘制的序号按钮）→ 坐标兜底：
           在底部大区域（y>1700 宽>800）5 等分估算序号按钮位置
         """
-        import re as _re
         btns = []
-        # ① 首选：dump 找 text=纯数字(1-9) 的可点击节点（序号按钮；含 CheckBox/LinearLayout 容器）
-        try:
-            _xml_n = d.dump_hierarchy()
-            for m in _re.finditer(r'<node[^>]*text="([1-9])"[^>]*>', _xml_n):
-                tag = m.group(0)
-                bm = _re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
-                if not bm:
-                    continue
-                x1, y1, x2, y2 = int(bm.group(1)), int(bm.group(2)), int(bm.group(3)), int(bm.group(4))
-                w = x2 - x1
-                # 序号按钮：宽度 60-350（排除全屏/大图/极小噪点）、y 400-2200（排除状态栏/导航）
-                if S_h(d, 400) < y1 < S_h(d, 2200) and 60 <= w <= 350:
-                    # 排除句子方框（text=句子本身带数字？）→ 序号节点宽度窄（<200 通常）
-                    btns.append(((x1 + x2) // 2, (y1 + y2) // 2, x1, y1, int(m.group(1))))
-        except Exception:
-            pass
-        # 去重（同坐标容器+子节点可能重复）
-        _uniq = {}
-        for b in btns:
-            _uniq[(b[0], b[1])] = b
-        btns = list(_uniq.values())
-        if btns:
-            # 按序号 1,2,3... 排序（序号按钮通常按序排列）
-            btns.sort(key=lambda t: t[4])
-            return btns
-
-        # ② 旧启发式（无数字文本时）：clickable + y 1680-2200 + 宽 200-300
         for e in (d.xpath('//*[@clickable="true"]').all() or []):
             b = e.bounds
             w = b[2] - b[0]
@@ -511,7 +504,7 @@ def _handle_sort_question(d, config):
             if S_h(d, 1680) < b[1] < S_h(d, 2200) and 200 < w < 300 and b[0] != 58:
                 cx = (b[0] + b[2]) // 2
                 cy = (b[1] + b[3]) // 2
-                btns.append((cx, cy, b[0], b[1], 0))
+                btns.append((cx, cy, b[0], b[1]))
         # 按 y 然后 x 排序（左上优先）
         btns.sort(key=lambda t: (t[1], t[0]))
 
@@ -527,7 +520,7 @@ def _handle_sort_question(d, config):
                         area_y = (b[1] + b[3]) // 2 + 30
                         step = (area_x2 - area_x1) // 10
                         for i in range(5):
-                            btns.append((area_x1 + step * (2 * i + 1), area_y, 0, 0, i + 1))
+                            btns.append((area_x1 + step * (2 * i + 1), area_y, 0, 0))
                         break
             except Exception:
                 pass
@@ -537,41 +530,22 @@ def _handle_sort_question(d, config):
                 w = d.window_size()[0]
                 step = w // 10
                 for i in range(5):
-                    btns.append((step * (2 * i + 1), int(h * 0.85), 0, 0, i + 1))
+                    btns.append((step * (2 * i + 1), int(h * 0.85), 0, 0))
         return btns
 
     # 点 1-5 序号：每次动态检测序号栏，序号栏空了（全部填完）才停止。
     # ★ 关键修复：之前"点一个序号发现检查出现就 break"是错的——点第一个序号后
     #   "检查"就已出现，但必须填满所有序号才能提交，否则会漏答（只填1个就检查）。
-    # ★ 2026-08-30 修复：每个序号点击前记录已点坐标 + 布局稳定，去重防止死循环
-    #   （用户实测"点了 1 和 5"——同一坐标被反复点击 + 序号没消耗导致循环永远停不下来）
-    clicked_btn_keys: set = set()
-    _stuck_count = 0
-    for target in range(1, 8):   # 最多 7 次：5 个序号 + 2 容错
+    for target in range(1, 6):
+        # 每次重新检测序号栏（点完序号后该序号被消耗、栏位变化）
         btns = _find_num_btns()
         if not btns:
             print(f"      → 序号栏已空，第{target-1}个序号填完")
             break
-        # 去重：跳过坐标在已点集合里的（序号没消耗又被找回）
-        _fresh_btn = None
-        for _b in btns:
-            if (_b[2], _b[3]) not in clicked_btn_keys:
-                _fresh_btn = _b
-                break
-        if _fresh_btn is None:
-            _stuck_count += 1
-            if _stuck_count >= 2:
-                print(f"      ⚠ 没有新序号按钮可点，防卡跳出")
-                break
-            # 兜底：仍尝试点第一个（兜底，避免因 dump 抖动漏检）
-            _fresh_btn = btns[0]
-        else:
-            _stuck_count = 0
         try:
-            d.click(_fresh_btn[0], _fresh_btn[1])
-            clicked_btn_keys.add((_fresh_btn[2], _fresh_btn[3]))
-            print(f"      → 点序号{target} @({_fresh_btn[0]},{_fresh_btn[1]})")
-            time.sleep(0.55)
+            d.click(btns[0][0], btns[0][1])
+            print(f"      → 点序号{target} @({btns[0][0]},{btns[0][1]})")
+            time.sleep(0.5)
         except Exception:
             pass
 
@@ -616,116 +590,274 @@ def _get_qno(d):
     return 0, 0
 
 
-def _handle_sentence_sort(d, config):
-    """处理「句子圆圈排序题」（听录音/直接给句子排序）
+def _find_sort_sentence_rows(xml):
+    """统一识别「句子排序题」页面上的句子行。
 
-    ★ 用户申明（2026-08-30）：这类题【直接点击每个句子，序号自动排上】——
-      不点方框、不点底部序号按钮！每点一个句子 → 自动分配当前最小序号(1,2,3...)，
-      全部句子点完 → 出现「检查」。
+    返回：[(sentence_cx, sentence_cy, y1, txt, circle_cx, circle_cy, is_filled), ...]
+      按 y 坐标从上到下排序。
+      is_filled=True 表示句子左侧小圆圈已有序号数字（已填）。
+      is_filled=False 表示小圆圈 text 为空（未填）。
 
-    ★ 与空方框排序题的区别（防混淆）：
-      - 句子圆圈排序题：句子前面是「圆圈」（待填序号），**没有底部序号按钮**，
-        **不需要激活**——直接按顺序把句子全部点击掉，序号自动按 1,2,3... 依次填入
-        （点击句子 → 自动分配当前最小序号；全部句子点完 → 出现「检查」）
-      - 空方框排序题：句子是空方框，需要「点方框激活输入框 → 底部序号按钮才出现 →
-        点序号填入」——那个用 _handle_sort_question
-
-    识别特征：有 ≥3 个整行句子 LinearLayout（宽 > 800，y 700-1900）。
-    注意：**没有底部序号按钮**（点击句子自动填），这是与空方框题的最大区别。
-    ★ 实例（30题"给下列句子排序，组成一段通顺的对话"）：4 个句子 CheckBox
-      （text='Good morning, Peter.' 等，宽 936，y 682-1384），点句子自动排号。
+    兼容性：
+      - 句子控件可能是 CheckBox / TextView / LinearLayout
+      - 小圆圈一定是 CheckBox，text 为空或数字
+      - 对弹窗遮挡/布局变化更鲁棒（放宽宽度、y 范围阈值）
     """
-    import time
-    print(f"    📝 句子圆圈排序题：直接按顺序点击句子（序号自动填入）")
-    step_log("📝 圆圈排序题：直接点句子", "step")
+    import re
+    sentences = []   # (x1, cx, cy, y1, y2, txt)
+    circles = []     # (cx, cy, y1, x1, x2, txt, is_filled)
 
-    def _find_sentences():
-        """找未填的整行句子（宽 > 800，y 700-1900）。
-        两种控件形态都要支持：
-        - LinearLayout clickable=true（旧版句子）
-        - CheckBox / option_cb（圆圈排序题：checkable=true 但 clickable=false，
-          只能通过 dump 正则匹配 class="android.widget.CheckBox"，text 是句子内容）
-        ★ 圆圈排序题判断"已填"的关键：句子旁的小圆圈 CheckBox（86x86，text 空）
-          点击句子后小圆圈 checked=true 且 text 变成序号数字；未填则 checked=false,text=''
-          句子本身的 checked 永远 false，不能用于判断！
-        """
-        import re
-        xml = d.dump_hierarchy()
-        # 收集两类 CheckBox：句子（宽>800 带文本）和小圆圈（宽60-120 text 空）
-        sentences = []   # (cx, cy, y1)
-        circles = []     # (cx, cy, y1, checked)
-        for m in re.finditer(r'<node[^>]*class="android\.widget\.CheckBox"[^>]*/?>', xml):
+    # 0. 定位底部数字键盘屏蔽区（这类题数字键盘固定贴在屏幕最底部，
+    #    是一排纯数字按钮 1/2/3/4/5...）。这些数字按钮与「已填圆圈」
+    #    长得一模一样（text=数字、尺寸小），必须排除，否则会被误判为
+    #    已填的句子圆圈。
+    _kb = []
+    for m in re.finditer(r'<node[^>]*>', xml):
+        tag = m.group(0)
+        tm = re.search(r'text="(\d)"', tag)
+        if not tm:
+            continue
+        bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+        if not bm:
+            continue
+        x1, y1, x2, y2 = int(bm.group(1)), int(bm.group(2)), int(bm.group(3)), int(bm.group(4))
+        if 20 <= (x2 - x1) <= 220 and 20 <= (y2 - y1) <= 220:
+            _kb.append((int(tm.group(1)), y1, y2))
+    _kb_top = min(y1 for _, y1, _ in _kb) - 40 if _kb else 10 ** 9
+
+    # ① 长文本句子节点：CheckBox / TextView
+    for m in re.finditer(r'<node[^>]*class="android\.widget\.(?:CheckBox|TextView)"[^>]*>', xml):
+        tag = m.group(0)
+        tm = re.search(r'text="([^"]{4,})"', tag)
+        bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+        if not (tm and bm):
+            continue
+        txt = tm.group(1).strip()
+        if not txt:
+            continue
+        x1, y1, x2, y2 = int(bm.group(1)), int(bm.group(2)), int(bm.group(3)), int(bm.group(4))
+        w, h = x2 - x1, y2 - y1
+        # 句子通常横向较宽、位于中间区域、高度不大（排除大段文字）
+        if w > 250 and 50 < y1 < 4000 and h < 320 and y2 < _kb_top:
+            sentences.append((x1, (x1 + x2) // 2, (y1 + y2) // 2, y1, y2, txt))
+
+    # ② LinearLayout 可点击长条（旧版/特殊形态）：只在没有①结果时作为兜底
+    if not sentences:
+        for m in re.finditer(r'<node[^>]*class="android\.widget\.LinearLayout"[^>]*clickable="true"[^>]*>', xml):
             tag = m.group(0)
-            tm = re.search(r'text="([^"]*)"', tag)
-            cm = re.search(r'checked="(true|false)"', tag)
             bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
-            if not (tm and cm and bm):
+            if not bm:
                 continue
-            txt = tm.group(1)
             x1, y1, x2, y2 = int(bm.group(1)), int(bm.group(2)), int(bm.group(3)), int(bm.group(4))
             w = x2 - x1
-            cy = (y1 + y2) // 2
-            cx = (x1 + x2) // 2
-            if len(txt) >= 6 and w > 800 and 700 < y1 < 1900:
-                sentences.append((cx, cy, y1))
-            elif w <= 130 and 700 < y1 < 1900:  # 小圆圈
-                circles.append((cx, cy, y1, cm.group(1)))
-        # LinearLayout 形态（旧版，无小圆圈，直接算未填）
-        sents_ll = []
-        for m in re.finditer(
-            r'<node[^>]*class="android\.widget\.LinearLayout"[^>]*clickable="true"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
-            xml
-        ):
-            x1, y1, x2, y2 = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
-            w = x2 - x1
-            if w > 800 and 700 < y1 < 1900:
-                sents_ll.append(((x1 + x2) // 2, (y1 + y2) // 2, y1))
-        if not sentences and sents_ll:
-            return sorted(sents_ll, key=lambda t: t[2])
+            if w > 500 and 50 < y1 < 4000:
+                # 向后截取一段文本作为句子内容
+                snippet = xml[m.start():m.start() + 800]
+                tm = re.search(r'text="([^"]{6,})"', snippet)
+                txt = tm.group(1) if tm else ""
+                sentences.append((x1, (x1 + x2) // 2, (y1 + y2) // 2, y1, y2, txt))
 
-        # 圆圈排序题：句子按 y 匹配最近的小圆圈，小圆圈 checked=false 才算未填
-        result = []
-        for cx, cy, y1 in sentences:
-            # 找 y 最接近的小圆圈
-            best = None
-            for ccx, ccy, cy1, cchk in circles:
-                if abs(ccy - cy) < 100:
-                    if best is None or abs(ccy - cy) < abs(best[1] - cy):
-                        best = (ccx, ccy, cy1, cchk)
-            if best and best[3] == "true":
-                continue  # 小圆圈已填序号 → 跳过
-            result.append((cx, cy, y1))
-        result.sort(key=lambda t: t[2])
-        return result
+    # ③ 小圆圈 CheckBox：text 为空（未填）或纯数字（已填）
+    for m in re.finditer(r'<node[^>]*class="android\.widget\.CheckBox"[^>]*>', xml):
+        tag = m.group(0)
+        tm = re.search(r'text="([^"]*)"', tag)
+        bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+        if not (tm and bm):
+            continue
+        txt = tm.group(1).strip()
+        x1, y1, x2, y2 = int(bm.group(1)), int(bm.group(2)), int(bm.group(3)), int(bm.group(4))
+        w, h = x2 - x1, y2 - y1
+        is_filled = txt.isdigit()
+        ccy = (y1 + y2) // 2
+        # 圆圈：尺寸小、宽高接近、text 为空或数字；排除底部数字键盘按钮
+        if 30 <= w <= 200 and 30 <= h <= 200 and 50 < y1 < 4000 and (txt == "" or is_filled) and ccy < _kb_top:
+            circles.append(((x1 + x2) // 2, ccy, y1, x1, x2, txt, is_filled))
 
-    # 依次点击句子（每次重检位置，防布局变化）；填到「检查」出现为止
-    clicked = 0
-    # ★ 2026-08-30 全局最大轮次：防死循环（句子可能已自动填但小圆圈坐标重检又出现）
-    _MAX_ROUNDS = 8
-    for target in range(1, _MAX_ROUNDS + 1):
-        # 每次重新检测句子位置（点完一个后布局可能微调）
-        sentences = _find_sentences()
-        if not sentences:
-            print(f"      ⚠ 找不到句子（第{target}次）")
-            break
-        # 取第一个未填的句子点击（序号自动分配）
-        cx, cy, y1 = sentences[0]
+    # ④ 句子与小圆圈配对（圆圈在句子左侧，y 接近）
+    rows = []
+    for sx1, scx, scy, sy1, sy2, stxt in sentences:
+        best = None
+        best_dist = float('inf')
+        for ccx, ccy, cy1, cx1, cx2, ctxt, is_filled in circles:
+            # 圆圈应在句子左侧，不能偏右太多
+            if ccx > scx - 20:
+                continue
+            if abs(ccy - scy) > 160:
+                continue
+            dist = abs(ccy - scy)
+            if dist < best_dist:
+                best_dist = dist
+                best = (ccx, ccy, is_filled)
+        if best:
+            rows.append((scx, scy, sy1, stxt, best[0], best[1], best[2]))
+        else:
+            # 没配到圆圈，用句子左边缘 + 60 作为点击位置（往往是圆圈所在列）
+            rows.append((scx, scy, sy1, stxt, sx1 + 60, scy, False))
+
+    # ⑤ 按 y 排序并去重（同一句可能对应多个节点，取最宽/最靠前的）
+    rows.sort(key=lambda t: t[2])
+    seen = set()
+    uniq = []
+    for r in rows:
+        key = (r[2] // 80, r[3][:25])  # y 按 80px 分桶去重
+        if key not in seen:
+            seen.add(key)
+            uniq.append(r)
+    return uniq
+
+
+def _handle_sentence_sort(d, config):
+    """处理「句子圆圈排序题」（听录音/排序，给句子排顺序）
+
+    交互规则（已与用户核对）：
+      - 直接依次点击句子前面的小圆圈，系统**按点击顺序自动填入 1,2,3...**
+        （先点的用掉数字1，第二点用掉2，依次类推）
+      - 因此「点击句子的顺序」就是答案顺序；把全部句子点完即可
+      - **部分句子不在当前屏幕内（被底部数字键盘挤下去 / 需滚动），
+        必须先向上滑动把下方句子划上来再点**
+      - 全部点完 → 出现「检查」
+    """
+    import time
+    screen_w, screen_h = d.window_size()
+    print(f"    📝 句子排序题：依次点击未填句子（含滑动找屏外句子）")
+    step_log("📝 句子排序题：依次点击未填句子（含滑动）", "step")
+
+    def _get_rows():
+        return _find_sort_sentence_rows(d.dump_hierarchy())
+
+    def _check_done():
+        return d(text="检查").exists(timeout=0.5) or d(text="检测").exists(timeout=0.5)
+
+    def _dismiss_80_popup():
+        """关闭 80% 进度弹窗：优先点「继续练习」"""
         try:
-            d.click(cx, cy)
+            xml = d.dump_hierarchy()
+            if 'text="继续练习"' in xml and ('text="先走一步"' in xml or '完成80%' in xml or '你已经完成了' in xml):
+                _cont_matches = list(re.finditer(r'text="继续练习"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml))
+                _step_matches = list(re.finditer(r'text="先走一步"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml))
+                if _step_matches and _cont_matches:
+                    _step_y = (int(_step_matches[0].group(2)) + int(_step_matches[0].group(4))) // 2
+                    _best = min(_cont_matches, key=lambda _m: abs((int(_m.group(2)) + int(_m.group(4))) // 2 - _step_y))
+                    d.click((int(_best.group(1)) + int(_best.group(3))) // 2,
+                            (int(_best.group(2)) + int(_best.group(4))) // 2)
+                else:
+                    d(text="继续练习").click()
+                print("      → 关 80% 弹窗（继续练习）")
+                time.sleep(0.5)
+                return True
         except Exception:
             pass
-        clicked += 1
-        print(f"      {target}. 点句子 @({cx},{cy})")
-        time.sleep(0.4)
-        # 填完后检查/检测/查看报告出现 → 完成
-        if (d(text="检查").exists(timeout=0.8)
-                or d(text="检测").exists(timeout=0.8)
-                or d(text="查看报告").exists(timeout=0.8)):
-            print(f"      → 点完第{target}个后出现按钮，停止")
+        return False
+
+    def _swipe_up():
+        """向上滑动一屏，把下方句子划上来（手指从下往上滑）"""
+        try:
+            d.swipe(screen_w // 2, int(screen_h * 0.68),
+                    screen_w // 2, int(screen_h * 0.30), 0.35)
+        except Exception:
+            pass
+        time.sleep(0.7)
+
+    def _detect_keyboard_total():
+        """识别底部数字键盘的最大数字 = 该排序题的句子总数。
+
+        数字键盘固定贴在屏幕最底部（一排 1/2/3/4/5... 按钮），
+        「排到几」就说明有「几个句子」要按顺序点掉。用它作为完成
+        判定的兜底：当已点击次数达到这个数，即可认为全部点完。
+        """
+        xml = d.dump_hierarchy()
+        import re as _re
+        nums = []
+        for m in _re.finditer(r'<node[^>]*>', xml):
+            tag = m.group(0)
+            tm = _re.search(r'text="(\d)"', tag)
+            if not tm:
+                continue
+            bm = _re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+            if not bm:
+                continue
+            x1, y1, x2, y2 = int(bm.group(1)), int(bm.group(2)), int(bm.group(3)), int(bm.group(4))
+            if 20 <= (x2 - x1) <= 220 and 20 <= (y2 - y1) <= 220:
+                nums.append((int(tm.group(1)), y2))
+        if len(nums) < 2:
+            return 0
+        # 取最底部一行（最大 y2 簇）的按钮
+        max_y2 = max(y2 for _, y2 in nums)
+        bottom = [n for n, y2 in nums if y2 >= max_y2 - 80]
+        return max(bottom) if bottom else 0
+
+    clicked_total = 0
+    prev_unfilled = None
+    stall = 0
+
+    for round_idx in range(15):
+        _dismiss_80_popup()
+
+        if _check_done():
+            print("      ✅ 检查按钮已出现")
             break
 
+        total = _detect_keyboard_total()
+        rows = _get_rows()
+        unfilled = [r for r in rows if not r[6]]
+        print(f"      第{round_idx+1}轮：识别 {len(rows)} 句（未填 {len(unfilled)}）" + (f"，数字键盘总数≈{total}" if total else ""))
+
+        # 只点「屏幕内」的未填句子（屏外坐标点了也不生效）
+        onscreen = [r for r in unfilled if 60 < r[5] < screen_h - 40]
+        if onscreen:
+            for it in onscreen:
+                cx, cy = it[4], it[5]
+                try:
+                    d.click(cx, cy)
+                    print(f"      → 点击 @({cx},{cy}) [{it[3][:20]!r}]")
+                    clicked_total += 1
+                except Exception as _e:
+                    print(f"      → 点击 @({cx},{cy}) 异常: {_e}")
+                time.sleep(0.35)
+                _dismiss_80_popup()
+                if _check_done():
+                    break
+
+        # 数字键盘「排到几就有几个句子」：已点次数达到总数即视为全部点完
+        if total and clicked_total >= total:
+            print(f"      ✅ 已点击 {clicked_total} 次（=数字键盘总数{total}），达成")
+            break
+
+        if _check_done():
+            break
+
+        rows2 = _get_rows()
+        unfilled2 = [r for r in rows2 if not r[6]]
+        if not unfilled2:
+            print("      ℹ 全部句子已填序号")
+            break
+
+        progressed = prev_unfilled is None or len(unfilled2) < prev_unfilled
+        prev_unfilled = len(unfilled2)
+
+        if progressed:
+            stall = 0
+            _swipe_up()          # 把下方句子划上来继续点
+        else:
+            stall += 1
+            print(f"      ⚠ 未推进（{stall}次），滑动重试")
+            _swipe_up()
+            if stall >= 3:
+                print("      ⚠ 连续无进展，兜底点击所有未填句子")
+                for it in unfilled2:
+                    try:
+                        d.click(it[4], it[5])
+                        clicked_total += 1
+                    except Exception:
+                        pass
+                    time.sleep(0.3)
+                if _check_done():
+                    break
+                print(f"    ⚠ 句子排序未完成（共点击{clicked_total}次）")
+                return False
+
     time.sleep(0.4)
-    # 出现检查/检测 → 点击
+    _dismiss_80_popup()
     for kw in ("检查", "检测"):
         if d(text=kw).exists(timeout=2):
             try:
@@ -735,210 +867,288 @@ def _handle_sentence_sort(d, config):
             print(f"    ✅ 句子排序完成，点击{kw}")
             time.sleep(0.6)
             return True
-    print(f"    ⚠ 句子点完{clicked}个但未出现检查按钮")
-    # ★★ 与 _handle_sort_question 同样修复：未完成必须返回 False，
-    #   否则失败也被主循环 q+=1 计数 → q 错位 → 后续"题号未推进"卡死
+    print(f"    ⚠ 句子排序未完成（共点击{clicked_total}次）")
     return False
 
 
-def _handle_match_question(d, config):
-    """处理匹配题：点一个方框激活 → 把所有字母选项全部点完
+    # [已删除旧的 _find_sentences，统一使用模块级 _find_sort_sentence_rows]
 
-    用户约定（重要，供后续同学接入 API）：
-      1. 只需点击一次方框 → 激活底部字母选项输入界面
-      2. 之后不用再点方框：点一个字母 → 字母进入当前人物方框
-         → 方框自动切换到下一个人物
-      3. 因此只需把字母选项（A/B/C/D/E）全部依次点击完即可
+
+
+def _handle_match_question(d, config):
+    """处理匹配题：兼容两种交互形态
+
+    形态1（底部固定字母条，旧）：
+      点一个人物方框激活底部字母选项 → 依次把 A/B/C/D/E 全部点完。
+
+    形态2（弹出键盘式，新）：
+      每个人物名右侧都有独立的输入方框，点击方框会弹出字母键盘，
+      在键盘上点一个字母即可填入该人物。需要把每个人物的方框都填上
+      字母，"检查"按钮才会出现。
+      用户确认：只要每个框框都有字母即可出现检查，不必填对。
     """
+    import time
+    import re as _re
     print(f"    📋 识别到匹配题，处理中...")
     step_log("📋 检测到匹配题，开始配对…", "step")
 
-    # 1. 点第一个可点击方框激活字母选项界面（人物名文字所在区域的方框）
-    clicked_box = False
-    name_boxes = [e for e in (d.xpath('//*[@clickable="true"]').all() or [])]
-    name_texts = [e for e in (d.xpath('//*[@text!=""]').all() or [])
-                  if (e.text or "").strip()]
-    for ne in name_texts:
-        t = ne.text.strip()
-        # 人物名特征：英文单词（非 A-E、非标准按钮）
-        if len(t) <= 12 and t.isalpha() and t not in ("A","B","C","D","E","T","F","OK"):
-            ny = ne.bounds[1]
-            for ce in name_boxes:
-                cb = ce.bounds
-                if cb[1] <= ny <= cb[3]:   # y 与人物名重叠
-                    try:
-                        ce.click()
-                        clicked_box = True
-                        print(f"      → 点击方框激活 [{t}]")
-                        time.sleep(0.4)
-                        break
-                    except Exception:
-                        pass
-            if clicked_box:
-                break
-    if not clicked_box:
-        print(f"    ⚠ 未找到人物方框，尝试直接处理")
-        time.sleep(0.5)
+    # ── 形态1：底部固定字母条 ──
+    #   特征：点一个人物方框后，底部出现一排 A/B/C/D/E 字母按钮。
+    #   如果尝试后字母没出现，则回退到形态2。
+    _bottom_ok = _handle_match_bottom_bar(d)
+    if _bottom_ok:
+        return True
 
-    # 2. 收集字母选项 A-E
-    #   ★ 修复：图片/人物匹配题（听力专项）点方框后字母选项才延迟渲染出现，
-    #     只查一次会漏 → 轮询等待字母出现（最多5轮，每轮重试点方框一次兜底）
-    letters = []
-    for _try in range(5):
+    # ── 形态2：弹出键盘式人物-图片匹配 ──
+    return _handle_match_popup_keyboard(d)
+
+
+def _handle_match_bottom_bar(d):
+    """匹配题形态1：底部固定字母条。
+    返回 True=成功处理并提交；False=不是这种形态，需回退。"""
+    import time
+    try:
+        # 1. 点第一个人物旁边的可点击方框
+        clicked_box = False
+        name_boxes = [e for e in (d.xpath('//*[@clickable="true"]').all() or [])]
+        name_texts = [e for e in (d.xpath('//*[@text!=""]').all() or [])
+                      if (e.text or "").strip()]
+        for ne in name_texts:
+            t = ne.text.strip()
+            if len(t) <= 12 and t.isalpha() and t not in ("A","B","C","D","E","T","F","OK"):
+                ny = ne.bounds[1]
+                for ce in name_boxes:
+                    cb = ce.bounds
+                    if cb[1] <= ny <= cb[3]:
+                        try:
+                            ce.click()
+                            clicked_box = True
+                            print(f"      → 点击方框激活 [{t}]")
+                            time.sleep(0.4)
+                            break
+                        except Exception:
+                            pass
+                if clicked_box:
+                    break
+        if not clicked_box:
+            return False
+
+        # 2. 轮询等待底部字母条出现
         letters = []
-        for ch in ("A", "B", "C", "D", "E"):
-            try:
-                if d(text=ch).exists(timeout=0.2):
-                    letters.append(ch)
-            except Exception:
-                pass
-        if letters:
-            break
-        # 字母还没出现 → 再点一次方框（首轮已点过，这里是重试兜底）
-        time.sleep(0.5)
-    print(f"    字母选项{len(letters)}个: {letters}")
-    if not letters:
-        print(f"    ⚠ 未找到字母选项"); return False
+        for _try in range(5):
+            letters = []
+            for ch in ("A", "B", "C", "D", "E"):
+                try:
+                    if d(text=ch).exists(timeout=0.2):
+                        letters.append(ch)
+                except Exception:
+                    pass
+            if letters:
+                break
+            time.sleep(0.5)
+        if not letters:
+            print(f"      ℹ 未出现底部字母条，尝试弹出键盘形态")
+            return False
 
-    # 3. 把字母全部点完（每个点一次；点字母自动配对并切换下一个人物）
-    #    关键：即使"检查"提前出现，也要把 A-E 全部点完再检查！
-    clicked_letters = set()
-    for _ in range(len(letters) + 2):   # 最多轮转 letters数+2 次
-        # 每轮尝试点所有未点过的字母
-        for ch in letters:
-            if ch in clicked_letters:
+        print(f"    底部字母条 {len(letters)}个: {letters}")
+        clicked_letters = set()
+        for _ in range(len(letters) + 2):
+            for ch in letters:
+                if ch in clicked_letters:
+                    continue
+                try:
+                    if d(text=ch).exists(timeout=0.6):
+                        d(text=ch).click()
+                        clicked_letters.add(ch)
+                        print(f"      → 点字母: {ch}")
+                        time.sleep(0.3)
+                except Exception:
+                    pass
+            if len(clicked_letters) >= len(letters):
+                break
+        print(f"    ✅ 字母选项已全部点完: {sorted(clicked_letters)}")
+        return _match_click_check(d)
+    except Exception:
+        return False
+
+
+def _handle_match_popup_keyboard(d):
+    """匹配题形态2：人名右侧有独立输入框，点击后弹出字母键盘。
+
+    策略：
+      1. 识别所有英文人名（如 Mark / Jackson / Amy）。
+      2. 为每个人名找到右侧最近的输入方框。
+      3. 依次点击方框 → 在弹出的字母键盘中点击一个字母（选 y 最大的，
+         避免点到顶部图片标签 A/B/C）→ 按 back 关闭键盘 → 继续下一个。
+      4. 每轮结束检测"检查"按钮，出现即点。
+    """
+    import time
+    import re as _re
+    print(f"    📋 弹出键盘式匹配题：为每个人物方框填入字母")
+    step_log("📋 弹出键盘式匹配：逐个点框填字母", "step")
+
+    screen_w, screen_h = d.window_size()
+
+    def _find_names_and_boxes(xml):
+        """返回 [(name_text, name_cx, name_cy, box_cx, box_cy), ...]"""
+        # 收集英文人名
+        names = []
+        for m in _re.finditer(r'<node[^>]*text="([^"]{2,12})"[^>]*>', xml):
+            t = m.group(1).strip()
+            if not (t.isalpha() and t not in ("A","B","C","D","E","F","T","OK")):
                 continue
+            bm = _re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', m.group(0))
+            if not bm:
+                continue
+            x1, y1, x2, y2 = int(bm.group(1)), int(bm.group(2)), int(bm.group(3)), int(bm.group(4))
+            if y1 < 150 or y2 > screen_h - 150:
+                continue
+            names.append((t, (x1+x2)//2, (y1+y2)//2, x2, y1, y2))
+
+        # 收集可点击方框（text 为空或很短，且不是图片标签 A/B/C）
+        boxes = []
+        for m in _re.finditer(r'<node[^>]*clickable="true"[^>]*>', xml):
+            tag = m.group(0)
+            tm = _re.search(r'text="([^"]*)"', tag)
+            bm = _re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+            if not bm:
+                continue
+            txt = (tm.group(1) if tm else "").strip()
+            # 排除本身是 A/B/C 等单字母的控件（它们可能是图片标签）
+            if len(txt) == 1 and txt.isalpha():
+                continue
+            x1, y1, x2, y2 = int(bm.group(1)), int(bm.group(2)), int(bm.group(3)), int(bm.group(4))
+            w, h = x2 - x1, y2 - y1
+            # 方框尺寸不能太大或太小
+            if 40 <= w <= 500 and 30 <= h <= 200 and 150 < y1 < screen_h - 150:
+                boxes.append(((x1+x2)//2, (y1+y2)//2, x1, y1, x2, y2))
+
+        # 人名与右侧方框配对
+        pairs = []
+        for t, ncx, ncy, nx2, ny1, ny2 in names:
+            best = None
+            best_dist = float('inf')
+            for bcx, bcy, bx1, by1, bx2, by2 in boxes:
+                # 方框在人名右侧，y 接近
+                if bx1 < nx2 + 10:
+                    continue
+                if abs(bcy - ncy) > 120:
+                    continue
+                dist = abs(bcy - ncy) + (bx1 - nx2) * 0.3
+                if dist < best_dist:
+                    best_dist = dist
+                    best = (bcx, bcy)
+            if best:
+                pairs.append((t, ncx, ncy, best[0], best[1]))
+        return pairs
+
+    def _click_one_letter():
+        """在弹出的字母键盘中点击一个字母（选最靠下的，避免图片标签）"""
+        xml = d.dump_hierarchy()
+        best = None
+        best_y = -1
+        for m in _re.finditer(r'<node[^>]*text="([A-F])"[^>]*>', xml):
+            tag = m.group(0)
+            bm = _re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+            if not bm:
+                continue
+            x1, y1, x2, y2 = int(bm.group(1)), int(bm.group(2)), int(bm.group(3)), int(bm.group(4))
+            if 20 <= (x2 - x1) <= 220 and 20 <= (y2 - y1) <= 220:
+                cy = (y1 + y2) // 2
+                if cy > best_y:
+                    best_y = cy
+                    best = ((x1 + x2) // 2, cy)
+        if best:
             try:
-                if d(text=ch).exists(timeout=0.6):
-                    d(text=ch).click()
-                    clicked_letters.add(ch)
-                    print(f"      → 点字母: {ch}")
-                    time.sleep(0.3)
+                d.click(best[0], best[1])
+                print(f"      → 点键盘字母 @({best[0]},{best[1]})")
+                return True
             except Exception:
                 pass
-        if len(clicked_letters) >= len(letters):
-            break
-    print(f"    ✅ 字母选项已全部点完: {sorted(clicked_letters)}")
+        return False
 
-    # 4. 全部点完后，出现"检查"→ 点它
-    for _ in range(8):
-        if d(text="检查").exists(timeout=1):
-            d(text="检查").click()
-            print(f"    ✅ 匹配题点完，点击检查")
-            time.sleep(0.35)
-            # 检查后：最后一题可能出现"练习报告"（答完反馈页）
-            #   ★ 必须先处理"练习报告"，否则反馈页残留"匹配"文字会被误判成匹配题死循环
+    # 主循环：最多 3 轮，每轮把所有人名方框都点一遍
+    for round_idx in range(3):
+        xml = d.dump_hierarchy()
+        pairs = _find_names_and_boxes(xml)
+        print(f"      第{round_idx+1}轮：识别 {len(pairs)} 个人物方框")
+        if not pairs:
+            break
+
+        for t, ncx, ncy, bcx, bcy in pairs:
+            # 检查是否已经填过了（方框 text 非空）——通过 dump 重新看该位置
+            xml2 = d.dump_hierarchy()
+            # 简化：直接再点一次，不管是否已填
+            try:
+                d.click(bcx, bcy)
+                print(f"      → 点击 [{t}] 方框 @({bcx},{bcy})")
+                time.sleep(0.4)
+                if _click_one_letter():
+                    time.sleep(0.3)
+                # 关闭键盘，避免挡到下一个框
+                try:
+                    d.press("back")
+                except Exception:
+                    pass
+                time.sleep(0.3)
+            except Exception as e:
+                print(f"      → 点击 [{t}] 方框异常: {e}")
+
+            if d(text="检查").exists(timeout=0.4) or d(text="检测").exists(timeout=0.4):
+                print(f"      ✅ 检查按钮已出现")
+                return _match_click_check(d)
+
+    # 兜底：即使没识别到完整配对，也尝试点击所有可点击方框并填入字母
+    print(f"      ⚠ 尝试兜底：点击所有可疑方框")
+    xml = d.dump_hierarchy()
+    boxes = []
+    for m in _re.finditer(r'<node[^>]*clickable="true"[^>]*>', xml):
+        bm = _re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', m.group(0))
+        if not bm:
+            continue
+        x1, y1, x2, y2 = int(bm.group(1)), int(bm.group(2)), int(bm.group(3)), int(bm.group(4))
+        w, h = x2 - x1, y2 - y1
+        if 40 <= w <= 500 and 30 <= h <= 200 and y1 > screen_h * 0.25 and y2 < screen_h - 80:
+            boxes.append(((x1+x2)//2, (y1+y2)//2))
+    for bcx, bcy in boxes:
+        try:
+            d.click(bcx, bcy)
+            time.sleep(0.3)
+            _click_one_letter()
+            time.sleep(0.2)
+            d.press("back")
+            time.sleep(0.2)
+        except Exception:
+            pass
+        if d(text="检查").exists(timeout=0.3) or d(text="检测").exists(timeout=0.3):
+            return _match_click_check(d)
+
+    return _match_click_check(d, must=False)
+
+
+def _match_click_check(d, must=True):
+    """点击"检查"/"检测"，或"下一题"/"练习报告"。
+    must=False 时即使没找到检查也返回 True，避免外层循环卡死。"""
+    import time
+    for kw in ("检查", "检测"):
+        if d(text=kw).exists(timeout=1.5):
+            try:
+                d(text=kw).click()
+                print(f"    ✅ 匹配题完成，点击{kw}")
+            except Exception:
+                pass
+            time.sleep(0.4)
             if d(text="练习报告").exists(timeout=1.5):
                 d(text="练习报告").click()
                 print(f"    ✅ 匹配题完成，点击练习报告")
                 time.sleep(0.6)
             return True
-        time.sleep(0.5)
-
-
-def _handle_match_connect(d, config):
-    """处理「字母/图片连线题」（左右点配对连线）
-
-    ★ 与 _handle_match_question 的区别（防混淆）：
-      - 匹配题(人物+字母)：1 次点方框激活底部字母输入界面 → 依次点 A-E 字母
-      - 连线题(左右点配对)：左侧 N 个可点节点 + 右侧 N 个可点节点
-        每次点左侧某节点 + 点右侧对应节点 → 形成一对连线，重复 N 次
-        全部连完 → 出"检查"
-
-    识别：question_types.py 的 match_questions 加了 two_column_clickable 特征。
-    """
-    import re as _re
-    print(f"    🔗 字母连线题：左右点配对连线")
-    step_log("🔗 连线题：左右点配对", "step")
-
-    def _collect_two_columns():
-        """从 dump 提取左右两列可点节点（按 x 中位数分两簇）"""
-        try:
-            xml = d.dump_hierarchy()
-        except Exception:
-            return [], []
-        nodes = []
-        for m in _re.finditer(r'<node[^>]*clickable="true"[^>]*>', xml):
-            tag = m.group(0)
-            bm = _re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
-            if not bm:
-                continue
-            x1, y1, x2, y2 = map(int, bm.groups())
-            # 排除顶部状态栏/底部导航/全屏容器/极小噪点
-            if y1 < 200 or y2 > 2250 or (x2 - x1) > 500 or (y2 - y1) > 500:
-                continue
-            if (x2 - x1) < 50 or (y2 - y1) < 50:
-                continue
-            nodes.append(((x1 + x2) // 2, (y1 + y2) // 2, x1, y1, x2, y2))
-        if len(nodes) < 4:
-            return [], []
-        # 按 x 分两簇
-        nodes.sort(key=lambda n: n[0])
-        mid = len(nodes) // 2
-        # 找最大间隔作为左右分界
-        max_gap = 0
-        split = mid
-        for i in range(len(nodes) - 1):
-            gap = nodes[i + 1][0] - nodes[i][0]
-            if gap > max_gap:
-                max_gap = gap
-                split = i + 1
-        if max_gap < 150:
-            return [], []
-        left = sorted(nodes[:split], key=lambda n: n[1])
-        right = sorted(nodes[split:], key=lambda n: n[1])
-        return left, right
-
-    # 1. 轮询稳定后收集左右两列（连节点可能需要点一下激活）
-    for _try in range(3):
-        left, right = _collect_two_columns()
-        if len(left) >= 2 and len(right) >= 2 and abs(len(left) - len(right)) <= 1:
-            break
-        time.sleep(0.5)
-    print(f"      左列 {len(left)} 节点 / 右列 {len(right)} 节点")
-    if not left or not right:
-        print(f"    ⚠ 左右列节点识别失败，回退到点 A-E 字母逻辑")
-        # 兜底：复用 _handle_match_question
-        try:
-            return _handle_match_question(d, config)
-        except Exception:
-            return False
-
-    # 2. 依次配对：左[i] → 右[i]（按 y 排序后对应位置）→ 形成 N 对连线
-    paired = 0
-    for i in range(min(len(left), len(right))):
-        lx, ly = left[i][0], left[i][1]
-        rx, ry = right[i][0], right[i][1]
-        try:
-            d.click(lx, ly)
-            print(f"      → 左[{i+1}] ({lx},{ly})")
-            time.sleep(0.3)
-            d.click(rx, ry)
-            print(f"      → 右[{i+1}] ({rx},{ry})")
-            time.sleep(0.35)
-            paired += 1
-        except Exception as e:
-            print(f"      ⚠ 配对 {i+1} 失败: {e}")
-    print(f"    ✅ 已配对 {paired} 对")
-
-    # 3. 出"检查" → 点
-    for _ in range(8):
-        if d(text="检查").exists(timeout=0.8):
-            d(text="检查").click()
-            print(f"    ✅ 连线题完成，点击检查")
-            time.sleep(0.4)
-            if d(text="练习报告").exists(timeout=1.2):
-                d(text="练习报告").click(); time.sleep(0.6)
-            return True
-        time.sleep(0.4)
-    return False
-
-
-    # 5. 若检查后答错出现"下一题"→ 点它进入下一题
     if d(text="下一题").exists(timeout=1):
         d(text="下一题").click()
         print(f"    ✅ 匹配完成，点击下一题")
         time.sleep(0.35)
+        return True
+    if not must:
         return True
     return False
 
@@ -979,8 +1189,6 @@ def _handle_select_fill(d, config):
         """返回 (blanks, word_btns)：
         blanks: [(cx, cy, filled_text, y)] 按 y 排序；filled_text 非空=已填
         word_btns: [(cx, cy, word, y, x)] 词库词
-        ★ 2026-08-30 增强：底部无 select_btn 时（看图选词题型，词选项在顶部
-          以可点图片形式存在），从顶部可点 ImageView 节点收集作为"词选项"
         """
         try:
             xml = d.dump_hierarchy()
@@ -1002,32 +1210,12 @@ def _handle_select_fill(d, config):
             cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
             tv = (tm.group(1) if tm else "").strip()
             if ridv.endswith("/select_tv"):
+                # 空格框：可能含已填词文本（text 非空=已填）
                 blanks.append((cx, cy, tv, y1))
             elif ridv.endswith("/select_btn"):
+                # 词库词
                 if tv:
                     word_btns.append((cx, cy, tv, y1, x1))
-        # ★ 兜底：底部无 select_btn 时（看图选词），从顶部可点 ImageView 收集
-        if not word_btns:
-            for m in _re.finditer(r'<node[^>]*>', xml):
-                tag = m.group(0)
-                cls = _re.search(r'class="([^"]*)"', tag)
-                bm = _re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
-                if not (cls and bm):
-                    continue
-                cls_s = cls.group(1)
-                x1, y1, x2, y2 = map(int, bm.groups())
-                if (x2 - x1) < 80 or (y2 - y1) < 80:
-                    continue
-                if 'clickable="true"' not in tag:
-                    continue
-                if not (cls_s.endswith("ImageView") or "ImageView" in cls_s):
-                    continue
-                # ★ 顶部图片选项：y < 1500（短文上方的图区，不含底部单词栏）
-                if y1 >= 1500:
-                    continue
-                tm = _re.search(r'text="([^"]*)"', tag)
-                tv = (tm.group(1) if tm else "").strip()
-                word_btns.append(((x1 + x2) // 2, (y1 + y2) // 2, tv or f"img_{x1}_{y1}", y1, x1))
         blanks.sort(key=lambda t: t[3])
         word_btns.sort(key=lambda t: (t[3], t[4]))
         return blanks, word_btns
@@ -1094,25 +1282,67 @@ def _handle_select_fill(d, config):
 
 def _answer_loop(d, config, module_name):
     """答题循环（内部复用），返回题目数。
-
+    
     ★ 性能优化：每轮循环只 dump 一次 XML（≈200ms），后续所有文本判断/坐标获取
       都在内存做字符串匹配，消灭每次循环 ~20 次设备 HTTP 交互（exists/xpath）。
       只在执行 click 改变页面后重新 dump。
-    ★ 2026-08-30 防死循环：当 evidence 触发后 dump 题号（17/36）连续 N 轮未推进
-      （用户实测 18/36 排序题卡死，反复同题刷同一日志），强制跳出避免 CPU 占用
     """
     q = 0
     _idle = 0  # 连续空转计数（无选项且无题型匹配），防倒计时被误计/死循环
     _xml = ""  # 当前 UI 缓存
     _need_dump = True  # 需要在下一轮重新 dump
-    # ★ 2026-08-30 防排序题死循环：连续多轮同一题号未推进 → 视为卡死
-    _last_qno_at = ""  # 上次 dump 提取的题号（如 "18/36"）
-    _stuck_same_qno = 0  # 连续相同题号次数
+
+    # ★ 防多算题目：页面签名去重 + 总题数越界硬停止
+    #   根因：之前只要"页面像题目"就无条件 q+=1，手机提前回首页/某题卡住时，
+    #   同一页被反复当新题计数（曾出现 难点突破 记 47 题，手机实际只点 ~16 题）。
+    #   现在每题必须有"页面推进"才计数：用页面签名去重，且超过题库总题数立即停。
+    _last_sig = None      # 上一题页面签名（题号 X/Y 或 题干+选项），用于去重
+    _adv_stall = 0        # 同一页重复出现、未推进的次数
+    _total_q = 0          # 从界面 X/Y 读到的本题库总题数（越界即停）
+    _cur_qno = 0          # 当前题号（X/Y 左边）
+
+    def _page_sig():
+        """页面签名：优先题号 X/Y（精确）；否则题干+首个选项文本（近似去重）。"""
+        m = re.search(r'text="(\d+)\s*/\s*(\d+)"', _xml)
+        if m:
+            return ("q", int(m.group(1)), int(m.group(2)))
+        stems = re.findall(r'resource-id="[^"]*question_title_tv[^"]*"[^>]*text="([^"]+)"', _xml)
+        if not stems:
+            stems = [t for t in re.findall(r'text="([^"]{6,60})"', _xml)
+                     if t not in ("点击图片查看高清大图", "查看高清大图")]
+        first_opt = ""
+        for o in ("A", "B", "C", "T", "F"):
+            mm = re.search(r'text="' + o + r'[\.、．]?\s*([^"]{0,30})"', _xml)
+            if mm:
+                first_opt = o + mm.group(1)[:20]
+                break
+        return ("s", (stems[0][:40] if stems else "") + "|" + first_opt)
 
     def _collect_ui_evidence(qtype):
         """每题界面级检查证据（题型/题干/选项/音频/作答）→ 前端证据卡展示"""
         import re as _re
         ev = []
+        # ★ 每题抓一张题目截图（答题前，含题干+选项）。截图是否显示在审查结果里，
+        #   由 AI 六维 / LLM 审查是否出错决定（不再以"答错"为依据）。
+        try:
+            _proj = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            while _proj and os.path.dirname(_proj) != _proj \
+                    and not os.path.exists(os.path.join(_proj, "web_server.py")):
+                _proj = os.path.dirname(_proj)
+            _sd = os.path.join(_proj, "screenshots")
+            os.makedirs(_sd, exist_ok=True)
+            _qshot_fn = f"q{q:02d}_{int(time.time())}.png"
+            for _r in range(3):
+                try:
+                    d.screenshot(os.path.join(_sd, _qshot_fn))
+                    break
+                except OSError:
+                    if _r >= 2:
+                        raise
+                    time.sleep(0.5)
+            ev.append({"field": "题目截图", "type": "q_shot", "screenshot": _qshot_fn})
+        except Exception as _se:
+            print(f"      ⚠ 题目截图失败: {_se}")
         try:
             # ① 题型识别
             ev.append({"field": "题型", "type": "text_ok",
@@ -1149,11 +1379,25 @@ def _answer_loop(d, config, module_name):
                        "expected": "文字完整可见", "actual": stem_txt,
                        "diff": f"提取到{len(stems)}条文字" if stems else "⚠ 未提取到题干文字"})
             # ③ 选项存在性
-            opts_found = [o for o in ("A", "B", "C", "D", "T", "F")
-                          if f'text="{o}"' in _xml]
-            ev.append({"field": "选项", "type": "text_ok" if opts_found else "text_mismatch",
-                       "expected": "存在可选项", "actual": ",".join(opts_found) or "(无)",
-                       "diff": f"检测到 {len(opts_found)} 个选项"})
+            # ★ 排序题的可选项不是 A/B/C，而是可排序的句子/条目
+            if qtype == "排序题" or "排序" in _xml:
+                # ★ 统一走 _find_sort_sentence_rows，兼容 CheckBox/TextView/LinearLayout
+                sort_rows = _find_sort_sentence_rows(_xml)
+                sort_items = [r[3] for r in sort_rows]
+                if len(sort_items) >= 2:
+                    ev.append({"field": "选项", "type": "text_ok",
+                               "expected": "存在可排序项", "actual": f"{len(sort_items)}个句子",
+                               "diff": f"排序题检测到 {len(sort_items)} 个可排序句子"})
+                else:
+                    ev.append({"field": "选项", "type": "text_mismatch",
+                               "expected": "存在可排序项", "actual": f"{len(sort_items)}个句子",
+                               "diff": f"⚠ 排序题检测到 {len(sort_items)} 个可排序句子"})
+            else:
+                opts_found = [o for o in ("A", "B", "C", "D", "T", "F")
+                              if f'text="{o}"' in _xml]
+                ev.append({"field": "选项", "type": "text_ok" if opts_found else "text_mismatch",
+                           "expected": "存在可选项", "actual": ",".join(opts_found) or "(无)",
+                           "diff": f"检测到 {len(opts_found)} 个选项"})
             # ④ 音频/语音控件检查（★ 结合题型：听力题查扬声器、口语题查小喇叭+麦克风，均查可点击）
             # ★ 关键词判断直接基于整段 XML（短题干如"跟读句子"也能命中）
             LISTEN_KWS = ("听录音", "听音", "听一听", "听对话", "听短文", "听句子",
@@ -1264,9 +1508,38 @@ def _answer_loop(d, config, module_name):
             _need_dump = False
 
         # 弹窗检测
-        if _has("继续练习") and _has("先走一步"):
-            _click_text("继续练习")
-            print("      → 关弹窗")
+        # ★ 80% 进度弹窗（"你已经完成X道题" + "先走一步"/"继续练习"）：
+        #   必须点弹窗里的「继续练习」才能继续做题，否则可能误点成其他页面的按钮。
+        # ★ 兼容两种文本形态：同时出现「继续练习」+「先走一步」，或文案含「完成80%」/「你已经完成了」。
+        _is_80_popup = (
+            (_has("继续练习") and _has("先走一步"))
+            or ("完成80%" in _xml and _has("继续练习"))
+            or ("你已经完成了" in _xml and _has("继续练习"))
+        )
+        if _is_80_popup:
+            # 优先用坐标匹配：找与「先走一步」y 坐标最接近的「继续练习」
+            _cont_matches = list(re.finditer(r'text="继续练习"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', _xml))
+            _step_matches = list(re.finditer(r'text="先走一步"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', _xml))
+            if _step_matches and _cont_matches:
+                _step_y = (int(_step_matches[0].group(2)) + int(_step_matches[0].group(4))) // 2
+                _best = None
+                _best_dist = float('inf')
+                for _m in _cont_matches:
+                    _cy = (int(_m.group(2)) + int(_m.group(4))) // 2
+                    _dist = abs(_cy - _step_y)
+                    if _dist < _best_dist:
+                        _best_dist = _dist
+                        _best = _m
+                if _best:
+                    d.click((int(_best.group(1)) + int(_best.group(3))) // 2,
+                            (int(_best.group(2)) + int(_best.group(4))) // 2)
+                    print("      → 关 80% 弹窗（继续练习）")
+                else:
+                    _click_text("继续练习")
+                    print("      → 关弹窗")
+            else:
+                _click_text("继续练习")
+                print("      → 关弹窗")
             _idle = 0
             time.sleep(0.4)
             _need_dump = True; continue
@@ -1302,84 +1575,54 @@ def _answer_loop(d, config, module_name):
             print(f"      → 本子模块完成，返回")
             return q
         if _has("下一题"):
-            # ★ 答错题目截图：捕获当前答错画面，供人工核验错题并同步到前端「最近截图」
-            #   （文件名带模块标识，避免多模块练习互相覆盖；web_server 识别 evidence 写入面板）
-            _wrong_shot = ""
-            try:
-                _shot_dir = os.path.join(
-                    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                    "screenshots")
-                os.makedirs(_shot_dir, exist_ok=True)
-                # ★ 文件名彻底 ASCII 化：中文模块名（如"听力专项/难点突破"）转成
-                #   ascii 编码的十六进制后缀，避免 Windows 写盘偶发 Errno 22
-                #   （Invalid argument）。之前 re.sub(r"[^\w]","_") 保留中文，
-                #   中文字符在部分 Windows/设备组合下截图写盘偶发失败。
-                _mod_tag = re.sub(r"[^\w]", "_", module_name)[:12] or "mod"
-                try:
-                    _mod_tag = _mod_tag.encode("ascii", "ignore").decode("ascii") or "mod"
-                except Exception:
-                    _mod_tag = "mod"
-                _wrong_shot = f"wrong_{_mod_tag}_q{q:02d}.png"
-                # ★ 截图重试3次（uiautomator2 设备端截图偶发 Errno 22，重试可自愈）
-                for _r in range(3):
-                    try:
-                        d.screenshot(os.path.join(_shot_dir, _wrong_shot))
-                        break
-                    except OSError:
-                        if _r >= 2:
-                            raise
-                        time.sleep(0.5)
-                print(f"      → 答错截图: {_wrong_shot}")
-            except Exception as _e:
-                print(f"      ⚠ 答错截图失败: {_e}")
+            # ★ 截图依据已改：不再"答错就截图"。题目截图在每题完整性检查前抓取(qshot)，
+            #   只有当 AI 六维 或 LLM 审查判出错时，才由 web_server 贴到审查结果。
             _click_text("下一题")
             print(f"      → 下一题（答错）")
             _idle = 0
-            step_log(f"  第{q}题 答错截图", "warning",
-                     evidence=[{"field": "错题截图", "type": "wrong_shot",
-                                "screenshot": _wrong_shot}] if _wrong_shot else None)
             time.sleep(0.4); _need_dump = True; continue
 
-        # ★ 防死循环检测：5 轮都用同一题号（如卡在排序题反复点） → 强制跳出
-        if _need_dump:
-            _xml = _dump() if (not _xml or _need_dump) else _xml
-            _need_dump = False
-        _cur_qno = ""
-        for _t in re.findall(r'text="(\d+/\d+)"', _xml):
-            if _t and "/" in _t:
-                _cur_qno = _t
-                break
-        if _cur_qno and _cur_qno == _last_qno_at:
-            _stuck_same_qno += 1
-            if _stuck_same_qno >= 8:
-                # ★ 同一题卡死超 8 轮（约 4-6s）→ 强制退出答这一道题（继续巡检）
-                step_log(f"⚠ 同一题 {_last_qno_at} 已卡 8 轮未推进，强制跳过", "warning")
-                _stuck_same_qno = 0
-                _last_qno_at = ""
-                # 兜底：尝试回退一下，避免累积占用主线程
-                if d(text="下一题").exists(timeout=0.3):
-                    try: d(text="下一题").click()
-                    except Exception: pass
-                time.sleep(0.4); _need_dump = True; continue
-        else:
-            _stuck_same_qno = 0
-            _last_qno_at = _cur_qno
+        # ★ 非题目页保护：首页/模块列表/过渡页不当作题目处理，避免"匹配/排序"等关键词
+        #   在 App 首页/模块列表被误触发，产生"自己冒出来的题目"。
+        if not _is_question_page(_xml):
+            _idle += 1
+            if _idle >= 15:
+                step_log(f"⚠ 连续 {_idle} 轮未检测到题目页，退出答题循环", "warning")
+                return q
+            time.sleep(0.4); _need_dump = True
+            continue
+        _idle = 0
+
+        # ★★★ 防多算题目闸门：同一页未推进/超总题数 → 不重复计数，及时退出 ★★★
+        #   之前 _answer_loop 只要页面像题目就 q+=1，手机提前回首页或某题卡住时，
+        #   同一页被反复当新题计数（难点突破曾记 47 题、手机实际只点 ~16 题）。
+        #   修复：用页面签名去重 + 题号总数越界硬停止。
+        _sig = _page_sig()
+        if isinstance(_sig, tuple) and _sig[0] == "q":
+            _cur_qno, _total_q = _sig[1], _sig[2]
+        # 越界：计数已超过题库总题数（说明已离题/重复）→ 立即结束本子模块
+        if _total_q and q > _total_q:
+            step_log(f"⚠ 计数{q}已超过本题库总题数{_total_q}，判定子模块已结束，退出", "warning")
+            return q
+        # 与上一题签名相同 → 同一页未推进，不重复计数，累计停滞次数后退出
+        if _last_sig is not None and _sig == _last_sig:
+            _adv_stall += 1
+            if _adv_stall >= 8:
+                step_log(f"⚠ 第{q}题页面连续{_adv_stall}轮未推进（疑似答不出/卡死/已离题），退出本子模块", "warning")
+                return q
+            time.sleep(0.4); _need_dump = True; continue
+        _adv_stall = 0
+        _last_sig = _sig
+
         # 题型识别：基于缓存的字符串匹配（不再调 xpath）
         qtype = _detect_question_type_cached(_xml, config)
         if qtype == "sort_questions":
             q += 1  # ★ 排序题计数（之前遗漏，导致总题数少）
             step_log(f"📸 第{q}题（排序题）", "step")
             step_log(f"  第{q}题 检查", "info", _collect_ui_evidence("排序题"))
-            _has_circle = 0
-            for _m in re.finditer(r'<node[^>]*class="android\.widget\.CheckBox"[^>]*/?>', _xml):
-                _tag = _m.group(0)
-                _tm = re.search(r'text="([^"]{6,})"', _tag)
-                _bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', _tag)
-                if not (_tm and _bm): continue
-                _x1, _y1 = int(_bm.group(1)), int(_bm.group(2))
-                if (int(_bm.group(3)) - _x1) > 800 and 700 < _y1 < 1900:
-                    _has_circle += 1
-            if _has_circle >= 3:
+            # ★ 用统一识别函数判断：≥3 个带小圆圈的句子 → 句子圆圈排序题
+            _sort_rows = _find_sort_sentence_rows(_xml)
+            if len(_sort_rows) >= 3:
                 _handle_sentence_sort(d, config)
             else:
                 _handle_sort_question(d, config)
@@ -1387,31 +1630,9 @@ def _answer_loop(d, config, module_name):
             time.sleep(0.4); _need_dump = True; continue
         elif qtype == "match_questions":
             q += 1  # ★ 匹配题计数（之前遗漏，导致总题数少）
-            # ★ 2026-08-30 区分：字母连线题（左右两列可点） vs 人物-字母匹配题（底部字母栏）
-            #   判断：当前 xml 是否左右两列各 2+ 个可点节点
-            _is_connect = False
-            try:
-                _xml2 = d.dump_hierarchy()
-                _lr_left, _lr_right = [], []
-                for _m in re.finditer(r'<node[^>]*clickable="true"[^>]*>', _xml2):
-                    _t = _m.group(0)
-                    _bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', _t)
-                    if not _bm: continue
-                    _x1,_y1,_x2,_y2 = map(int, _bm.groups())
-                    if _y1 < 200 or _y2 > 2250 or (_x2-_x1) > 500: continue
-                    if (_x2-_x1) < 50 or (_y2-_y1) < 50: continue
-                    (_lr_left if (_x1+_x2)//2 < 540 else _lr_right).append(((_x1+_x2)//2, (_y1+_y2)//2))
-                _is_connect = len(_lr_left) >= 2 and len(_lr_right) >= 2
-            except Exception:
-                pass
-            if _is_connect:
-                step_log(f"📸 第{q}题（字母连线）", "step")
-                step_log(f"  第{q}题 检查", "info", _collect_ui_evidence("字母连线"))
-                _handle_match_connect(d, config)
-            else:
-                step_log(f"📸 第{q}题（匹配题）", "step")
-                step_log(f"  第{q}题 检查", "info", _collect_ui_evidence("匹配题"))
-                _handle_match_question(d, config)
+            step_log(f"📸 第{q}题（匹配题）", "step")
+            step_log(f"  第{q}题 检查", "info", _collect_ui_evidence("匹配题"))
+            _handle_match_question(d, config)
             _idle = 0
             time.sleep(0.4); _need_dump = True; continue
         elif qtype == "select_fill_questions":
@@ -1528,63 +1749,228 @@ def _handle_report(d, config, sub_name="", is_last=False):
         print(f"    ⚠ 继续练习后未回单元内")
 
 
+def _is_question_page(xml: str) -> bool:
+    """判断当前页是否是真实题目页（含题号/选项/检查/反馈/报告等）。
+
+    用来避免把 App 首页、模块列表、过渡页当成题目处理。
+    """
+    if not xml:
+        return False
+    # 强信号：右上角题号 X/Y（text 或 content-desc）
+    if re.search(r'(text|content-desc)="\d+\s*/\s*\d+"', xml):
+        return True
+    # 作答/反馈/报告相关元素（这些单独出现即足以判定为题目页）
+    if any(k in xml for k in (
+        'text="检查"', 'text="检测"', 'text="下一题"', 'text="提交"', 'text="完成"',
+        'text="练习报告"', 'text="查看报告"', 'text="继续答题"',
+        '恭喜你', '回答正确', '回答错误', '很遗憾',
+        'class="android.widget.EditText"', 'class="android.widget.CheckBox"')):
+        return True
+    # 选项字母（兼容 A. / A、形式）：★ 单独出现不可靠（首页等级徽章"A"也会命中），
+    #   必须另有佐证才认定为题目页，避免首页/结束页被误判成"题目"反复计数。
+    if re.search(r'text="[TFABCDE][\.、．]?', xml):
+        # 佐证①：题号/检查/录音/作答元素/反馈 → 强题目信号
+        if (re.search(r'(text|content-desc)="\d+\s*/\s*\d+"', xml)
+                or 'text="检查"' in xml or 'text="检测"' in xml
+                or "录音" in xml or "EditText" in xml or "CheckBox" in xml
+                or "继续答题" in xml or "恭喜你" in xml or "回答正确" in xml
+                or "回答错误" in xml or "很遗憾" in xml):
+            return True
+        # 佐证②：出现 ≥2 个不同选项字母（真实选择题至少 A/B 两个；首页单徽章只有1个）
+        _letters = set(re.findall(r'text="([TFABCDE])"', xml))
+        if len(_letters) >= 2:
+            return True
+        return False
+    return False
+
+
+def _is_miniprogram_auth(xml: str) -> bool:
+    """判断是否误点主页悬浮广告后跳到了微信小程序授权页"""
+    if not xml:
+        return False
+    return any(k in xml for k in ("E英语宝伴学服务", "申请", "你的昵称、头像", "微信昵称头像"))
+
+
+def _try_close_floating_ad(d):
+    """尝试关闭主页右下角 WebView 悬浮广告（老师伴学/打卡服务卡片）
+
+    该广告在 uiautomator 无障碍树中不可见，无法通过文字/关闭按钮定位，
+    只能根据常见屏幕比例点击其右上角 X 区域或尝试横向滑走。
+    """
+    try:
+        step_log("🧹 尝试关闭右下角悬浮广告卡片（伴学服务）...", "info")
+        # 尝试1：点卡片右上角 X 估计坐标（参考屏 1080x2400；在 1224x2700 真机上约为 (1130,2080)）
+        _x, _y = S(d, 1000, 1850)
+        d.click(_x, _y)
+        time.sleep(0.6)
+        # 尝试2：从卡片中心向右外滑动，部分 WebView 浮层可拖走
+        _x1, _y1 = S(d, 980, 1900)
+        _x2, _y2 = S(d, 1150, 2150)
+        d.swipe(_x1, _y1, _x2, _y2, 0.3)
+        time.sleep(0.6)
+    except Exception as _e:
+        step_log(f"⚠ 关闭悬浮广告尝试异常: {_e}", "warning")
+
+
+def _normalize_units(units):
+    r"""★ 把 units 规范化为 int 列表（2026-09-01 修复）
+
+    背景：上游 units 可能是字符串（"U6" / "U6-9" / "U6-9U6" 等含字母与连字符的
+    畸形串）。run_single_module 里用 `r'Unit\s*0*%d\b' % unit_num` 匹配单元标题，
+    %d 要求 int → 传字符串直接抛
+    "TypeError: %d format: a real number is required, not str"，
+    整个模块瞬间崩溃（0 题 0 成功）。
+
+    支持输入：int / str("U6"、"6"、"1-3"、"U6-9U6") / 以及它们的列表。
+    规则：
+      - int        -> [n]
+      - str 含 '-' -> 取前两个数字作区间（"U6-9U6" -> 6,7,8,9）
+      - str 无 '-' -> 取第一个数字（"U6" -> 6）
+    返回去重升序的 int 列表；解析不出数字则丢弃该项。
+    """
+    import re as _re
+    if units is None:
+        return []
+    if isinstance(units, (int, float)):
+        n = int(units)
+        return [n] if n > 0 else []
+    if isinstance(units, str):
+        units = [units]
+    out = []
+    for item in units:
+        try:
+            if isinstance(item, (int, float)):
+                n = int(item)
+                if n > 0:
+                    out.append(n)
+                continue
+            s = str(item).strip()
+            if not s:
+                continue
+            nums = _re.findall(r"\d+", s)
+            if not nums:
+                continue
+            if "-" in s and len(nums) >= 2:
+                a, b = int(nums[0]), int(nums[1])
+                if b < a:
+                    a, b = b, a
+                # 跨度保护：畸形串可能解析出超大范围，最多取 30 个单元
+                if b - a > 30:
+                    b = a + 30
+                out.extend(range(a, b + 1))
+            else:
+                n = int(nums[0])
+                if n > 0:
+                    out.append(n)
+        except Exception:
+            continue
+    return sorted(set(out))
+
+
 def run_single_module(d, module_name, config):
-    print(f"\n{'='*45}")
-    print(f"🔍 检测模块：{module_name}")
-    print(f"{'='*45}")
+    step_log(f"{'='*45}", "info")
+    step_log(f"🔍 检测模块：{module_name}", "info")
+    step_log(f"config.units={config.get('units')!r} config.sub_modules={[s.get('name') for s in (config.get('sub_modules') or [])]}", "info")
+    step_log(f"{'='*45}", "info")
 
     questions = 0
     entry = config["entry_text"]
     sub_modules = config.get("sub_modules")     # 子模块列表（None=无子模块）
 
-    # 1. 找模块入口
-    print(f"  [1] 查找「{entry}」...")
+    # 1. 找模块入口（处理主页右下角 WebView 悬浮广告遮挡：滑屏错开后再点）
+    step_log(f"[1] 查找并点击「{entry}」入口...", "info")
     if not scroll_and_find(d, entry):
-        print(f"  ❌ 未找到模块: {entry}"); return 0
-    # ★ 点击入口【前】必须先清广告：广告延迟加载并覆盖入口卡片，直接点文字坐标会
-    #   点到广告上 → 打开外链触发 OPPO 系统验证弹窗（使用面部验证/密码验证）→ 全流程卡死。
-    #   （用户定位：只有点到广告才会弹这个验证框）
+        step_log(f"❌ 未找到模块入口: {entry}（主页滚动查找失败，可能该年级未上线此模块）", "error")
+        return 0
+    # ★ 点击入口【前】先清普通广告
     settle_ads(d, wait_total=8)
-    # ★ 修复：不能用 d(text=entry).click()——页面可能多处含该文字（顶栏tab+入口卡片），
-    #   exists() 命中后 click() 可能点到不可见节点 → UiObjectNotFoundError。
-    #   改用 dump 找可点击容器坐标点击，并验证进入（出现"去练习/去答题/练习记录"等）。
-    _entered = False
-    for _try in range(5):
+
+    def _check_entered():
         try:
-            _xml_entry = d.dump_hierarchy()
+            _xml_after = d.dump_hierarchy()
+            return any(k in _xml_after for k in ("去练习", "去答题", "练习记录", "重新答题", "开始答题"))
         except Exception:
-            _xml_entry = ""
-        _m_entry = re.search(
-            rf'text="{re.escape(entry)}"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
-            _xml_entry)
-        if _m_entry:
-            _ex = (int(_m_entry.group(1)) + int(_m_entry.group(3))) // 2
-            _ey = (int(_m_entry.group(2)) + int(_m_entry.group(4))) // 2
-            d.click(_ex, _ey)
-            print(f"  ✅ 点击入口 {entry} @({_ex},{_ey})")
-            time.sleep(1.2)
-            # 验证进入模块（出现模块内特征文字）
-            try:
-                _xml_after = d.dump_hierarchy()
-                if any(k in _xml_after for k in ("去练习", "去答题", "练习记录", "重新答题", "开始答题")):
-                    _entered = True
-                    break
-            except Exception:
-                pass
-        else:
-            time.sleep(0.8)
-    if not _entered:
-        # 兜底：直接用 text 点击
+            return False
+
+    def _entry_elems():
+        """返回所有同名入口元素及其中心坐标、是否在广告区"""
+        _xml = ""
         try:
-            d(text=entry).click()
-            print(f"  ✅ 已进入 {module_name}（text点击兜底）")
-            _entered = True
-            time.sleep(0.8)
+            _xml = d.dump_hierarchy() or ""
+        except Exception:
+            return []
+        _ws = d.window_size()
+        out = []
+        for _pat in (rf'text="{re.escape(entry)}"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
+                     rf'content-desc="{re.escape(entry)}"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"'):
+            for _m in re.finditer(_pat, _xml):
+                _x1, _y1, _x2, _y2 = map(int, _m.groups())
+                _cx = (_x1 + _x2) // 2
+                _cy = (_y1 + _y2) // 2
+                _in_ad = _cx > _ws[0] * 0.6 and _cy > _ws[1] * 0.6
+                out.append((_cx, _cy, _in_ad, _x1, _y1, _x2, _y2))
+        # 优先选不在广告区的；都没有则返回第一个
+        _non_ad = [o for o in out if not o[2]]
+        return _non_ad or out
+
+    _entered = False
+    for _att in range(5):
+        elems = _entry_elems()
+        if not elems:
+            if not scroll_and_find(d, entry):
+                step_log(f"❌ 未找到模块入口: {entry}", "error")
+                return 0
+            continue
+        _cx, _cy, _in_ad, *_ = elems[0]
+        if _in_ad:
+            step_log(f"⚠ 入口「{entry}」坐标({_cx},{_cy})落在屏幕右下角，疑似被广告遮挡 → 上滑错开", "warning")
+            _sw_h = d.window_size()[1]
+            d.swipe(_cx, int(_sw_h * 0.78), _cx, int(_sw_h * 0.30), 0.4)
+            time.sleep(1.3)
+            continue
+        # 优先点击包含该文字的 clickable 父容器（主页入口 text 节点本身 clickable=false）
+        clicked_entry = False
+        try:
+            _xpath_entry = f'//node[@text="{entry}"]/ancestor::node[@clickable="true"][1]'
+            _parent = d.xpath(_xpath_entry)
+            if _parent and _parent.exists:
+                _parent.click()
+                step_log(f"✅ 点击入口 {entry}（父容器点击）", "info")
+                clicked_entry = True
         except Exception as _e:
-            print(f"  ❌ 点击入口失败: {_e}")
-            return 0
-    print(f"  ✅ 已进入 {module_name}")
-    time.sleep(0.3)
+            print(f"      ⚠ 父容器点击失败: {_e}")
+        if not clicked_entry:
+            try:
+                d(text=entry).click(timeout=2)
+                step_log(f"✅ 点击入口 {entry}（文字点击）", "info")
+            except Exception:
+                d.click(_cx, _cy)
+                step_log(f"✅ 点击入口 {entry} @({_cx},{_cy})", "info")
+        time.sleep(1.5)
+        if _check_entered():
+            _entered = True
+            break
+        _xml_after = ""
+        try:
+            _xml_after = d.dump_hierarchy() or ""
+        except Exception:
+            pass
+        if _is_miniprogram_auth(_xml_after):
+            step_log(f"⚠ 点击 {entry} 误触悬浮广告跳到小程序授权页，返回并重试", "warning")
+            for _b in range(3):
+                d.press("back"); time.sleep(0.7)
+        else:
+            step_log(f"⚠ 点击 {entry} 后未进入模块，上滑重试", "warning")
+        _sw_h = d.window_size()[1]
+        d.swipe(_cx, int(_sw_h * 0.78), _cx, int(_sw_h * 0.30), 0.4)
+        time.sleep(1.2)
+
+    if not _entered:
+        step_log(f"❌ 点击入口失败: {module_name}（已尝试滑动错开并多次点击仍未进入；若仍被广告遮挡，请在手机上手动关闭右下角「老师伴学/打卡服务」卡片后重试）", "error")
+        return 0
+    step_log(f"✅ 已进入 {module_name}", "success")
+    time.sleep(0.8)
+
 
     # ★ 系统验证弹窗（点到广告触发）→ 先等它自动消失；持续不退 → back 关闭 + 清广告重试一次
     if applock_blocked(d):
@@ -1608,6 +1994,18 @@ def run_single_module(d, module_name, config):
     # ★ 广告延迟加载：进入模块页后广告可能刚好弹出，先关干净再继续（避免后续点击误触广告）
     settle_ads(d, wait_total=6)
 
+    # ★ 开发中检测：进入模块页后若显示「正在开发 / 敬请期待」，说明该模块此年级尚未开放
+    #   → 直接停止检查（不再滚动找单元入口、不再答题），返回主页。
+    _dev_kw = ("正在开发", "敬请期待")
+    try:
+        _xml_dev = d.dump_hierarchy() or ""
+    except Exception:
+        _xml_dev = ""
+    if any(k in _xml_dev for k in _dev_kw):
+        step_log(f"⚠ {module_name} 显示「正在开发，敬请期待」→ 该年级尚未开放，直接停止检查并返回主页", "warning")
+        back_to_home(d)
+        return 0
+
     # 2. 空态检测
     for kw in config.get("empty_text", []):
         if d(text=kw).exists(timeout=2):
@@ -1623,9 +2021,27 @@ def run_single_module(d, module_name, config):
         time.sleep(0.4)
 
     # ── 4. 单元遍历 + 子模块 ──
+    # ★ 听力专项双 tab：练习路径必须停在「练习」tab（才有"去练习"按钮）。
+    #   仅当页面同时存在「练习」「测试」两个 tab 时才处理，不影响其他模块。
+    if d(text="练习").exists(timeout=2) and d(text="测试").exists(timeout=2):
+        if not d(text="去练习").exists(timeout=1.5):
+            try:
+                d(text="练习").click(); time.sleep(1.2)
+                step_log("→ 已切到「练习」tab", "info")
+            except Exception:
+                pass
     units = config.get("units")  # 如有单元号列表，逐个遍历
     if units:
-        print(f"  [3] 单元遍历({len(units)}个)：U{units[0]}-U{units[-1]}")
+        step_log(f"[3] 单元遍历({len(units)}个)：U{units[0]}-U{units[-1]}", "info")
+        # ★ 进入列表页后先回到顶部：防止入口点击/广告错开等操作把列表滚到底部，
+        #   导致从 U1 开始遍历时找不到入口而空转。
+        #   注意：手指从上往下滑（y 小→大）内容向上滚动，才能显示出顶部的单元。
+        #   ★ 2026-08-29 加固：WebView 列表是懒加载，回顶部只需 3 次 + 等待 0.8s，
+        #     不要无脑滑 5 次把列表推到中段（会把 Unit 1 推出屏幕、扰乱第 N 个按钮序号）。
+        step_log("[列表] 回到顶部...", "info")
+        for _ in range(3):
+            S_swipe(d, 500, 600, 500, 1800, 0.4)
+            time.sleep(0.8)
 
     # 子模块内部运行（被单元循环或单独调用）
     def run_sub_modules():
@@ -1691,10 +2107,28 @@ def run_single_module(d, module_name, config):
                 shown = next((t for t in cur_texts if sub["name"] in t), cur_texts[0] if cur_texts else "")
                 step_log(f"📌 当前子模块: {shown or sub['name']}（第{i+1}/{len(sm)}个，无需滑动）", "step")
             # 答题入口：必须找到"重新答题"或"开始答题"才能开始
-            for retry in range(8):
+            # ★ 页面加载/弹窗可能导致按钮延迟出现，用 XML 字符串匹配兜底
+            _entry_ok = False
+            for retry in range(12):
+                try:
+                    _xml_sub = d.dump_hierarchy() or ""
+                except Exception:
+                    _xml_sub = ""
+                if "重新答题" in _xml_sub or "开始答题" in _xml_sub:
+                    _entry_ok = True
+                    break
                 if d(text="重新答题").exists(timeout=1) or d(text="开始答题").exists(timeout=1):
+                    _entry_ok = True
                     break
                 time.sleep(0.5)
+            if not _entry_ok:
+                print(f"    ⚠ 未找到 '开始答题'/'重新答题'，可能页面未加载或子模块切换失败")
+                try:
+                    _xml_dbg = d.dump_hierarchy() or ""
+                    _txts = sorted(set(re.findall(r'text="([^"]*)"', _xml_dbg)))
+                    print(f"    当前页面文本（前30）: {_txts[:30]}")
+                except Exception:
+                    pass
             pa = config.get("post_entry_actions", [])
             if pa: execute_actions(d, pa, name)
             # 答题（传入是否最后一个子模块）
@@ -1708,7 +2142,7 @@ def run_single_module(d, module_name, config):
                     try:
                         _xml_back = d.dump_hierarchy()
                         if ("重新答题" in _xml_back or "去练习" in _xml_back
-                                or "练习记录" in _xml_back):
+                                or "去答题" in _xml_back or "练习记录" in _xml_back):
                             break
                         if "继续练习" in _xml_back:
                             _m_cont = re.search(
@@ -1734,45 +2168,149 @@ def run_single_module(d, module_name, config):
             time.sleep(0.6)
 
     # 单元遍历
+    # ★ 2026-09-01 修复：units 元素可能是字符串（"U6" / "U6-9U6" 等含字母与连字符的
+    #   畸形串），直接喂给下方 `r'Unit\s*0*%d\b' % unit_num` 会抛
+    #   "TypeError: %d format: a real number is required, not str" → 模块整体崩溃、0 题。
+    #   统一规范化为 int 列表（如 "U6-9U6" → [6,7,8,9]）再遍历。
     if units:
+        _norm = _normalize_units(units)
+        if _norm != list(units):
+            step_log(f"→ 单元规范化: {units!r} → {_norm}", "info")
+        units = _norm
+    if units:
+        # ★ 预检：模块列表页里有没有任何"去练习"/"去答题"按钮？一个都没有说明该模块此年级未上线
+        _any_btn = (d(text="去练习").exists(timeout=2) or d(text="去答题").exists(timeout=2)
+                    or 'text="去练习"' in (d.dump_hierarchy() or "")
+                    or 'text="去答题"' in (d.dump_hierarchy() or ""))
+        step_log(f"[3] 单元遍历({len(units)}个)：U{units[0]}-U{units[-1]}；模块列表含入口按钮: {_any_btn}", "info")
+        if not _any_btn:
+            step_log(f"⚠ {module_name} 该年级/版本下未上线（列表页无'去练习'/'去答题'），结束并返回主页", "warning")
+            back_to_home(d)
+            return 0
+
+        _any_clicked = False
         for ui, unit_num in enumerate(units):
             # ★ 停止检查：前端停止 → 中断单元循环
             if should_stop():
                 step_log("⏹ 收到停止请求，中断单元循环", "warning")
                 return
-            print(f"\n  {'='*40}")
-            print(f"  🎯 Unit {unit_num} [{ui+1}/{len(units)}]")
-            print(f"  {'='*40}")
+            step_log(f"🎯 Unit {unit_num} [{ui+1}/{len(units)}]", "step")
+            step_log(f"{'='*40}", "info")
             # 在模块列表里找该单元的"去练习"并点击
+            # ★ 策略：Unit 标题可能在 WebView 内不暴露为 text 节点，无法通过文字匹配。
+            #   但"去练习"是原生按钮。列表从顶部开始，第 N 个"去练习"按钮即 Unit N。
+            #   ★ 2026-08-29 修复"Unit 7 滑不到 / 自动停止"根因：听力专项练习列表是 WebView
+            #     懒加载，进入后只渲染前面几个单元的"去练习"按钮。原逻辑靠"连续 3 次按钮数
+            #     不变就停滑"会误判列表到底 → 提前 break 放弃，Unit 7 永远滚不到屏幕里。
+            #     改为：用"滑动前后顶部第 1 个按钮位置是否真的位移"判定是否到底
+            #     （连续 4 次不动才认到底），否则一直滑到出现第 N 个按钮或达 30 次上限。
             clicked = False
-            for _ in range(20):  # 滚动+查找
-                # 找目标 Unit 按钮
-                btns = [(e, e.bounds[1]) for e in (d.xpath('//*[@text="去练习"]').all() or [])]
-                unit_rows = [(e, e.text, e.bounds[1]) for e in (d.xpath('//*[@text!=""]').all() or [])
-                            if (e.text or "").startswith(f"Unit {unit_num}")]
-                if unit_rows:
-                    ue, uname, uy = unit_rows[0]
-                    # 最近"去练习"匹配该单元行
-                    for be, by in btns:
-                        if abs(by - uy) < 120:
-                            be.click(); time.sleep(1.6); clicked = True
+            _swipe_count = 0
+            _top_history = []   # 列表顶部第1个单元标题位置，用于判列表到底
+            while _swipe_count < 30:
+                # ★ 改用「单元标题文字」定位目标行 → 点同行黄色按钮，不再数第 N 个按钮。
+                #   根因：本版本练习列表从 Unit 3 起（无 Unit 1/2），"第 N 个按钮 = Unit N"
+                #         不成立（数第 7 个按钮实际是 Unit 9），导致 Unit 7 永远找不到。
+                #   正确做法与测试路径一致：滑到目标单元标题出现 → 找它同行最近的
+                #   "去练习/去答题"按钮 → 点那个按钮元素本身（非坐标、非文字）。
+                try:
+                    _els = d.xpath('//*[@text!=""]').all() or []
+                except Exception:
+                    _els = []
+                # 收集所有 去练习/去答题 黄色按钮
+                _btns = [e for e in _els if (e.text or '').strip() in ('去练习', '去答题')]
+                # 找目标单元标题（含 "Unit N"，且本身不是按钮）
+                _target = None
+                for e in _els:
+                    _t = (e.text or '').strip()
+                    if re.search(r'Unit\s*0*%d\b' % unit_num, _t) and _t not in ('去练习', '去答题'):
+                        _target = e
+                        break
+                if _target is None:
+                    # 当前屏没有目标单元 → 向下滑动加载更多（目标通常在下方）
+                    _first = next((e for e in _els if re.search(r'Unit\s*\d+', (e.text or ''))), None)
+                    _top_history.append(_first.bounds if _first is not None else None)
+                    step_log(f"→ 屏内未见 Unit {unit_num}，向下滑动加载 (已滑 {_swipe_count+1} 次)", "info")
+                    S_swipe(d, 500, 1800, 500, 600, 0.4); time.sleep(0.8)
+                    _swipe_count += 1
+                    if len(_top_history) >= 4 and all(b == _top_history[-1] for b in _top_history[-4:] if b is not None):
+                        step_log("→ 列表已到底，停止滑动", "info")
+                        break
+                    continue
+                # 目标单元在屏内 → 找它【正下方最近】的 去练习/去答题 按钮
+                # （布局：每个单元块 = 标题在上，黄色按钮在其下方；点标题下方第一个按钮即本单元）
+                _title_bottom = _target.bounds[3]
+                _row_cy = (_target.bounds[1] + _target.bounds[3]) // 2
+                _h = d.window_size()[1]
+                # 候选按钮：顶部在标题底部之下（含小容差），即位于该单元标题【下方】
+                _row_btns = [b for b in _btns if b.bounds[1] >= _title_bottom - 80]
+                if not _row_btns:
+                    # 标题可见但按钮在屏幕底边外未渲染（末项贴底）→ 上滑（手指从屏底往上）
+                    # 让目标整行进屏幕中部，按钮才会被 WebView 渲染出来。
+                    # ★ 实测：必须用大距离上滑，小滑距无效。
+                    step_log(f"→ Unit {unit_num} 标题可见但按钮在屏外，上滑使其进入屏幕", "info")
+                    S_swipe(d, 500, 2300, 500, 1050, 0.45); time.sleep(0.9)
+                    _swipe_count += 1
+                    continue
+                # 取【最靠上】的（即离标题最近）那个按钮 = 本单元的 去练习/去答题
+                be = min(_row_btns, key=lambda b: b.bounds[1])
+                by1, by2 = be.bounds[1], be.bounds[3]
+                step_log(f"→ 找到 Unit {unit_num} 下方最近按钮(标题底={_title_bottom})，按钮y[{by1},{by2}] 屏高{_h}", "info")
+                if 20 <= by1 and by2 <= _h - 20:
+                    for _click_try in range(3):
+                        try:
+                            be.click(); time.sleep(2.5)
+                        except Exception as _ce:
+                            step_log(f"⚠ 点击 Unit {unit_num} 按钮异常: {_ce}，重试", "warning")
+                            time.sleep(0.5)
+                            continue
+                        # 验证：若仍能看到原列表的去练习按钮，说明没点进去
+                        _xml_after = d.dump_hierarchy() or ""
+                        _still_list = ('text="去练习"' in _xml_after or 'text="去答题"' in _xml_after) and (
+                            'text="重新答题"' not in _xml_after and 'text="开始答题"' not in _xml_after
+                        )
+                        if not _still_list:
+                            clicked = True
                             break
-                if clicked: break
-                S_swipe(d, 500, 1800, 500, 600, 0.3); time.sleep(0.4)
+                        step_log(f"→ 点击后仍在列表页，重试 ({_click_try+1}/3)", "info")
+                        time.sleep(0.8)
+                    if clicked:
+                        break
+                    # 3 次点击仍在列表 → 可能坐标错位，向下滑重定位后重试
+                    step_log("→ 多次点击仍在列表，向下滑动重定位", "info")
+                    S_swipe(d, 500, 1800, 500, 600, 0.4); time.sleep(0.8)
+                    _swipe_count += 1
+                    continue
+                # 目标按钮在屏幕下方之外：内容向下滚动（露出下方），手指从下往上滑（y 大→小）
+                if by2 > _h - 20:
+                    step_log(f"→ Unit {unit_num} 按钮在屏幕下方，向下滚动", "info")
+                    S_swipe(d, 500, 1800, 500, 600, 0.4); time.sleep(0.8)
+                    _swipe_count += 1
+                    continue
+                # 目标按钮在屏幕上方之外：内容向上滚动（露出上方），手指从上往下滑（y 小→大）
+                if by1 < 20:
+                    step_log(f"→ Unit {unit_num} 按钮在屏幕上方，向上滚动", "info")
+                    S_swipe(d, 500, 600, 500, 1800, 0.4); time.sleep(0.8)
+                    _swipe_count += 1
+                    continue
             if not clicked:
-                print(f"  ❌ U{unit_num} 找不到去练习"); continue
-            print(f"  ✅ U{unit_num} 去练习")
+                step_log(f"❌ U{unit_num} 在模块列表中找不到'去练习'/'去答题'入口（该单元未上线或列表未加载）", "warning")
+                continue
+            _any_clicked = True
+            step_log(f"✅ U{unit_num} 去练习", "success")
             # 跑子模块
             run_sub_modules()
             # 回单元列表
-            print(f"  ↩ 回单元列表...")
+            step_log("↩ 回单元列表...", "info")
             for _ in range(5):
-                if d(text="去练习").exists(timeout=1): break
+                if d(text="去练习").exists(timeout=1) or d(text="去答题").exists(timeout=1): break
                 d.press("back"); time.sleep(0.6)
             time.sleep(0.4)
         # 所有单元完成后回主页
-        print(f"  ↩ 回主页...")
-        back_to_home(d, GRADE_LEVEL)
+        step_log("↩ 回主页...", "info")
+        if not _any_clicked:
+            step_log(f"⚠ 所选单元 {units} 均未找到入口，{module_name} 该年级下可能待开发", "warning")
+        back_to_home(d)
     else:
         # 无单元列表，直接跑 entry_actions + 子模块（或直接答题）
         run_sub_modules()
@@ -1897,115 +2435,68 @@ def _handle_word_fill(d, config):
     print(f"    选词填空题，处理中...")
     step_log("📝 选词填空：点击空位→选词→检查", "step")
 
-    # ★ 2026-08-26 空位精确识别（重写，实测）：真正的选词空位 = resource-id 含
-    #   select_tv 的 CheckBox（text='' = 未填；text=单词 = 已填）。之前误把序号节点
-    #   (new_tv_sort) 或短文小块当空位 → 点错位置不弹选词面板 → 死循环。
-    #   ★ 实测（阅读短文选词填空）：空位编号 new_tv_sort(text=1..5) + 空位输入框 select_tv
-    #     (CheckBox,text='')，必须点 select_tv(输入框) 才能激活选词面板！
+    # 空位定义：短文区的 CheckBox（text='' 是空位；checked=false=未填，true=已填）
+    #   ★ 短文可滚动 → 不能固定 y 范围，排除顶部(状态栏<200)和底部导航(>2250)即可
     def _find_slots():
         xml = d.dump_hierarchy()
         slots = []
-        # ① 首选：select_tv（空位输入框 CheckBox）
-        #   ★ 2026-08-30 精确匹配：必须 endswith select_tv，防止把 select_btn（选项）
-        #     误当空位（select_btn 也含 "select" 字样）
-        for m in re.finditer(r'<node\b[^>]*>', xml):
+        for m in re.finditer(r'<node[^>]*CheckBox[^>]*>', xml):
             b = m.group(0)
-            rid = re.search(r'resource-id="([^"]*)"', b)
             bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', b)
-            if not (rid and bm):
-                continue
-            rid_s = rid.group(1)
-            if not re.search(r'(select_tv|_tv)$', rid_s, re.I) or 'select_btn' in rid_s:
+            if not bm:
                 continue
             x1, y1, x2, y2 = int(bm.group(1)), int(bm.group(2)), int(bm.group(3)), int(bm.group(4))
-            if y1 < 200 or y2 > 2250:
+            if y1 < 200 or y2 > 2250:   # 排除顶部状态栏/底部导航
                 continue
+            # 空位 CheckBox 的 text 为空（无单词）；已填的显示单词
             tm = re.search(r'text="([^"]*)"', b)
-            txt = tm.group(1).strip() if tm else ''
-            # ★ 已填判定：只看 text 是否有单词。checked=true 只是"当前激活的空位"，
-            #   不代表已填（实测：点空位激活时 checked=true 但 text=''，填词后 text=单词）。
-            has_content = bool(txt)  # 填过 = text 是单词
-            slots.append(((x1 + x2) // 2, (y1 + y2) // 2, has_content, txt))
-        if slots:
-            # 未填优先，按 y 排序
-            slots.sort(key=lambda s: (s[2], s[1]))
-            return slots
-        # ② 无 select_tv（旧题/方框空位）→ 回退：找含序号节点 nearby 的空位，或 CheckBox 空位
-        for m in re.finditer(r'<node[^>]*>', xml):
-            b = m.group(0)
-            cls = re.search(r'class="([^"]*)"', b)
-            bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', b)
-            if not (cls and bm):
-                continue
-            x1, y1, x2, y2 = int(bm.group(1)), int(bm.group(2)), int(bm.group(3)), int(bm.group(4))
-            if y1 < 200 or y2 > 2250:
-                continue
-            cname = cls.group(1)
-            if 'CheckBox' in cname:
-                tm = re.search(r'text="([^"]*)"', b)
-                txt = tm.group(1).strip() if tm else ''
-                slots.append(((x1 + x2) // 2, (y1 + y2) // 2, bool(txt), txt))
+            txt = (tm.group(1).strip() if tm else '')
+            checked = 'checked="true"' in b
+            # 未填 = checked=false 且 text 空（或有 tv_sort 序号）
+            slots.append(((x1+x2)//2, (y1+y2)//2, checked, txt))
+        # 未填优先，按 y 排序
+        slots.sort(key=lambda s: (s[2], s[1]))
         return slots
 
-    # ★ 2026-08-26 重构：选词填空与"方框排序"同构（用户指示）——
-    #   排序题 = 点方框激活 → 循环点底部序号按钮(1,2,3..，点一个消耗一个)；
-    #   选词填空 = 点空位激活 → 循环点底部单词按钮(点一个消耗一个)。
-    #   复用排序题模式B的"动态检测底部按钮 + 点完重新检测 + 栏空即完成"逻辑，
-    #   只是底部按钮从"序号"换成"单词(select_btn)"。
+    # 选词栏单词：点击空位后弹出的英文单词（排除短文正文 question_title_tv + 空位 select_tv）
+    #   ★ 短文可滚动 → y 范围放宽（150-2250），靠"非question_title_tv + 非短文词"区分
+    def _find_word_panel(exclude_texts):
+        xml = d.dump_hierarchy()
+        words = []
+        for m in re.finditer(r'<node[^>]*>', xml):
+            b = m.group(0)
+            tm = re.search(r'text="([^"]{2,30})"', b)
+            if not tm:
+                continue
+            txt = tm.group(1).strip()
+            if not re.search(r'[A-Za-z]', txt):   # 必须含英文
+                continue
+            if txt in exclude_texts:              # 排除短文已有词
+                continue
+            if 'question_title_tv' in b:          # 排除短文正文
+                continue
+            if 'select_tv' in b:                  # 排除空位本身（已填单词的空位）
+                continue
+            bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', b)
+            if not bm:
+                continue
+            x1, y1, x2, y2 = int(bm.group(1)), int(bm.group(2)), int(bm.group(3)), int(bm.group(4))
+            if y1 < 150 or y2 > 2250:             # 排除顶部/底部导航
+                continue
+            if len(txt) > 25:
+                continue
+            checked = 'checked="true"' in b
+            words.append((txt, checked, (x1+x2)//2, (y1+y2)//2, y1))
+        words.sort(key=lambda w: w[4])
+        return words
 
-    # ① 动态检测底部单词按钮容器（对齐排序题 _find_num_btns 的检测思路）
-    #   ★ 实测：单词是 select_btn(TextView,clickable=false)，但父容器 clickable=true——
-    #     与排序题序号按钮同构。点一个单词 → 填进空位 → 单词栏整体上移(用户说的"选项框上移")，
-    #     容器不消失 → 完成判定用"空位填满"，不用"栏空"。
-    # ★ 单词按钮特征：y 1500-2250、clickable=true、宽 100-1000（★ 2026-08-30 放宽：
-    #   29题"补全对话"的选项容器宽 964，旧条件 100<w<400 会漏掉 → 误判成填空）
-    # ★ 2026-08-30 二次修复：优先用 dump 正则精确找 select_btn 节点（选项文本元素），
-    #   避免 xpath clickable 容器把【方框】也当成选项（方框容器也 clickable=true 且在
-    #   同 y 区间 → 每轮第二次点击点到方框 → 用户实测"点了两次方框"）
-    def _find_word_btns():
-        btns = []
-        try:
-            xml = d.dump_hierarchy()
-            # ① 首选：select_btn 节点（text 含英文单词/句子，点其中心即点中选项）
-            for m in re.finditer(r'<node[^>]*resource-id="[^"]*select_btn[^"]*"[^>]*>', xml):
-                b = m.group(0)
-                tm = re.search(r'text="([^"]*)"', b)
-                bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', b)
-                if not (tm and bm):
-                    continue
-                t = tm.group(1).strip()
-                if not re.search(r'[A-Za-z]{2,}', t):
-                    continue
-                x1, y1, x2, y2 = int(bm.group(1)), int(bm.group(2)), int(bm.group(3)), int(bm.group(4))
-                if S_h(d, 1500) < y1 < S_h(d, 2250):
-                    btns.append(((x1 + x2) // 2, (y1 + y2) // 2))
-            if btns:
-                btns.sort(key=lambda t: (t[1], t[0]))
-                return btns
-        except Exception:
-            pass
-        # ② 兜底：xpath clickable 容器（旧逻辑；无 select_btn 的题型才走这里）
-        try:
-            for e in (d.xpath('//*[@clickable="true"]').all() or []):
-                b = e.bounds
-                w = b[2] - b[0]
-                if S_h(d, 1500) < b[1] < S_h(d, 2250) and 100 < w < 1000:
-                    btns.append(((b[0] + b[2]) // 2, (b[1] + b[3]) // 2))
-        except Exception:
-            pass
-        # 按 (y, x) 排序（左上优先），与排序题一致
-        btns.sort(key=lambda t: (t[1], t[0]))
-        return btns
-
-    # ② 点第一个空位激活（选词面板/单词栏出现在底部）
     def _wait_stable(timeout=3.0, interval=0.3):
         """等待页面稳定（连续两次 dump 一致），用户要求'点击到不会变化再继续'"""
         try:
             _a = d.dump_hierarchy()
             time.sleep(interval)
             _b = d.dump_hierarchy()
-            if _a == _b:
-                return True
+            return _a == _b
         except Exception:
             return True
         t0 = time.time()
@@ -2020,122 +2511,61 @@ def _handle_word_fill(d, config):
                 pass
         return False
 
-    _slots0 = _find_slots()
-    _empty0 = [s for s in _slots0 if not s[2]]
-    if _empty0:
+    # ── 循环填所有空位 ──
+    # ★ 收集短文正文已有词（question_title_tv 中），选词栏单词排除这些（防误点正文）
+    def _collect_short_texts():
         try:
-            d.click(_empty0[0][0], _empty0[0][1])
-            print(f"    → 点第一个空位激活 ({_empty0[0][0]},{_empty0[0][1]})")
+            _xml = d.dump_hierarchy()
+            return set(re.findall(r'question_title_tv[^>]*text="([^"]{1,25})"', _xml)
+                       + re.findall(r'text="([^"]{1,25})"[^>]*question_title_tv', _xml))
+        except Exception:
+            return set()
+    _short_words = _collect_short_texts()
+    _max_rounds = 20
+    for _round in range(_max_rounds):
+        slots = _find_slots()
+        # ★ 未填 = checked=false 且 text 空（填过的空位 checked=false 但 text=单词，如 fifty）
+        empty = [s for s in slots if not s[2] and not s[3]]
+        if not empty:
+            break   # 全部填完
+        cx, cy = empty[0][0], empty[0][1]
+        # ① 点击空位激活选词栏
+        try:
+            d.click(cx, cy)
         except Exception:
             pass
-        time.sleep(1.0)
-    else:
-        # ★ 2026-08-30：未找到空位 → 题干介绍太长，方框在下方未渲染 → 下滑后重试
-        #   （29题"根据情景补全对话"实测：需下滑才出现 select_tv 空位+select_btn 选项）
-        for _sw in range(4):
-            print(f"    ⏬ 未找到空位，下滑第{_sw+1}次找方框...")
-            S_swipe(d, 540, 1700, 540, 800, 0.4)
-            time.sleep(0.6)
-            _slots0 = _find_slots()
-            _empty0 = [s for s in _slots0 if not s[2]]
-            if _empty0:
-                try:
-                    d.click(_empty0[0][0], _empty0[0][1])
-                    print(f"    → 下滑后点第一个空位激活 ({_empty0[0][0]},{_empty0[0][1]})")
-                except Exception:
-                    pass
-                time.sleep(1.0)
+        # ★ 等选词栏出现（用户关键：点击到稳定不变化再继续）——轮询等新单词出现
+        time.sleep(1.2)
+        for _w in range(4):
+            _xml_w = d.dump_hierarchy()
+            _panel = _find_word_panel(_short_words)
+            if _panel:
                 break
-            # 下滑后仍没空位 → 先点一次屏幕中部（可能要点大图/激活才出方框）
-            if _sw == 0:
-                try:
-                    d.click(540, 1200)
-                    time.sleep(0.8)
-                except Exception:
-                    pass
-        if not _empty0:
-            print(f"    ⚠ 下滑多次仍未找到空位，尝试直接处理")
-
-    # ③ 循环填词（★ 2026-08-30 改为"每轮点空位+点选项"交替模式）：
-    #   实测两种交互都兼容：
-    #   28题"看图选词"：点第一个空位激活 → 连续点选项自动填后续空位（焦点自动切换）
-    #   29题"补全对话"：每个空位必须单独点击激活，再点选项填入（焦点不自动切换）
-    #   → 统一策略：每轮【点未填空位激活 → 点一个选项】，两种都覆盖。
-    #   选项容器点过(词填进空位)后可能失效 → 用"空位已填数"判断是否点中；
-    #   未点中(空位数没+1) → 按序试下一个选项容器。
-    _clicked_cnt = 0
-    _last_filled = -1  # 上次循环已填空位数（防抖：点后无变化说明该容器已失效，跳过）
-    _swipe_retry = 0    # ★ 2026-08-30：空位滚出屏幕时下滑重试计数
-    for _round in range(20):
-        _slots_now = _find_slots()
-        _empty_now = [s for s in _slots_now if not s[2]]
-        _filled_now = len(_slots_now) - len(_empty_now)
-        if not _empty_now:
-            if not _slots_now and _swipe_retry < 3:
-                # ★ 一个空位都检测不到 → 可能被滚出屏幕（题干介绍太长），下滑重试
-                _swipe_retry += 1
-                print(f"    ⏬ 空位不在屏幕内，下滑重试 {_swipe_retry}/3")
-                S_swipe(d, 540, 1700, 540, 800, 0.4)
-                time.sleep(0.7)
-                continue
-            break  # 空位全满 = 完成
-        # ★ 每轮都点未填空位（激活/切换焦点）——兼容"每个方框都要点"的题型
-        _bx, _by = _empty_now[0][0], _empty_now[0][1]
-        try:
-            d.click(_bx, _by)
-            print(f"    → 点空位{_filled_now+1} 激活 ({_bx},{_by})")
-        except Exception:
-            pass
-        time.sleep(0.6)
-        # 点选项栏第一个按钮
-        btns = _find_word_btns()
-        if not btns:
-            print(f"    ⚠ 单词栏未识别（可能已填完或布局异常）")
+            time.sleep(0.8)
+        _wait_stable()
+        # ② 找选词栏单词并点一个（优先未选的）
+        words = _panel if '_panel' in dir() else _find_word_panel(_short_words)
+        if not words:
+            print(f"    ⚠ 空位({cx},{cy})点击后无选词栏出现，可能是已填/布局变化")
             break
-        # 找"当前可点"的容器：优先第一个；若上次点它空位没变（已失效），按序找下一个
-        target = btns[0]
-        if _filled_now == _last_filled and _last_filled >= 0:
-            # 上一个容器点了没效果（已失效）→ 尝试下一个容器
-            _tried = []
-            for _b in btns[1:]:
-                if _b in _tried:
-                    continue
-                _tried.append(_b)
-                try:
-                    d.click(_b[0], _b[1])
-                    time.sleep(0.8)
-                    _slots_c = _find_slots()
-                    _em_c = [s for s in _slots_c if not s[2]]
-                    if len(_slots_c) - len(_em_c) > _filled_now:
-                        _clicked_cnt += 1
-                        print(f"    → 选词{_clicked_cnt} @({_b[0]},{_b[1]})")
-                        _last_filled = len(_slots_c) - len(_em_c)
-                        break
-                except Exception:
-                    pass
-            if _tried and len(_tried) == len(btns) - 1 and _clicked_cnt == 0:
-                print(f"    ⚠ 所有单词容器均无效果，可能已填完")
-            continue
+        target = None
+        for w in words:
+            if not w[1]:   # 未选中优先
+                target = w
+                break
+        if target is None and words:
+            target = words[0]
         try:
-            d.click(target[0], target[1])
-            _clicked_cnt += 1
-            print(f"    → 选词{_clicked_cnt} @({target[0]},{target[1]})")
-            _last_filled = _filled_now
+            d.click(target[2], target[3])
         except Exception:
             pass
-        # 等单词填进空位（布局变化/上移稳定）
-        for _w in range(5):
-            time.sleep(0.5)
-            _slots_chk = _find_slots()
-            _em_chk = [s for s in _slots_chk if not s[2]]
-            if not _em_chk:
-                break  # 已填满
-            _filled_chk = len(_slots_chk) - len(_em_chk)
-            if _filled_chk > _filled_now:
-                _last_filled = _filled_chk
-                break  # 填上了 → 继续
-    if _clicked_cnt == 0:
-        print(f"    ⚠ 未点到任何单词（单词栏未识别），尝试兜底点击检查")
+        # ③ 等单词选中/空位更新稳定（用户关键要求：不变化再继续）
+        time.sleep(1.2)
+        _wait_stable()
+        print(f"    空位{_round+1} → 选词 {target[0]}")
+        step_log(f"  ✏ 选词: {target[0]}", "info")
+    else:
+        print(f"    ⚠ 选词填空 {_max_rounds} 轮未填完，可能选词栏异常")
     _wait_stable()
 
     # ── 点"检查" ──
@@ -2200,7 +2630,7 @@ def _handle_fill_blank(d, config):
     #   ★ 关键安全点：绝不能"没等页面加载完就 back"——back 会退出答题页弹"中途退出"！
     #     所以开场严格按序：先等题干出现（页面加载完）→ 等键盘弹出（mInputShown 或等待）
     #     → 再 back → 探测 EditText
-    _FILL_KWS = ('填空', '补全', '每空', '填写', '填词', '完成小短文')
+    _FILL_KWS = ('填空', '补全', '每空', '填写', '填词', '完成小短文', '写单词', '写句子', '听录音，写', '看图写', '写一写')
     _et_ok = False
 
     # ① 等页面加载完成（题干关键词出现 或 EditText 已可见）

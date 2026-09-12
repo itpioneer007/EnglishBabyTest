@@ -145,6 +145,45 @@ def _find_control(xml: str, keywords: tuple, rid_pattern: str = None) -> tuple:
     return False, False
 
 
+def _find_speaker_top_y(xml: str):
+    """★ 听力专项规则：绿色喇叭（播放按钮）下方的文字都不是题干。
+
+    用户 2026-08-30 明确规则：听力专项页面里，绿色喇叭下面的内容（选项单词
+    如 airport / sport / transport）不算题干，题干只能是喇叭上方的文字。
+
+    实现：找到页面【最上方】的播放/喇叭控件，以其顶边 y 作为"题干区域下边界"；
+    返回 None 表示页面无播放控件（不限制，保持原有行为）。
+    """
+    y_top = None
+    rid_re = re.compile(r'resource-id="[^"]*(play|sound|audio|speaker)[^"]*"')
+    play_kws = ("播放", "喇叭", "扬声器", "ic_play", "btn_play", "play_btn",
+                "audio", "sound", "▶", "原音")
+    for m in re.finditer(r'<node[^>]*>', xml or ""):
+        tag = m.group(0)
+        # 系统状态栏/通知栏不是 App 控件（避免误命中系统音量条）
+        if "com.android.systemui" in tag or 'package="android"' in tag:
+            continue
+        # ★ 必须是【可点击】的绿色喇叭图标（用户 2026-08-30 要求）：
+        #   静态图片/普通容器/纯文本标签不算，避免把非交互元素误当成题干分界线
+        if 'clickable="true"' not in tag:
+            continue
+        hit = bool(rid_re.search(tag))
+        if not hit:
+            for kw in play_kws:
+                if kw in tag:
+                    hit = True
+                    break
+        if not hit:
+            continue
+        bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+        if not bm:
+            continue
+        y1 = int(bm.group(2))
+        if y_top is None or y1 < y_top:
+            y_top = y1
+    return y_top
+
+
 def collect_ui_evidence(xml: str, qtype: str = "", skip_stem: bool = False) -> list:
     """从页面 XML 提取四维完整性证据。返回 evidence 列表（供 step_log 前端证据卡）
 
@@ -177,6 +216,15 @@ def collect_ui_evidence(xml: str, qtype: str = "", skip_stem: bool = False) -> l
         #   大题题干会错位显示成上面大题的内容——不重复展示即可）
         stems = [] if not skip_stem else None
         seen = set()
+        # ★★★ 听力专项规则（用户 2026-08-30 明确）：绿色喇叭（播放按钮）【下方】的
+        #   文字/选项单词（airport / sport 等）一律不算题干；
+        #   只保留顶边 y 在喇叭之上的文本作为题干。
+        #   ★ 用 is_listening 判定（XML 含"听录音"等关键词 + qtype=听力专项/听力训练/磨耳精听）——
+        #     不直接查 qtype 含"听力"，因为 engine.py 1680 传的是
+        #     _detect_question_type_cached 返回的具体题型（"single_choice"/"听音选择" 等），
+        #     不一定含"听力"两个字，会漏判导致 airport 仍混进题干（用户截图第5题实测）。
+        #     喇叭本身须【可点击】（_find_speaker_top_y 内已过滤）。
+        speaker_y_top = _find_speaker_top_y(xml) if is_listening else None
         noise = ("下一题", "上一题", "检查", "提交", "开始答题", "重新答题",
                  "继续练习", "查看报告", "练习报告", "完成", "点击录音", "点击结束",
                  "原音", "小喇叭", "播放问题", "交卷", "确定交卷", "跳过",
@@ -196,7 +244,9 @@ def collect_ui_evidence(xml: str, qtype: str = "", skip_stem: bool = False) -> l
                  "开始测试", "开始考试", "开始练习", "考试结束", "本次考试结束",
                  "耗时", "时长", "总时长", "用时", "提交答卷", "重新作答", "查看解析",
                  "答案", "正确答案", "错误答案", "本次得分", "本大题", "本小题",
-                 "分值", "满分", "本组",
+                 "分值", "满分", "本组", "单元评价", "阶段评价", "期中评价", "期末评价",
+                 # ★ 测试卷大题说明文字（如"Ⅱ. 听句子，选择与录音相符的句子。"）不是小题题干
+                 "Ⅰ.", "Ⅱ.", "Ⅲ.", "Ⅳ.", "Ⅴ.", "Ⅵ.", "Ⅶ.", "Ⅷ.", "Ⅸ.", "Ⅹ.",
                  # ★ 口语训练列表页/答题页顶部栏（用户实测"考前突破/当前版本/练习记录"被误当题干）
                  "考前突破", "当前版本", "练习记录", "退出训练",
                  # ★ 口语训练进度（"口语训练湘少六上U1"是顶部标题，含 U 编号的也排除）
@@ -223,6 +273,11 @@ def collect_ui_evidence(xml: str, qtype: str = "", skip_stem: bool = False) -> l
                 _tm = re.search(r'text="([^"]+)"', _nm.group(0))
                 if _tm:
                     t = _strip_score(_tm.group(1).strip())  # ★ 清洗尾缀"(共N分)"
+                    # ★ 喇叭下方排除：该节点落在喇叭下面 → 不是题干（听力专项规则）
+                    if speaker_y_top is not None:
+                        _bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', _nm.group(0))
+                        if _bm and int(_bm.group(4)) >= speaker_y_top:
+                            continue
                     if t and t not in seen and len(t) < 60 \
                             and (len(t) >= 4 or re.search(r'[\u4e00-\u9fff]', t)):
                         seen.add(t)
@@ -238,18 +293,34 @@ def collect_ui_evidence(xml: str, qtype: str = "", skip_stem: bool = False) -> l
                 _tm = re.search(r'text="([^"]+)"', _nm.group(0))
                 if _tm:
                     t = _strip_score(_tm.group(1).strip())
+                    # ★ 喇叭下方排除（听力专项规则）
+                    if speaker_y_top is not None:
+                        _bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', _nm.group(0))
+                        if _bm and int(_bm.group(4)) >= speaker_y_top:
+                            continue
                     if t and t not in seen and len(t) < 160:
                         seen.add(t)
                         stems.append(t)
                         _caption_taken = True
                 break  # 大题介绍只有一条
             # ★ 兜底：其他长文本（缩短到 ≥4 字符，抓到"听录音选图"等短题干）
-            for m in re.finditer(r'text="([^"]{4,})"', xml):
+            #   ★ 2026-08-30：改为【逐节点】扫描（旧逻辑只取 text 无坐标），
+            #     以便按坐标排除"喇叭下方"的选项单词（airport/sport/transport）
+            for m in re.finditer(r'<node[^>]*>', xml):
+                _tm = re.search(r'text="([^"]{4,})"', m.group(0))
+                if not _tm:
+                    continue
+                _bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', m.group(0))
+                if not _bm:
+                    continue
+                # ★★★ 听力专项规则：喇叭下方的文本一律不是题干
+                if speaker_y_top is not None and int(_bm.group(4)) >= speaker_y_top:
+                    continue
                 # ★ 口语题已拿到大题题干(tv_caption)时跳过兜底：
                 #   避免把小题句子（speech_content 等）混进"题干"字段
                 if is_speaking and _caption_taken:
                     break
-                t = _strip_score(m.group(1).strip())  # ★ 清洗尾缀"(共N分)"
+                t = _strip_score(_tm.group(1).strip())  # ★ 清洗尾缀"(共N分)"
                 if not t or t in seen or t in noise or len(t) >= 60:
                     continue
                 # ★ 单元标题（"Unit 1 What does she look like?"）与词义行（"adj. 新来的；新的"）
@@ -303,6 +374,9 @@ def collect_ui_evidence(xml: str, qtype: str = "", skip_stem: bool = False) -> l
                     y1 = int(bm.group(2))
                     t = tm.group(1).strip()
                     if y1 < _low or y1 > _high:   # 不在题目区间
+                        continue
+                    # ★ 喇叭下方排除（听力专项规则）
+                    if speaker_y_top is not None and int(bm.group(4)) >= speaker_y_top:
                         continue
                     if t in noise or any(n in t for n in noise):
                         continue

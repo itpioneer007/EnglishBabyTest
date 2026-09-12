@@ -40,25 +40,41 @@ def S_swipe(d, x1, y1, x2, y2, duration=0.4):
     return d.swipe(*S(d, x1, y1), *S(d, x2, y2), duration)
 
 
+_AD_TEXT_KEYWORDS = (
+    "老师伴学", "打卡服务", "点击参与", "广告", "推广", "跳过",
+    "专属老师服务", "正在链接", "专属", "老师服务",
+    "E英语宝伴学服务", "伴学服务",
+)
+
+
+def _has_ad_text(xml: str) -> bool:
+    """XML 中是否仍包含广告弹窗文字特征"""
+    return bool(xml) and any(kw in xml for kw in _AD_TEXT_KEYWORDS)
+
+
 def close_ad(d):
     """关闭广告：多种策略按顺序尝试
     ★ 广告结构（实测）：右下角 fl_ad_container 广告卡片，关闭按钮 resource-id=iv_close（72x72）
       "老师伴学/打卡服务"是广告卡片标题（有时只显示"伴学"），底部导航的"伴学/会员"不是广告！
-      关闭优先级：resource-id 精确定位 > description=关闭 > 广告文字 > 小尺寸X > 坐标"""
+      关闭优先级：resource-id 精确定位 > description=关闭 > 广告文字 > 小尺寸X > 卡片右上角兜底"""
     try:
         xml = d.dump_hierarchy()
     except Exception:
         xml = ""
 
     # 广告特征：弹窗广告文字 / 关闭按钮资源 / 广告角标
-    has_ad_text = any(kw in xml for kw in ("老师伴学", "打卡服务", "点击参与", "广告", "推广", "跳过"))
+    # ★ 新增"专属老师服务"等老师伴学类弹窗关键词（该弹窗含二维码，点到即跳微信）
+    has_ad_text = _has_ad_text(xml)
     has_close_btn = ('content-desc="关闭' in xml or 'text="关闭"' in xml)
     # ★ 实测：右下角广告卡片 fl_ad_container + 关闭按钮 iv_close（坐标 986,1823）
     # ★ 加固（用户反馈：担心广告关闭位置点错）：必须命中【可见】节点（visible-to-user="true"）
     #   才算真广告，防止页面里隐藏/残留的广告容器 id 误触发坐标点击。
     #   若解析到可见 iv_close 节点，优先用其真实 bounds 中心点击（更稳，不再依赖固定坐标）。
+    # ★ 同时记录广告卡片整体 bounds，找不到 iv_close 时点击卡片右上角区域，避免全局固定坐标
+    #   落到二维码/广告主体上导致跳微信。
     has_ad_card = False
     _close_xy = None
+    _card_bounds = None
     try:
         import re as _re3
         for _m3 in _re3.finditer(r'<node[^>]*>', xml):
@@ -67,22 +83,32 @@ def close_ad(d):
                 if 'visible-to-user="true"' in _t3:
                     has_ad_card = True
                     _bm3 = _re3.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', _t3)
-                    if _bm3 and ('iv_close' in _t3 or 'iv_ad' in _t3):
+                    if _bm3:
                         _x1, _y1, _x2, _y2 = map(int, _bm3.groups())
-                        _close_xy = ((_x1 + _x2) // 2, (_y1 + _y2) // 2)
+                        if 'iv_close' in _t3 or 'iv_ad' in _t3:
+                            _close_xy = ((_x1 + _x2) // 2, (_y1 + _y2) // 2)
+                        elif 'fl_ad_container' in _t3:
+                            _card_bounds = (_x1, _y1, _x2, _y2)
                     break
     except Exception:
         has_ad_card = ('fl_ad_container' in xml or 'iv_ad' in xml or 'iv_close' in xml)  # 解析失败保守处理
 
-    # 方式0（★ 最可靠）：检测到广告卡片 → 点关闭按钮（优先节点真实坐标，兜底实测坐标 986,1823）
+    # 方式0（★ 最可靠）：检测到广告卡片 → 点关闭按钮（优先节点真实坐标，其次卡片右上角）
     if has_ad_card:
         try:
             if _close_xy:
                 d.click(*S(d, *_close_xy))
                 print(f"    🔔 通过广告卡片关闭按钮真实坐标 {_close_xy} 关闭广告")
+            elif _card_bounds:
+                # 关闭按钮一般在卡片右上角，取卡片右边缘往左约 80px、下约 80px 的安全区
+                _cx = max(_card_bounds[0] + 80, _card_bounds[2] - 80)
+                _cy = _card_bounds[1] + 80
+                d.click(*S(d, _cx, _cy))
+                print(f"    🔔 通过广告卡片右上角区域 ({_cx},{_cy}) 关闭广告")
             else:
-                d.click(*S(d, 986, 1823))
-                print("    🔔 通过广告卡片 iv_close 坐标 (986,1823) 关闭广告")
+                # 仅有广告文字/id 但没解析到卡片 bounds 时，不再用固定全局坐标，避免误点广告主体
+                print("    ⚠ 检测到广告卡片但无法定位关闭按钮，跳过盲目坐标点击")
+                return False
             time.sleep(0.35)
             return True
         except Exception:
@@ -121,7 +147,9 @@ def close_ad(d):
                     for elem in (d.xpath('//*[@text!=""]').all() or []):
                         if kw in (elem.text or ""):
                             b = elem.bounds
-                            close_x = min(b[2] - 10, 1080)
+                            # 使用当前屏幕宽度，避免在 1224 等宽屏上被错误截断
+                            _screen_w = d.window_size()[0]
+                            close_x = min(b[2] - 10, _screen_w - 10)
                             close_y = b[3] + 15
                             d.click(close_x, close_y)
                             print(f"    🔔 通过 ad 文字 [{kw}] 定位 X 按钮 ({close_x},{close_y})")
@@ -157,8 +185,10 @@ def close_ad(d):
         except Exception:
             pass
 
-    # 方式4/5：右上角 ImageView / 硬编码坐标 —— 仅当页面有广告特征文字时才尝试
+    # 方式4/5：右上角 ImageView —— 仅当页面有广告特征文字时才尝试
     # （避免误点主页右上角的正常功能按钮，如二维码/扫码入口）
+    # ★ 删除固定坐标 (986,1823) 兜底：该坐标在部分机型/弹窗上会落到广告主体/二维码，
+    #   导致误点跳微信。广告卡片的右上角兜底已在方式0中通过 _card_bounds 处理。
     if has_ad_text:
         try:
             for elem in d(className="android.widget.ImageView"):
@@ -171,13 +201,6 @@ def close_ad(d):
                     print("    🔔 通过右上角 ImageView 关闭广告（检测到广告特征）")
                     time.sleep(0.35)
                     return True
-        except Exception:
-            pass
-        try:
-            d.click(*S(d, 986, 1823))
-            print("    🔔 通过 ad-X 坐标 (986,1823) 关闭广告")
-            time.sleep(0.35)
-            return True
         except Exception:
             pass
 
@@ -426,6 +449,16 @@ def settle_ads(d, wait_total=10):
                     pass
             time.sleep(0.5)
         else:
+            # ★ 安全加固：即使 close_ad/dismiss 没动作，若页面仍有广告文字，
+            #   不视为"干净"，继续等待/重试，避免后续点击落在广告上导致跳微信。
+            try:
+                xml_now = d.dump_hierarchy()
+            except Exception:
+                xml_now = ""
+            if _has_ad_text(xml_now):
+                clean = 0
+                time.sleep(0.5)
+                continue
             clean += 1
             if clean >= 2:
                 return True
@@ -447,19 +480,36 @@ def applock_blocked(d):
         pass
     return False
 
-def scroll_and_find(d, text, max_swipes=5) -> bool:
-    """查找文字：先直接找，然后向上滑（内容下移）找下方，再向下滑（内容上移）找上方"""
-    if d(text=text).exists(timeout=2): return True
-    # 第一轮：向上滑（内容下移）
-    for _ in range(max_swipes):
-        S_swipe(d, 500, 1400, 500, 400, 0.3)
-        time.sleep(0.35)
-        if d(text=text).exists(timeout=1.5): return True
-    # 第二轮：向下滑（内容上移，返回顶部区域）
-    for _ in range(max_swipes):
-        S_swipe(d, 500, 400, 500, 1400, 0.3)
-        time.sleep(0.35)
-        if d(text=text).exists(timeout=1.5): return True
+def scroll_and_find(d, text, max_swipes=8) -> bool:
+    """查找文字：先直接找，然后向上滑（内容下移）找下方，再向下滑（内容上移）找上方
+    ★ 支持精确/包含匹配，以及 description 属性（部分入口文字在 content-desc 里）"""
+    def _found():
+        if d(text=text).exists(timeout=1): return True
+        if d(textContains=text).exists(timeout=1): return True
+        if d(description=text).exists(timeout=1): return True
+        if d(descriptionContains=text).exists(timeout=1): return True
+        # 兜底：从 dump 里子串匹配可见节点
+        try:
+            xml = d.dump_hierarchy()
+            return f'text="{text}"' in xml or f'content-desc="{text}"' in xml
+        except Exception:
+            return False
+    if _found(): return True
+    # 第一轮：向上滑（内容下移），找下方内容
+    for i in range(max_swipes):
+        S_swipe(d, 500, 1600, 500, 500, 0.4)
+        time.sleep(0.5)
+        if _found():
+            print(f"    👇 向下滑动 {i+1} 次后找到「{text}」")
+            return True
+    # 第二轮：向下滑（内容上移，返回顶部区域），找上方内容
+    for i in range(max_swipes):
+        S_swipe(d, 500, 500, 500, 1600, 0.4)
+        time.sleep(0.5)
+        if _found():
+            print(f"    👆 向上滑动 {i+1} 次后找到「{text}」")
+            return True
+    print(f"    ❌ 滚动查找「{text}」失败（已滑 {max_swipes*2} 次）")
     return False
 
 # ==================== ⑥ 年级切换 ====================
@@ -480,18 +530,136 @@ def ensure_grade(d, grade_level, book_version=""):
         return True
     return False
 
-def back_to_home(d, grade_level):
-    """从模块内部回到年级主页：按 back 直到看到年级文字"""
-    for _ in range(8):
+def back_to_home(d, grade_level=""):
+    """从模块内部回到年级主页：按 back 直到看到年级文字或主页特征"""
+    home_keywords = ["我的练习", "专项突破", "教材精学", "学习计划", "成长记录"]
+    for _ in range(10):
         dismiss_global_popups(d)
-        if d(textContains=grade_level).exists(timeout=1):
+        if grade_level and d(textContains=grade_level).exists(timeout=1):
             return True
+        for kw in home_keywords:
+            if d(textContains=kw).exists(timeout=1):
+                return True
         try:
             d.press("back")
         except Exception:
             pass
         time.sleep(0.5)
-    return d(textContains=grade_level).exists(timeout=2)
+    return False
+
+
+def _is_miniprogram_auth(xml: str) -> bool:
+    """判断是否误点主页悬浮广告后跳到了微信小程序授权页"""
+    if not xml:
+        return False
+    return any(k in xml for k in ("E英语宝伴学服务", "申请", "你的昵称、头像", "微信昵称头像"))
+
+
+def enter_module_by_entry(d, entry, max_tries=5):
+    """★ 稳健进入模块：滚动找入口 → 点前清广告 → 若入口落在右下角悬浮广告区则上滑错开 → 点击 → 校验是否进入
+
+    返回 True/False（是否成功进入模块页）。
+
+    ★ 统一给「练习(run_module)」与「测试(run_test_module)」复用，避免测试路径直接 click 误触广告
+       （用户实测：仅选测试时手机点到广告、并未进入 听力专项）。
+
+    ★ 点击策略：优先点击「可点击的入口元素」(d(text=entry, clickable=True))，由 uiautomator 点击真实
+       UI 元素（必要时自动滚入视野），避免旧逻辑「按 bounds 中心算坐标后 d.click」在入口是非可点击标题、
+       或入口在屏幕外时点到错位的节点导致「点了却没进模块」。
+    """
+    try:
+        from common.logger import step_log
+    except Exception:
+        def step_log(msg, level="info"):
+            print(msg)
+
+    def _entered():
+        try:
+            _xml = d.dump_hierarchy()
+        except Exception:
+            _xml = ""
+        return any(k in _xml for k in ("去练习", "去答题", "练习记录", "重新答题", "开始答题", "测试"))
+
+    def _miniprog(xml):
+        return any(k in (xml or "") for k in ("E英语宝伴学服务", "申请", "你的昵称、头像", "微信昵称头像"))
+
+    def _el():
+        # 优先可点击的入口卡片；否则退而求其次用 text / textContains
+        try:
+            if d(text=entry, clickable=True).exists(timeout=0.5):
+                return d(text=entry, clickable=True)
+        except Exception:
+            pass
+        try:
+            if d(text=entry).exists(timeout=0.5):
+                return d(text=entry)
+        except Exception:
+            pass
+        try:
+            if d(textContains=entry).exists(timeout=0.5):
+                return d(textContains=entry)
+        except Exception:
+            pass
+        return None
+
+    def _center(el):
+        try:
+            b = el.bounds()  # ★ uiautomator2: bounds() 是方法，返回 (l,t,r,b) 元组
+            return ((b[0] + b[2]) // 2, (b[1] + b[3]) // 2)
+        except Exception:
+            return None
+
+    def _in_ad(cx, cy):
+        _w, _h = d.window_size()
+        return cx > _w * 0.6 and cy > _h * 0.6
+
+    step_log(f"[入口] 查找并点击「{entry}」...", "info")
+    if not scroll_and_find(d, entry):
+        step_log(f"❌ 未找到模块入口: {entry}", "error")
+        return False
+    settle_ads(d, wait_total=8)
+
+    for _ in range(max_tries):
+        el = _el()
+        if not el:
+            if not scroll_and_find(d, entry):
+                step_log(f"❌ 未找到模块入口: {entry}", "error")
+                return False
+            continue
+        c = _center(el)
+        if not c:
+            continue
+        cx, cy = c
+        if _in_ad(cx, cy):
+            step_log(f"⚠ 入口「{entry}」中心({cx},{cy})落在屏幕右下角广告区 → 上滑错开", "warning")
+            _h = d.window_size()[1]
+            d.swipe(cx, int(_h * 0.78), cx, int(_h * 0.35), 0.4)
+            time.sleep(1.3)
+            continue
+        try:
+            el.click()  # uiautomator 点击真实元素（必要时自动滚入视野）
+        except Exception:
+            d.click(cx, cy)
+        step_log(f"✅ 点击入口 {entry} @({cx},{cy})", "info")
+        time.sleep(1.6)
+        if _entered():
+            return True
+        _xml = ""
+        try:
+            _xml = d.dump_hierarchy() or ""
+        except Exception:
+            pass
+        if _miniprog(_xml):
+            step_log(f"⚠ 点击 {entry} 误触悬浮广告跳到小程序授权页，返回并重试", "warning")
+            for _b in range(3):
+                d.press("back"); time.sleep(0.7)
+        else:
+            step_log(f"⚠ 点击 {entry} 后未进入模块（坐标 {cx},{cy}），上滑重试", "warning")
+        _h = d.window_size()[1]
+        d.swipe(cx, int(_h * 0.78), cx, int(_h * 0.35), 0.4)
+        time.sleep(1.2)
+    step_log(f"❌ 点击入口失败: {entry}（多次滑动错开仍未能进入；若仍被广告遮挡，请手动关闭右下角卡片后重试）", "error")
+    return False
 
 # ==================== ⑦ 核心：单模块检测 ====================
 
@@ -509,6 +677,11 @@ def smart_find_unit_row(d, target, click_text="去答题", max_pages=8, prefer_r
       "去答题/重新答题"，保证从第 1 题重头测（避免漏测中途退出后的前段题目）
     返回: 是否点击成功
     """
+    try:
+        from common.logger import step_log
+    except Exception:
+        def step_log(msg, level="info"):
+            print(msg)
     import re as _re
     s = str(target).strip()
     is_keyword = not _re.fullmatch(r"\d+(-\d+)?", s)
@@ -585,10 +758,17 @@ def smart_find_unit_row(d, target, click_text="去答题", max_pages=8, prefer_r
                 row = e
                 break
         if row:
-            row_y = row.bounds[1]
+            row_top = row.bounds[1]
+            row_bottom = row.bounds[3]
+            row_center_y = (row_top + row_bottom) // 2
             # ★ prefer_restart：优先"去答题/重新答题"；首屏找不到时降级接受"继续答题"
             _accept = ("去答题", "重新答题") if (prefer_restart and not _fallback_accept) \
                 else ("去答题", "重新答题", "继续答题")
+            # ★ 同行判断：不再"第一个 y 差 < 500 就点"，因为上一行按钮可能落在 500 范围内
+            #   （如 Unit2 标题在 y=1313，Unit1 的"去答题"在 y=945，差 368 < 500，会误点 Unit1）。
+            #   改为：在所有候选按钮里选**垂直中心与标题中心最近**的一个，且距离 < 350。
+            #   若找不到，再放宽到按钮与标题行有垂直重叠。
+            candidates = []
             for e in elements:
                 t = (e.text or "").strip()
                 # ★ 按钮文字多状态匹配（用户确认）：
@@ -598,20 +778,31 @@ def smart_find_unit_row(d, target, click_text="去答题", max_pages=8, prefer_r
                 #   ★ 注意：不能匹配"已评测/全站平均分/分数"——那是分数展示块，不是按钮！
                 _btn_hit = (t == click_text or t in _accept
                             or (click_text in _accept and t in _accept))
-                if _btn_hit:
-                    # ★ 同行判断（行距放宽到 500：标题行与按钮可能隔一个元素，
-                    #   如标题在行首、按钮在行尾——dy<300 会漏 → 误下滑滚出屏幕）
-                    #   ★ 用户确认：默认先测前面的单元（如 Unit1 就在列表最顶部），
-                    #     找到同行按钮就**直接点击**，绝不下滑！
-                    #   ❌ 之前"y<350 判为遮挡区→下滑重试"是错的：Unit1 在最顶部，
-                    #     下滑反而把它滚出屏幕 → 永远找不到 → 死循环！
-                    #     （顶部版本条只是视觉覆盖，按钮仍可点击命中）
-                    if abs(e.bounds[1] - row_y) < 500:
-                        try:
-                            e.click()
-                        except Exception:
-                            d.click((e.bounds[0]+e.bounds[2])//2, (e.bounds[1]+e.bounds[3])//2)
-                        return True
+                if not _btn_hit:
+                    continue
+                btn_top = e.bounds[1]
+                btn_bottom = e.bounds[3]
+                btn_center_y = (btn_top + btn_bottom) // 2
+                dy = abs(btn_center_y - row_center_y)
+                # 候选 1：中心接近（< 350），基本保证同一行
+                if dy < 350:
+                    candidates.append((dy, e))
+                    continue
+                # 候选 2：按钮与标题行有垂直重叠（兜底，适配行高很大的布局）
+                if btn_top < row_bottom and btn_bottom > row_top:
+                    candidates.append((dy, e))
+            if candidates:
+                candidates.sort(key=lambda x: x[0])
+                best = candidates[0][1]
+                bx = (best.bounds[0] + best.bounds[2]) // 2
+                by = (best.bounds[1] + best.bounds[3]) // 2
+                step_log(f"🎯 定位目标 [{target}]，点击同行按钮「{best.text}」@({bx},{by})（距标题中心 {candidates[0][0]}px）", "info")
+                try:
+                    best.click()
+                except Exception:
+                    d.click(bx, by)
+                return True
+            step_log(f"⚠ 找到目标 [{target}] 标题，但未找到同行按钮（最近候选 > 350px），继续查找...", "warning")
         # 首屏（第 1 轮）未命中且 prefer_restart → 降级接受"继续答题"再找一遍（不下滑！）
         if _ == 0 and prefer_restart and not _fallback_accept:
             _fallback_accept = True

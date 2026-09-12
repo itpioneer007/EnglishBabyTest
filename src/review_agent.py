@@ -250,19 +250,10 @@ class ReviewAgent:
             screenshots = self._scan_screenshots()
 
         self.results = []
-        _total = len(self.script_questions)
-        for _i, q in enumerate(self.script_questions, 1):
+        for q in self.script_questions:
             shot = screenshots.get(q.global_idx, "")
             r = self._review_one(q, shot)
             self.results.append(r)
-
-            # ★ 进度心跳：让用户知道仍在进行，不是卡死
-            if _total >= 10 and (_i == 1 or _i % 10 == 0 or _i == _total):
-                try:
-                    from common.logger import log_msg
-                    log_msg(f"⏳ 脚本审查进行中 {_i}/{_total}…", "info")
-                except Exception:
-                    print(f"  ⏳ 脚本审查进行中 {_i}/{_total}…")
 
             if self.cfg.verbose:
                 icon = "✅" if r.overall_passed else "❌"
@@ -405,10 +396,19 @@ class ReviewAgent:
             r.stem_check.error = "听音/图片题：题干内容在音频或图片中"
             r.stem_check.details.append("纯文字模式无法核对音频/图片内容（需连手机截图）")
         elif not stem_txt:
-            r.stem_check.passed = False
-            r.stem_check.score = 0.0
-            r.stem_check.error = "题干为空（脚本中该题没有题干文字）"
-            r.stem_check.details.append("纯文字检查: 题干为空")
+            # ★ 题干与选项合并的题（如 "3. A. x B. y C. z"）：题干文字被并入选项行，
+            #   解析时无法单独提取，属脚本正常写法 → 默认题干通过（不误判不通过）
+            _opts = [o for o in (q.options or []) if o and str(o).strip()]
+            if _opts:
+                r.stem_check.passed = True
+                r.stem_check.score = 1.0
+                r.stem_check.method = "skip"
+                r.stem_check.details.append("纯文字检查: 题干与选项合并，无法单独提取，默认通过")
+            else:
+                r.stem_check.passed = False
+                r.stem_check.score = 0.0
+                r.stem_check.error = "题干为空（脚本中该题没有题干文字）"
+                r.stem_check.details.append("纯文字检查: 题干为空")
         elif len(stem_txt) < 10:
             r.stem_check.passed = False
             r.stem_check.score = 0.3
@@ -591,8 +591,13 @@ class ReviewAgent:
                                        error="脚本未提供题干文字（听音/图片题题干在音频或图中）",
                                        details=["脚本未提供题干：听音/图片题题干在音频/图中，需连手机核对"])
         else:
-            r.stem_check = _llm_dim("检查题干是否缺失或过短（脚本题干为空）",
-                                    "题干: (空) 请判断脚本题干是否异常缺失", "stem")
+            # ★ 题干与选项合并（脚本题干空但有选项）：默认通过，不调 LLM
+            if q.options:
+                r.stem_check = CheckResult(passed=True, score=1.0, method="skip",
+                                           details=["题干与选项合并，无法单独提取，默认通过"])
+            else:
+                r.stem_check = _llm_dim("检查题干是否缺失或过短（脚本题干为空）",
+                                        "题干: (空) 请判断脚本题干是否异常缺失", "stem")
 
         # (2) 内容/选项
         # ★ 判断题：无 A/B/C 文字选项（T/F 作答）是正常格式 → skip 无法文字核对
@@ -982,8 +987,17 @@ class ReviewAgent:
             if ui_texts:
                 screen_text = '\n'.join(ui_texts[:30])
 
+            # ★ 题干与选项合并的题（脚本题干为空但有选项）：无法单独比对题干文字，
+            #   默认题干通过（skip），不调 LLM，避免误判不通过
+            _merged_stem = (not (q.stem or "").strip()) and bool(q.options)
+            if _merged_stem:
+                r.stem_check.passed = True
+                r.stem_check.score = 1.0
+                r.stem_check.method = "skip"
+                r.stem_check.details.append("题干与选项合并，无法单独提取，默认通过")
+
             # ★ 文字题(非配图): 先用精确文字比对, 比对通过的不调LLM
-            if not is_img and screen_text and _diff_check_stem is not None:
+            if not is_img and screen_text and _diff_check_stem is not None and not _merged_stem:
                 # ① 题干精确比对
                 stem_diff = _diff_check_stem(shot, q.stem)
                 if stem_diff.passed or not stem_diff.need_llm:

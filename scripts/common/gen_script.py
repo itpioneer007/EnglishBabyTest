@@ -61,19 +61,6 @@ KNOWLEDGE_PROMPT_TEMPLATE = (
 )
 
 
-def _unescape_html(s: str) -> str:
-    """解码 uiautomator2 dump 残留的 HTML 实体 (&#10; / &amp; 等)
-    ★ 2026-08-30 修复：题面 short passage 段含短文+多段换行（如"Xu You is kind.&#10;&#10;　　..."）
-       实体渲染到 docx 后会显示成字面 "&#10;"。在所有 _extract_ui_question 入口
-       统一解码一次，后续逻辑不再处理。
-    """
-    try:
-        import html as _html
-        return _html.unescape(s or "")
-    except Exception:
-        return s or ""
-
-
 def _extract_ui_question(xml, answer="", qtype_hint=""):
     """从答题页 XML 提取一道题的（题干/选项/题型），供脚本生成收集。
     - 题干：分级提取——题干节点(question_title_tv/tv_caption/tv_title/tv_stem等)优先，
@@ -103,10 +90,10 @@ def _extract_ui_question(xml, answer="", qtype_hint=""):
         return False
 
     def _node_parts(_block):
-        """从 node 块提取 (text, resource_id) — ★ 同时 html.unescape 防 &#10; 残留"""
+        """从 node 块提取 (text, resource_id)"""
         _mt = re.search(r'text="([^"]*)"', _block)
         _mr = re.search(r'resource-id="([^"]*)"', _block)
-        return (_unescape_html(_mt.group(1)).strip() if _mt else "",
+        return (_mt.group(1).strip() if _mt else "",
                 _mr.group(1) if _mr else "")
 
     # ① 题干：优先题干节点（resource-id 含题干语义）——这些一定是题干文字
@@ -135,9 +122,6 @@ def _extract_ui_question(xml, answer="", qtype_hint=""):
     _merged = []
     for t in stem_nodes:
         t = re.sub(r"[（(]\s*共\d+分\s*[）)]", "", t).strip()  # 清洗分值
-        # ★ 2026-08-26 清洗题干前缀题号进度（如 "13/32 选择各组中不同类的一项" →
-        #   "选择各组中不同类的一项"）。App 常把题号进度和题干放同一 TextView。
-        t = re.sub(r"^\s*\d+\s*[/／]\s*\d+\s*", "", t).strip()
         if not t:
             continue
         if any(t == s or t in s or s in t for s in _merged):
@@ -155,7 +139,7 @@ def _extract_ui_question(xml, answer="", qtype_hint=""):
     # ② 选项：字母开头项（A. xx）优先
     opts = []
     for m in re.finditer(r'text="([A-E][.、．]\s*[^"]{1,60})"', xml):
-        t = _unescape_html(m.group(1)).strip()
+        t = m.group(1).strip()
         if t and t not in opts:
             opts.append(t)
     if not opts:
@@ -164,7 +148,7 @@ def _extract_ui_question(xml, answer="", qtype_hint=""):
         for m in re.finditer(
                 r'<node[^>]*resource-id="[^"]*(?:option_cb|option_iv|radio_btn|check_box)[^"]*"[^>]*text="([^"]{1,40})"|'
                 r'<node[^>]*text="([^"]{1,40})"[^>]*resource-id="[^"]*(?:option_cb|option_iv|radio_btn|check_box)[^"]*"', xml):
-            t = _unescape_html(m.group(1) or m.group(2) or "").strip()
+            t = (m.group(1) or m.group(2) or "").strip()
             if t and t not in opts:
                 opts.append(t)
     if not opts:
@@ -183,9 +167,10 @@ class QuestionCollector:
         self.module = module
         self.version = version or "湘少版"
         self.grade = grade or "五年级上册"
-        # ★ 改造方案：取消白名单，所有模块都生成脚本。
-        #   听音题用 ASR 补 recording，图片题用视觉模型补内容，跟读题用 speaker_word + recording。
-        self.gen_allowed = True
+        # ★ 可生成脚本的模块白名单（用户确认）：只有这些模块的题目有明确题干+
+        #   选项+答案（无录音原文依赖）→ 能生成脚本解析；
+        #   听力专项/口语训练/语音评测 无录音原文 → 不能生成脚本
+        self.gen_allowed = module in ("单元自检", "巧记单词", "知识过关")
         # 保存目录：项目根/gen_scripts（默认，scripts/common/gen_script.py 上三级）；可传 save_root 覆盖
         self.save_root = save_root or os.path.join(
             os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "gen_scripts")
@@ -195,8 +180,7 @@ class QuestionCollector:
 
     # ------------------------------------------------------------
     def add(self, qno, stem="", options=None, answer="", qtype="",
-            unit=0, recording="", knowledge="", big=None, image_path="",
-            allow_listen=False, speaker_word=""):
+            unit=0, recording="", knowledge="", big=None, image_path=""):
         """收集一道题。仅当有题干（非纯听音）才保留，否则跳过。
 
         Args:
@@ -210,26 +194,17 @@ class QuestionCollector:
             knowledge: 知识点（可选，LLM 生成或留空）
             big: 大题号（口语训练等"第N大题"定位用）
             image_path: 图片题截图路径（★ 选项为空但有截图时，finish_unit 用视觉模型识别补全）
-            allow_listen: ★ 2026-08-26 是否允许收集听音题（巧记单词传 True——
-              听音选释义题题干+扬声器识别词+选项都应进解析脚本；听力专项/口语训练仍 False）
-            speaker_word: ★ 2026-08-26 扬声器播放的单词（ASR 识别，听音题用，放题干后展示）
         """
         stem = (stem or "").strip()
-        answer = (answer or "").strip()
-        recording = (recording or "").strip()
-        # ★ 2026-08-26 题干兜底清洗：去掉题号进度前缀（"13/32 选择..." → "选择..."）。
-        #   _extract_ui_question 已处理，这里兜底（防其它来源传入带前缀题干）。
-        stem = re.sub(r"^\s*\d+\s*[/／]\s*\d+\s*", "", stem).strip()
-        # ★ 改造方案：放宽跳过条件——只有题干、答案、录音原文都为空才跳过。
-        #   听音题有 recording 即可收集，跟读题有 speaker_word 可收集，图片题有截图可补选项。
-        if not stem and not answer and not recording:
-            # 图片题：无题干但有截图 → 仍然记录（finish_unit 用视觉模型识别补全）
+        # ★ 图片题（选项为图片）可能无题干文字但截图可见题目要求 →
+        #   有截图时不完全跳过，记录到 img_questions 单独处理
+        if (not stem or stem in ("(无题干文字)", "(无)", "听录音", "听录音，选择正确答案")):
             if image_path and os.path.exists(image_path):
                 self.questions.append({
                     "qno": int(qno) if str(qno).isdigit() else qno,
                     "stem": stem, "options": [], "answer": str(answer).strip(),
                     "qtype": qtype or "", "unit": int(unit) if str(unit).isdigit() else unit,
-                    "recording": recording,
+                    "recording": (recording or "").strip(),
                     "knowledge": "", "big": big,
                     "image_path": image_path,
                     "time": datetime.now().strftime("%H:%M:%S"),
@@ -241,44 +216,22 @@ class QuestionCollector:
         #   "听词汇/听句子/听对话/听录音" 全是听力题，题目实质在音频里，
         #   脚本里没有可解析的题干文字，跳过不做脚本审查
         #   （保留含"听"的非听音词：如"听说读写"等极少数情况由下方白名单保护）
-        # ★ 2026-08-26 allow_listen=True（巧记单词）：听音题也收集——
-        #   题干 + 选项 + 扬声器识别词(speaker_word) + recording 一并进解析脚本，
-        #   这样听音选释义题也能生成脚本且能核对扬声器内容
         _LISTEN_WHITELIST = ("听说读写", "听力理解能力", "听说")
-        _is_listen = ("听" in stem and not any(w in stem for w in _LISTEN_WHITELIST)) or \
-            bool(re.match(r"^\s*(Listen|listen|Listening)\b", stem))
-        if _is_listen and not allow_listen:
+        if "听" in stem and not any(w in stem for w in _LISTEN_WHITELIST):
+            self.skipped_no_stem += 1
+            return
+        # 兜底：英语 Listen/listen 开头（"Listen and choose"等）
+        if re.match(r"^\s*(Listen|listen|Listening)\b", stem):
             self.skipped_no_stem += 1
             return
         opts = [str(o).strip() for o in (options or []) if str(o).strip()]
         # 清洗选项：去掉多余空白（"A.  sport" → "A. sport"）
         opts = [re.sub(r"\s+", " ", o) for o in opts]
-        # ★ 2026-08-26 选项自动补字母编号：若选项无字母前缀（如 ["went","visited","stay"]）
-        #   补成 ["A. went","B. visited","C. stay"]，这样答案字母(A/B/C)才能与选项对号。
-        #   否则脚本显示"选项：went visited stay / 正确答案：A"完全对不上。
-        _opts_normalized = []
-        for _i, _o in enumerate(opts):
-            if re.match(r"^[A-F][.、．]\s*", _o):
-                _opts_normalized.append(_o)
-            else:
-                _opts_normalized.append(f"{chr(65+_i)}. {_o}")
-        opts = _opts_normalized
-        # ★ 答案归一化：answer 若是选项内容（如 "went"）而非字母(A/B/C)，转成对应字母
-        #   （LLM 判定时返回的可能是选项内容；点击字母时已是字母，保留原样）
-        _ans_clean = (answer or "").strip()
-        if _ans_clean and len(_ans_clean) <= 40 and not re.match(r"^[A-F]$", _ans_clean.upper()):
-            for _i, _o in enumerate(opts):
-                _text = re.sub(r"^[A-F][.、．]\s*", "", _o).strip()
-                if _ans_clean.lower() in _text.lower() or _text.lower() in _ans_clean.lower():
-                    _ans_clean = chr(65 + _i)
-                    break
-            # 未匹配到明确字母 → 保留原答案（可能是拼音/单词内容），不强行改
         self.questions.append({
             "qno": int(qno) if str(qno).isdigit() else qno,
-            "stem": stem, "options": opts, "answer": _ans_clean,
+            "stem": stem, "options": opts, "answer": str(answer).strip(),
             "qtype": qtype or "", "unit": int(unit) if str(unit).isdigit() else unit,
             "recording": (recording or "").strip(),
-            "speaker_word": (speaker_word or "").strip(),  # ★ 扬声器识别词（听音题）
             "knowledge": (knowledge or "").strip(),
             "big": big,
             "time": datetime.now().strftime("%H:%M:%S"),
@@ -328,8 +281,10 @@ class QuestionCollector:
         """单元答完：把收集到的题写成脚本 docx（模板格式）。
         返回生成的文件路径；无题可写返回 None。
         """
-        # ★ 改造方案：取消白名单拦截，所有模块都生成脚本
-        #   （听音题用 ASR 补 recording，图片题用视觉模型补内容，跟读题扬声器识别）
+        # ★ 模块白名单拦截：听力专项/口语训练/语音评测 无录音原文，不生成脚本
+        if not self.gen_allowed:
+            print(f"  ⏭ {self.module} 不在脚本生成白名单（听力专项/口语训练/语音评测无录音原文），跳过")
+            return None
         if not self.questions:
             print(f"  ⚠ 单元 {unit} 无可生成解析的题目（{self.skipped_no_stem} 题无题干跳过）")
             return None
@@ -338,17 +293,9 @@ class QuestionCollector:
             return None
         # ★ 知识点用大模型生成（每题一次调用，串行；该年级知识点有说服力）
         print(f"  🧠 正在为 {len(self.questions)} 题生成知识点解析（LLM）…")
-        _total_q = len(self.questions)
-        for _gi, q in enumerate(self.questions, 1):
+        for q in self.questions:
             if not q.get("knowledge"):
                 q["knowledge"] = self._llm_knowledge(q)
-            # ★ 进度心跳：逐题调 LLM 耗时久，定期提示避免误以为卡死
-            if _total_q >= 10 and (_gi == 1 or _gi % 10 == 0 or _gi == _total_q):
-                try:
-                    from common.logger import log_msg
-                    log_msg(f"⏳ 脚本生成进行中 {_gi}/{_total_q}…", "info")
-                except Exception:
-                    print(f"  ⏳ 脚本生成进行中 {_gi}/{_total_q}…")
         # ★ 图片题识别补全：选项为空但有截图 → 视觉模型识别图片内容 → 补全选项/答案
         #   （用户需求：图片题脚本只有"A./B."占位无法核对 → 识别截图填内容）
         _img_qs = [q for q in self.questions
@@ -383,7 +330,9 @@ class QuestionCollector:
         _u = f"U{unit}"
         # ★ 规范文件名：日期+版本缩写+年级缩写+模块[+单元]，如
         #   "260817湘少五上单元自检U6.docx"（参考官方脚本"260714新湘鲁六上听力专项"格式）
-        fname = f"{datetime.now().strftime('%y%m%d')}{self._short_version()}{self._short_grade()}{self.module}{_u}.docx"
+        #   ★ 听力专项 → 听力专项练习（用户约定 2026-09-08：与官方便签命名对齐）
+        _mod_in_fname = "听力专项练习" if self.module == "听力专项" else self.module
+        fname = f"{datetime.now().strftime('%y%m%d')}{self._short_version()}{self._short_grade()}{_mod_in_fname}{_u}.docx"
         path = os.path.join(self.save_root, fname)
         doc = Document()
         # ★ 统一字体：不用内置 Heading/Title 样式（会随主题变蓝色Calibri→
@@ -424,20 +373,8 @@ class QuestionCollector:
             # 题干（完整内容：指令+具体内容，如"请找出与下面选项不符的一项"）
             _add_line(f"题干：{q['stem']}", size=11, space_after=2)
             _add_line(f"位置：{self._loc_str(q)}", size=11, space_after=2)
-            # ★ 选项带字母编号展示（如 "A. went　　B. visited　　C. stay"）
-            _add_line(f"选项：{'　　'.join(q['options']) if q['options'] else '（无文字选项）'}",
-                      size=11, space_after=2)
-            # ★ 答案：优先给出字母 + 对应选项内容（让检查人一眼对上）
-            _ans = (q['answer'] or "").strip()
-            _ans_opt = ""
-            if _ans and re.match(r"^[A-F]$", _ans.upper()):
-                _idx = ord(_ans.upper()) - 65
-                if 0 <= _idx < len(q['options']):
-                    _ans_opt = re.sub(r"^[A-F][.、．]\s*", "", q['options'][_idx]).strip()
-            _ans_line = f"正确答案：{_ans}"
-            if _ans_opt:
-                _ans_line += f"（{_ans_opt}）"
-            _add_line(_ans_line, size=11, space_after=2)
+            _add_line(f"选项：{'　　'.join(q['options']) if q['options'] else '（无文字选项）'}", size=11, space_after=2)
+            _add_line(f"正确答案：{q['answer']}", size=11, space_after=2)
             _add_line(f"知识点：{q['knowledge'] or self._auto_knowledge(q)}", size=11, space_after=10)
         doc.save(path)
         print(f"  ✅ 生成脚本: {path}（{len(self.questions)} 题，跳过无题干 {self.skipped_no_stem}）")
@@ -457,10 +394,18 @@ class QuestionCollector:
 
     # ------------------------------------------------------------
     def _short_version(self):
-        """版本缩写：湘少版→湘少；新湘鲁版→新湘鲁；其余原样（去'版'字）"""
+        """版本缩写：湘少版→湘少；湘鲁版(2024审定)→新湘鲁；其余原样（去'版'字）
+
+        ★ 用户约定（2026-09-08）："新湘鲁" = 湘鲁版 + 审定（即 2024审定版 的简称）
+          - 之前的列表匹配在"新湘鲁"上要求版本名里就含"新湘鲁"3字，命中不到"湘鲁版(2024审定)"
+          - 现在改成：版本里同时含"湘鲁"和"审定"时，简写为"新湘鲁"；其他情况再回退到子串匹配
+        """
         v = (self.version or "").strip()
         v = v.replace("（", "").replace("）", "").replace("(", "").replace(")", "")
-        for k in ("新湘鲁", "湘鲁", "湘少", "人教", "外研", "译林"):
+        # ★ 湘鲁版 + 审定 → "新湘鲁"
+        if "湘鲁" in v and "审定" in v:
+            return "新湘鲁"
+        for k in ("湘少", "湘鲁", "人教", "外研", "译林"):
             if k in v:
                 return k
         return v.replace("版", "") or "通用"

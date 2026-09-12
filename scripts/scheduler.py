@@ -17,7 +17,7 @@ import sys, os, time, importlib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import uiautomator2 as u2
-from common.setup import switch_version_grade
+from common.setup import switch_version_grade, list_versions_from_app, _norm
 from common.tools import close_ad, dismiss_global_popups, settle_ads
 from common.logger import step_log
 
@@ -34,19 +34,39 @@ MODULE_MAP = {
 # 年级/版本（进入每个模块前确认一次）
 APP_PACKAGE = "com.dinoenglish.yyb"
 DEFAULT_GRADE = "五年级上册"
-DEFAULT_VERSION = "湘少版"
+DEFAULT_VERSION = "湘鲁版（2024审定）"
 
 
 def _switch_if_needed(d, version, grade):
     """切换到目标版本+年级；已是目标则跳过
-    ★ 调度器统一在此做一次年级切换，各模块的 run_module 不再各自切换"""
-    if version and grade:
-        try:
-            ok = switch_version_grade(d, version, grade, skip_if_ok=True)
-            if ok is True:
-                step_log(f"✔ 版本/年级已是 {version} {grade}，无需切换", "info")
-        except Exception as e:
-            print(f"  ⚠ 切换版本/年级异常: {e}")
+    ★ 调度器统一在此做一次年级切换，各模块的 run_module 不再各自切换
+    ★ 新增：若目标版本在 APP 内不存在（如网站输入人教版，但 APP 已换成湘鲁版），
+      则打『版本不存在』并终止，避免悄悄在别的版本上跑。
+    返回: True=已就位 / False=版本不存在或切换失败（调用方应终止检测）
+    """
+    if not (version and grade):
+        return True
+    try:
+        ok = switch_version_grade(d, version, grade, skip_if_ok=True)
+        if ok is True:
+            step_log(f"✔ 已切换/确认版本·年级: {version} {grade}", "info")
+            return True
+        elif ok == "VERSION_NOT_FOUND":
+            # ★ 目标版本在 APP 内根本不存在（如输入人教版，但 APP 已换成湘鲁版）
+            avail = []
+            try:
+                avail = list_versions_from_app(d)
+            except Exception:
+                pass
+            extra = f"（APP 内仅有：{'、'.join(avail)}）" if avail else ""
+            step_log(f"⚠ 版本不存在：{version}{extra}，任务终止", "error")
+            return False
+        else:
+            step_log(f"⚠ 切换版本/年级失败：{version} {grade}", "warning")
+            return False
+    except Exception as e:
+        print(f"  ⚠ 切换版本/年级异常: {e}")
+        return False
 
 
 def _back_to_home(d):
@@ -155,7 +175,10 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
     #   ★ 修复：日志顺序与操作顺序一致——先切版本年级再关广告
     #   （切完版本/年级后页面会重载，可能产生新广告，必须在操作前关掉）
     step_log(f"🔧 切换版本/年级: {version} {grade}", "step")
-    _switch_if_needed(d, version, grade)
+    if not _switch_if_needed(d, version, grade):
+        step_log("⏹ 因版本/年级无法切换（如版本不存在），终止检测", "error")
+        return {name: {"q": 0, "t": 0, "ok": False, "error": "版本不存在或切换失败"}
+                for name in module_names}
 
     # 1.5 关广告（与单模块 main() 一致：先清全局弹窗 + 关广告，再操作界面，
     #     否则切完版本/年级后主页新广告/弹窗未关，后续点坐标会点到广告上！）
@@ -206,23 +229,23 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
                 if _p_on and _t_on:
                     step_log(f"📌 听力专项: 练习单元{practice_units} + 测试单元{test_units} 分开检测", "step")
                     set_current_module("听力专项", "练习")
-                    _p_q = mod.run_module(d, units=practice_units) if _p_on else 0
+                    _p_q = mod.run_module(d, units=practice_units, grade=grade, version=version) if _p_on else 0
                     step_log(f"✅ 听力专项·练习 完成: {_p_q} 题", "success")
                     _p_res = {"q": _p_q, "t": 0, "ok": True, "stage": "练习"}
                     set_current_module("听力专项", "测试")
-                    _t_q = mod.run_test_module(d, test_units=test_units) if _t_on else 0
+                    _t_q = mod.run_test_module(d, test_units=test_units, grade=grade, version=version, stop_check=stop_check) if _t_on else 0
                     step_log(f"✅ 听力专项·测试 完成: {_t_q} 题", "success")
                     _t_res = {"q": _t_q, "t": 0, "ok": True, "stage": "测试"}
                     q = _p_q + _t_q
                 elif _p_on:
                     set_current_module("听力专项", "练习")
-                    _p_q = mod.run_module(d, units=practice_units)
+                    _p_q = mod.run_module(d, units=practice_units, grade=grade, version=version)
                     step_log(f"📌 听力专项: 仅练习（测试未勾选）完成 {_p_q} 题", "info")
                     _p_res = {"q": _p_q, "t": 0, "ok": True, "stage": "练习"}
                     q = _p_q
                 elif _t_on:
                     set_current_module("听力专项", "测试")
-                    _t_q = mod.run_test_module(d, test_units=test_units)
+                    _t_q = mod.run_test_module(d, test_units=test_units, grade=grade, version=version, stop_check=stop_check)
                     step_log(f"📌 听力专项: 仅测试（练习未勾选）完成 {_t_q} 题", "info")
                     _t_res = {"q": _t_q, "t": 0, "ok": True, "stage": "测试"}
                     q = _t_q
@@ -233,10 +256,10 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
                 else:
                     # 都未指定（旧调用，无 units 传参）→ 都跑，兼容
                     set_current_module("听力专项", "练习")
-                    _p_q = mod.run_module(d, units=module_units) if module_units else mod.run_module(d)
+                    _p_q = mod.run_module(d, units=module_units, grade=grade, version=version) if module_units else mod.run_module(d, grade=grade, version=version)
                     _p_res = {"q": _p_q, "t": 0, "ok": True, "stage": "练习"}
                     set_current_module("听力专项", "测试")
-                    _t_q = mod.run_test_module(d, test_units=module_units) if module_units else mod.run_test_module(d)
+                    _t_q = mod.run_test_module(d, test_units=module_units, grade=grade, version=version, stop_check=stop_check) if module_units else mod.run_test_module(d, grade=grade, version=version, stop_check=stop_check)
                     _t_res = {"q": _t_q, "t": 0, "ok": True, "stage": "测试"}
                     q = _p_q + _t_q
                     step_log(f"📌 听力专项: 练习+测试 全部完成（{q} 题）", "info")
