@@ -291,6 +291,47 @@ class QuestionLoader:
 # LLM 客户端（统一接口 — 你配置你的 LLM）
 # ============================================================
 
+# ★ 2026-09-10 不可重试的 LLM 错误（额度耗尽 / 密钥无效）：
+#   这类错误重试与退避毫无意义，必须快速失败并在上层熔断，
+#   否则整个审查/脚本生成流程会以 ~10.8s/题的速度空转（用户会以为"卡死"）。
+FATAL_LLM_MARKERS = (
+    "402", "payment required", "insufficient balance", "no balance",
+    "余额", "欠费", "额度", "配额", "超出",
+    "401", "unauthorized", "invalid api key", "authentication",
+)
+
+
+def is_fatal_llm_error(err) -> bool:
+    """判断 LLM 错误是否属于"不可重试"（额度/密钥），供快速失败与熔断使用。"""
+    s = str(err or "").lower()
+    return any(k in s for k in FATAL_LLM_MARKERS)
+
+
+# ★ 2026-09-10 推理型模型的"思维链吃光输出"问题：
+#   百炼的 deepseek-v4-pro-0813 属重度推理模型（实测思考 4000 token 仍未出正文，
+#   单次耗时 70.8s、content 为空）。DashScope 支持请求体加 `enable_thinking: false` 关闭，
+#   实测同一问题 70.8s → 1.4s 且正文正常。
+#   ⚠ 不能全局无脑加：`enable_thinking` 不是所有模型都认。故用白名单限定作用范围。
+_NO_THINK_FALLBACK = ("deepseek-v4-pro-0813", "deepseek-v4-pro")
+
+
+def no_think_models() -> tuple:
+    """需要显式关闭思维链的模型白名单（env LLM_NO_THINK_MODELS 逗号分隔可覆盖）。"""
+    raw = os.environ.get("LLM_NO_THINK_MODELS", "").strip()
+    if not raw:
+        return _NO_THINK_FALLBACK
+    return tuple(x.strip() for x in raw.split(",") if x.strip())
+
+
+def is_ocr_vision_model(name: str) -> bool:
+    """判断视觉模型是否是"纯 OCR 型"（如 qwen3.5-ocr）。
+
+    这类模型读屏极准但**不服从指令**（要 JSON 会返回 {}），
+    因此不能直接拿它做六维判断，必须走「OCR 读屏 → 文本模型判断」两段式。
+    """
+    return bool(name) and "ocr" in str(name).lower()
+
+
 class LLMClient:
     """
     LLM 统一调用接口
@@ -385,7 +426,8 @@ class LLMClient:
             vision_model_fallback2=vision_model_fallback2,
         )
 
-    def ask(self, prompt: str, image_path: str = None, image_paths: list = None) -> str:
+    def ask(self, prompt: str, image_path: str = None, image_paths: list = None,
+            temperature: float = None) -> str:
         """
         智能路由：
           - 无图片 → 主模型 (DeepSeek)
@@ -396,8 +438,28 @@ class LLMClient:
           prompt: 提示词
           image_path: 单张图片路径 (兼容)
           image_paths: 多张图片路径列表 (优先于 image_path)
+          temperature: 可选温度；None=用供应商默认。需确定性输出（同图同答）时传 0
         """
         paths = image_paths if image_paths else ([image_path] if image_path else None)
+
+        # ★ 2026-09-10（用户指定 qwen3.5-ocr 做视觉）：纯 OCR 模型 → 两段式
+        #   实测 qwen3.5-ocr 读屏极准（逐字 + 坐标），但**不服从指令**：
+        #   让它按 JSON 输出六维判断，它会返回 {"stem": {}} 这类空壳；
+        #   而同一张图给它 "OCR"，它把屏幕文字一字不差全读出来。
+        #   → 因此不能直接拿它当"判断模型"，改为：
+        #      第一段 qwen3.5-ocr 读屏取文字  →  第二段 文本模型(deepseek-v4-pro-0813) 做判断
+        #   OCR 失败/读不到字时回落到下面的常规视觉路径（qwen3.8 备用视觉推理）。
+        if paths and is_ocr_vision_model(self.vision_model):
+            _ocr_txt = self._vision_ocr_text(paths)
+            if _ocr_txt:
+                _enh = (f"{prompt}\n\n[截图 OCR 原文]\n{_ocr_txt[:3000]}\n\n"
+                        "以上是该题截图的全部屏幕文字（由 OCR 模型逐字提取）。"
+                        "请结合它完成核查。若某项判断依赖图标等 OCR 文字未覆盖的视觉信息，"
+                        "请依据文字线索谨慎推断；确实无法确定时标注为[未检]，不要猜测。")
+                try:
+                    return self._call_api(_enh, image_paths=None, temperature=temperature)
+                except Exception as _e_ocr_txt:
+                    return self.all_failed_message("OCR 读屏后文本判断失败", _e_ocr_txt)
 
         if paths and self.vision_model:
             # 有视觉模型：直接发图
@@ -410,7 +472,8 @@ class LLMClient:
                 return self._call_api(prompt, paths,
                     model=self.vision_model,
                     base_url=self.vision_base_url or self.base_url,
-                    api_key=self.vision_api_key)
+                    api_key=self.vision_api_key,
+                    temperature=temperature)
             except Exception as e:
                 _vision_err = str(e)
                 _e_low = _vision_err.lower()
@@ -428,35 +491,93 @@ class LLMClient:
                             return self._call_api(prompt, paths,
                                 model=_fb,
                                 base_url=self.vision_base_url or self.base_url,
-                                api_key=self.vision_api_key)
+                                api_key=self.vision_api_key,
+                                temperature=temperature)
                         except Exception as e2:
                             _vision_err = str(e2)
                             _e_low = _vision_err.lower()
                             _quota_hit = any(k in _e_low for k in
                                              ("insufficient", "quota", "额度", "欠费", "余额",
                                               "429", "403", "free", "耗尽", "用完", "no balance"))
-                return f"[视觉模型失败: {_vision_err}] → 降级为纯文本分析\n{self._call_api(prompt, image_paths=None)}"
+                # ★ 2026-09-10：末次"降级为纯文本"也必须兜底。
+                #   两个供应商同时不可用（实测：DeepSeek 402 余额耗尽 + 通义千问 403 免费额度用尽）
+                #   时，原来的裸调用会让 ask() **直接抛 HTTPError**，
+                #   调用方若没包 try/except 就会整段崩掉（AI 核查静默失败）。
+                try:
+                    _txt = self._call_api(prompt, image_paths=None, temperature=temperature)
+                    return f"[视觉模型失败: {_vision_err}] → 降级为纯文本分析\n{_txt}"
+                except Exception as _e3:
+                    return self.all_failed_message(_vision_err, _e3)
 
         if paths:
             # 无视觉模型：OCR 降级
-            return self._ask_with_ocr(prompt, paths[0])
+            return self._ask_with_ocr(prompt, paths[0], temperature=temperature)
 
-        # 纯文本
         # 纯文本（★ 带重试：网络波动/API限流会偶发空响应或异常，重试 2 次）
+        # ★ 2026-09-10：额度/密钥类错误（402 Payment Required / 401）**不可重试** → 立即返回。
+        #   否则每次调用白等 1.5+3+4.5s 退避（实测 ~10.8s/次）；整单元 101 题 × 每题尝试 2 次
+        #   ≈ 半小时纯空转，用户会以为"卡住/没有结果"。
         _last_err = ""
         for _attempt in range(3):
             try:
-                _r = self._call_api(prompt, image_paths=None)
+                _r = self._call_api(prompt, image_paths=None, temperature=temperature)
                 if _r and _r.strip():
                     return _r
                 _last_err = f"LLM 返回空内容（第{_attempt+1}次尝试）"
             except Exception as e:
                 _last_err = f"[LLM 调用失败] {e}（第{_attempt+1}次尝试）"
+                if is_fatal_llm_error(e):
+                    return _last_err          # 额度/密钥问题 → 快速失败，不重试不退避
             import time as _t
             _t.sleep(1.5 * (_attempt + 1))   # 递增退避：1.5s / 3s / 4.5s
         return _last_err
 
-    def _ask_with_ocr(self, prompt: str, image_path: str) -> str:
+    def _vision_ocr_text(self, paths: list) -> str:
+        """用纯 OCR 视觉模型读出截图中的全部屏幕文字（失败/无字返回空串）。
+
+        只用固定提示词 "OCR"：qwen3.5-ocr 对该指令响应最好，
+        换成详细指令反而会退化（它把指令也当成待读文字或直接不回）。
+        """
+        try:
+            raw = self._call_api("OCR", paths,
+                                 model=self.vision_model,
+                                 base_url=self.vision_base_url or self.base_url,
+                                 api_key=self.vision_api_key or self.api_key)
+        except Exception as e:
+            print(f"⚠ OCR 模型 {self.vision_model} 调用失败({str(e)[:90]}) → 回落常规视觉路径")
+            return ""
+        return self._clean_ocr_text(raw or "")
+
+    @staticmethod
+    def _clean_ocr_text(raw: str) -> str:
+        """把 OCR 模型的多种返回形态归一为纯文字。
+
+        实测 qwen3.5-ocr 会返回三种形态，必须都兼容：
+          1. 纯文本；
+          2. JSON 数组 [{"rotate_rect":[...], "text":"..."}, ...]（带坐标，去掉坐标只留文字）；
+          3. ```html/<p>…</p>``` 片段（去标签）。
+        """
+        t = (raw or "").strip()
+        if not t:
+            return ""
+        t = re.sub(r"^```[a-zA-Z]*\s*|\s*```$", "", t).strip()
+        if t[:1] in ("[", "{"):
+            try:
+                data = json.loads(t)
+                items = data if isinstance(data, list) else [data]
+                parts = [str(it.get("text", "")).strip()
+                         for it in items
+                         if isinstance(it, dict) and str(it.get("text", "")).strip()]
+                if parts:
+                    return "\n".join(parts)
+            except Exception:
+                pass
+        t = re.sub(r"<[^>]+>", " ", t)
+        t = re.sub(r"[ \t\u3000]+", " ", t)
+        t = re.sub(r"\n\s*\n+", "\n", t)
+        return t.strip()
+
+    def _ask_with_ocr(self, prompt: str, image_path: str, temperature: float = None) -> str:
         """
         两步走：本地 OCR 提取截图文字 → 主模型分析
         """
@@ -492,11 +613,26 @@ class LLMClient:
                 "如果题目是配图类题目，标注为[无法判断图文匹配--缺少视觉模型]。)"
             )
 
-        return self._call_api(enhanced_prompt, image_paths=None)
+        # ★ 2026-09-10：同样兜底（见上，两供应商同时不可用时不得抛异常）
+        try:
+            return self._call_api(enhanced_prompt, image_paths=None, temperature=temperature)
+        except Exception as _eo:
+            return self.all_failed_message("OCR 降级后调用失败", _eo)
+
+    @staticmethod
+    def all_failed_message(err_vision, err_text) -> str:
+        """视觉与文本模型全部不可用时返回的结构化提示（不抛异常）。
+
+        ★ 关键：`[LLM 不可用]` 前缀让上层能识别"这不是核查结论，而是模型故障"，
+          避免把故障当成"AI 判定通过/不通过"污染审查结果。
+        """
+        return (f"[LLM 不可用] 视觉模型与文本模型均调用失败，本次未产生真实核查结论。"
+                f"视觉模型: {str(err_vision)[:90]}；文本模型: {str(err_text)[:90]}。"
+                f"请检查各供应商额度/密钥后重试。")
 
     def _call_api(self, prompt: str, image_paths: list = None,
                   model: str = None, base_url: str = None,
-                  api_key: str = None) -> str:
+                  api_key: str = None, temperature: float = None) -> str:
         """底层 API 调用 (支持多图)"""
         import base64
         from urllib.request import Request, urlopen
@@ -508,6 +644,8 @@ class LLMClient:
         messages = [{"role": "user", "content": []}]
         messages[0]["content"].append({"type": "text", "text": prompt})
 
+        _img_ok = 0
+        _img_missing = []
         if image_paths:
             for img_path in image_paths:
                 if img_path and Path(img_path).exists():
@@ -517,6 +655,19 @@ class LLMClient:
                         "type": "image_url",
                         "image_url": {"url": f"data:image/png;base64,{img_b64}"}
                     })
+                    _img_ok += 1
+                elif img_path:
+                    _img_missing.append(str(img_path))
+            # ★ 2026-09-10：截图缺失时**必须显式告警**。
+            #   原逻辑静默跳过 → 模型收到的是纯文本 prompt，只能凭题干"编"结论
+            #   （实测：传一个不存在的路径，模型回 "未提供可见截图画面" 却照样输出图标判定）。
+            #   这类静默降级会让"AI 瞎判"看起来像正常结论，故补日志。
+            if _img_missing:
+                print(f"⚠ 截图读取失败/不存在，已跳过 {len(_img_missing)} 张: "
+                      f"{_img_missing[:3]}")
+            if not _img_ok:
+                print("⚠ 本次调用没有任何图片成功加载 → 该结论是纯文本推断，"
+                      "不含视觉证据，请勿当作视觉核查结果")
 
         # ★ Anthropic (Claude) 原生 API 分支
         if "anthropic" in use_url.lower():
@@ -553,11 +704,20 @@ class LLMClient:
         # OpenAI 兼容格式
         # ★ 批量审查(33题等大prompt) JSON 输出可能超 1000 token 被截断 → 残缺JSON解析失败
         #   提升到 4000 + 超时 120s
-        body = json.dumps({
+        _payload = {
             "model": use_model,
             "messages": messages,
             "max_tokens": 4000,
-        }).encode("utf-8")
+        }
+        # ★ 2026-09-10：推理型模型必须显式关思维链，否则 4000 token 被思考吃光、正文为空
+        #   （见 no_think_models 注释；仅白名单内的模型加此参数，避免影响不认该参数的模型）
+        if use_model in no_think_models():
+            _payload["enable_thinking"] = False
+        # ★ 2026-09-14：可选温度。默认不传（沿用供应商默认，行为与改动前完全一致）；
+        #   需要"同一输入必得同一输出"的场景（如口语训练看图补全句子）显式传 0
+        if temperature is not None:
+            _payload["temperature"] = temperature
+        body = json.dumps(_payload).encode("utf-8")
 
         req = Request(
             f"{use_url}/chat/completions",

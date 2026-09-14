@@ -1,13 +1,20 @@
 {
-  "_架构": "统一走阿里云百炼 API",
-  "_策略": "纯文本用 qwen-plus，看图用 qwen3.7-plus（百炼视觉模型）；额度用尽自动切 qwen3.7-max-2026-06-08",
-  "_安全": "密钥已迁移到 .env 文件，请勿在此文件中存放敏感信息",
-  "model": "qwen-plus",
+  "_架构": "统一走阿里云百炼 API（2026-09-10 晚回归；此前曾临时切 DeepSeek 官方）",
+  "_策略": "文本用 deepseek-v4-pro-0813；视觉用 qwen3.8-27b 真看图（能看见图标）；额度用尽自动切备用",
+  "_安全": "密钥在 .env 文件，请勿在此文件中存放敏感信息",
+  "_变更_20260910": {
+    "原因": "qwen3.7-plus / qwen3.7-max 免费额度耗尽（403 AllocationQuota.FreeTierOnly），AI 六维核查静默降级",
+    "文本": "deepseek-v4-pro-0813（百炼；重度推理模型，必须加 enable_thinking:false，否则 4000 token 被思维链吃光、正文为空且 70.8s/次 → 关闭后 1.4s）",
+    "视觉": "qwen3.8-27b（百炼；真看图。曾试 qwen3.5-ocr 两段式，但 OCR 看不到图标会从题面文字脑补 → 漏报「要求听音却无喇叭图标」类缺陷，故改回真看图）",
+    "注意": "百炼的模型必须用百炼 key；DeepSeek 官方 key 在百炼上无效"
+  },
+  "model": "deepseek-v4-pro-0813",
   "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-  "vision_model": "qwen3.7-plus",
+  "no_think_models": "deepseek-v4-pro-0813,deepseek-v4-pro",
+  "vision_model": "qwen3.8-27b",
   "vision_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-  "max_tokens": 2000,
+  "max_tokens": 4000,
   "temperature": 0.1,
-  "vision_model_fallback": "qwen3.7-plus-2026-05-26",
-  "vision_model_fallback2": "qwen3.7-max-2026-06-08"
+  "vision_model_fallback": "qwen3.8-max",
+  "vision_model_fallback2": "qwen3.8-flash"
 }
