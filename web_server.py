@@ -349,8 +349,13 @@ def _detect_content_dimension(module: str = ""):
             pass
         for qid, q in list(_inspection_state.get("questions", {}).items()):
             # ★ stage 过滤：仅审查当前回调对应的 stage 题目
+            #   ★ 2026-09-10 修复：必须限定在【脚本子模块名】白名单内才过滤。
+            #   背景：巧记单词等模块现在会把 stage 设成定位标签（"U1 第1关"/"U1 boss关"），
+            #   而内容审查回调发生在模块结束时（此时 stage = 最后一个关卡）→
+            #   若不加白名单，会只剩最后一关的题进入内容审查（其余题被全部过滤掉，
+            #   表现为"内容维度大面积缺失"）。关卡标签不是子模块名，故白名单可精确区分。
             _q_stage = (q or {}).get("stage", "") or ""
-            if _cur_stage and _q_stage and _q_stage != _cur_stage:
+            if _should_skip_by_stage(_cur_stage, _q_stage):
                 continue
             idx = (q or {}).get("idx", 0)
             if not idx: continue
@@ -483,7 +488,20 @@ def _detect_content_dimension(module: str = ""):
             else:
                 log_msg(f"⚠ 批量内容检查失败: {_err[:80]}", "warning")
     except Exception as e:
-        log_msg(f"⚠ 内容补充异常: {e}", "warning")
+        # ★ 2026-09-10 修复「⚠ 内容补充异常: 解析 .doc 需要 olefile 库」含义不清问题：
+        #   根因是当前解释器缺 olefile（老式 .doc 为 OLE 复合文档，python-docx 不支持）。
+        #   在 uploads/ 放了 .doc 脚本时必现；此处给出明确的安装指引 + 影响范围说明，
+        #   而不是笼统的"内容补充异常"（用户无法判断是日志问题还是真问题）。
+        _err = str(e)
+        if "olefile" in _err or "解析 .doc" in _err or ".doc 需要" in _err:
+            log_msg(
+                "⚠ 内容补充异常: 脚本为 .doc 老格式(OLE)，当前 Python 缺 olefile 库。"
+                "修复: 在 web_server 所用解释器执行 pip install olefile 后重试。"
+                "（本次仅跳过 LLM 内容检查，不影响设备端 UI/作答检查）",
+                "warning",
+            )
+        else:
+            log_msg(f"⚠ 内容补充异常: {e}", "warning")
 
 
 
@@ -2986,6 +3004,170 @@ def _live_regen_error_report():
 # ★ 多模块检测每题界面级证据 → 审查结果区（无脚本也能展示 AI 通过/不通过）
 _SCRIPT_CACHE = {}  # ★ 脚本解析缓存 {docx名: script_questions}，避免每题重复解析100题
 
+# ★ 2026-09-10：真正的【脚本子模块名】白名单——只有这些 stage 值才用于
+#   "只审查当前子模块的题"（听力专项的练习/测试、口语训练的阶段名等）。
+#   巧记单词等模块把 stage 用作定位标签（"U1 第1关"/"U1 boss关"），
+#   不属于子模块名 → 内容审查时不做 stage 过滤，否则只会剩最后一关的题。
+_SUBMODULE_STAGES = (
+    "练习", "测试", "基础巩固", "综合进阶", "难点突破", "考前突破",
+    "快速检查", "专项练习", "综合测试",
+)
+
+
+def _should_skip_by_stage(cur_stage: str, q_stage: str) -> bool:
+    """内容补充检查是否应跳过该题（按 stage 过滤判定，抽成函数便于单测）
+
+    规则：
+      - 任一为空 → 不过滤
+      - 当前 stage **不是**脚本子模块名（如巧记单词的"U1 第1关"这类定位标签）→ 不过滤
+      - 两边都是子模块名且不同 → 过滤（听力专项：练习的题不能拿测试脚本比）
+    """
+    if not cur_stage or not q_stage:
+        return False
+    if cur_stage not in _SUBMODULE_STAGES:
+        return False
+    return q_stage != cur_stage
+
+
+def _llm_health_check() -> tuple:
+    """★ 2026-09-10 新增：多模块检测启动前做一次 LLM 连通性体检。
+
+    背景：LLM 额度耗尽时（DeepSeek 402 余额耗尽 / 通义千问 403 免费额度用尽）
+    整个流程**不会报错**，只是静默降级 —— AI 核查结论变成套话/兜底、
+    知识点变成"待人工补充"，用户会误以为"AI 在瞎判"。
+
+    这里在跑之前各发一次极小的探针请求，把结论写进日志（用户在前端直接可见）：
+      ✅ AI 核查可用
+      ⚠ AI 核查不可用（文本: xxx；视觉: yyy）→ 本次仅做界面级检查，AI 结论不可信
+
+    Returns: (text_ok: bool, vision_ok: bool, detail: str)
+    """
+    _t_ok = _v_ok = False
+    _t_err = _v_err = ""
+    try:
+        from src.reviewer_common import LLMClient, is_fatal_llm_error
+        _c = LLMClient.from_config()
+        # 文本探针
+        try:
+            _r = (_c.ask('回复"ok"两个字符即可') or "")
+            _t_ok = bool(_r) and "LLM 调用失败" not in _r and "[LLM 不可用]" not in _r
+            if not _t_ok:
+                _t_err = _r[:70]
+        except Exception as _e:
+            _t_err = str(_e)[:70]
+        # 视觉探针（只探"是否有额度"，不真正发图——发 1x1 图也会计费，故用文本通道探同 key）
+        try:
+            if _c.vision_model and _c.vision_api_key:
+                if _c.vision_api_key == _c.api_key and _c.vision_base_url == _c.base_url:
+                    _v_ok = _t_ok          # 同一供应商同一 key，文本通即视觉通
+                else:
+                    import json as _json
+                    import urllib.request as _ur
+                    _body = _json.dumps({
+                        "model": _c.vision_model,
+                        "messages": [{"role": "user", "content": "ok"}],
+                        "max_tokens": 3,
+                    }).encode()
+                    _req = _ur.Request(
+                        _c.vision_base_url.rstrip("/") + "/chat/completions",
+                        data=_body,
+                        headers={"Authorization": "Bearer " + _c.vision_api_key,
+                                 "Content-Type": "application/json"},
+                    )
+                    _ur.urlopen(_req, timeout=20).read()
+                    _v_ok = True
+            else:
+                _v_ok, _v_err = False, "未配置视觉模型（图片题将降级为纯文本/OCR）"
+        except Exception as _e:
+            _v_err = str(_e)[:70]
+    except Exception as _e:
+        return False, False, f"体检异常: {str(_e)[:80]}"
+    _detail = ""
+    if not _t_ok:
+        _detail += f"文本模型: {_t_err}；"
+    if not _v_ok:
+        _detail += f"视觉模型: {_v_err or '不可用'}；"
+    return _t_ok, _v_ok, _detail
+
+
+def _merge_evidence_record(prev: dict, new: dict) -> dict:
+    """★ 2026-09-10 修复：同一道题的多条证据必须【合并】而非覆盖。
+
+    真机场景（巧记单词）：同一题先发一条「第N题 完整性检查」（含题干/选项/作答/音频
+    四维），答错后反馈页再发一条「第N题 检查（扬声器内容）」（只含音频维）。
+    旧代码直接 `questions[qid] = {...}` → 第二条把第一条整条覆盖，
+    前面已检出的维度全部丢失，前端只剩"扬声器"一维 → 用户看到的结论维度过少。
+
+    合并规则：
+      1) 六维状态按「不通过 > 通过 > 未检」取优先（任一次判不通过即不通过）
+      2) 文本类（题干/选项/截图）后写的非空值覆盖
+      3) 人工标注（human_label/human_note）永不被自动证据覆盖
+      4) 脚本层结果（script/layer）已回填则保留
+    """
+    dim_keys = ("ai_stem", "ai_content", "ai_image",
+                "ai_answer", "ai_audio", "ai_post_error")
+    for k in dim_keys:
+        p, n = prev.get(k), new.get(k)
+        if p is False or n is False:
+            new[k] = False
+        elif p is True or n is True:
+            new[k] = True
+        else:
+            new[k] = None
+    # 原因文本：新的非空优先，否则沿用旧的
+    for k in ("stem_reason", "content_reason", "image_reason",
+              "answer_reason", "audio_reason", "post_error_reason"):
+        if not (new.get(k) or "").strip():
+            new[k] = prev.get(k) or ""
+    # 按合并后的维度重算 overall（与 _record_module_evidence 判定口径一致）
+    _ck = [new[k] for k in dim_keys if new[k] is not None]
+    if any(v is False for v in _ck):
+        new["overall_passed"] = False
+    elif len(_ck) >= 3:
+        new["overall_passed"] = True
+    else:
+        new["overall_passed"] = None
+    new["overall_score"] = round(
+        sum(1 for v in _ck if v is True) / max(len(_ck), 1), 2) if _ck else 0.0
+    # conclusions 同步（保持与六维一致的 pass/fail/na）
+    _cmap = {
+        "stem": "ai_stem", "content": "ai_content", "image": "ai_image",
+        "answerable": "ai_answer", "audio": "ai_audio",
+    }
+    _prev_c = prev.get("conclusions") or {}
+    _new_c = dict(new.get("conclusions") or {})
+    for _dim, _key in _cmap.items():
+        _v = new.get(_key)
+        _r = (_new_c.get(_dim) or {}).get("detail") or ""
+        if not _r:
+            _r = (_prev_c.get(_dim) or {}).get("detail") or ""
+        _new_c[_dim] = {
+            "status": "pass" if _v is True else ("fail" if _v is False else "na"),
+            "detail": _r,
+        }
+    # flow 维度跟随 overall
+    _new_c["flow"] = {
+        "status": ("pass" if new["overall_passed"] is True
+                   else ("fail" if new["overall_passed"] is False else "na")),
+        "detail": _new_c.get("flow", {}).get("detail", "") or "",
+    }
+    new["conclusions"] = _new_c
+    # 文本/截图：非空才覆盖
+    for k in ("stem", "options", "screenshot", "question_type", "score_info"):
+        if not (new.get(k) or "").strip():
+            new[k] = prev.get(k) or ""
+    # 人工标注 / 脚本层：绝不丢
+    new["human_label"] = prev.get("human_label")
+    new["human_note"] = prev.get("human_note") or ""
+    new["note"] = prev.get("note") or new.get("note") or ""
+    if not new.get("script") and prev.get("script"):
+        new["script"] = prev["script"]
+        new["layer"] = prev.get("layer") or new.get("layer")
+    elif prev.get("layer") == "basic+script":
+        new["layer"] = "basic+script"
+    return new
+
+
 def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None):
     """把 engine.py 每题收集的 5 维界面证据（题型/题干/选项/音频/作答）
     映射成前端六维卡片字段写入 _inspection_state["questions"]。
@@ -3263,16 +3445,6 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
     #   而非单一总数字（用户要求"测了听力专项的练习+测试，总览要分开展示各自动态题数"）
     _mod_key = f"{_current_module_name or '未知'}{'·' + _current_stage_name if _current_stage_name else ''}"
     _mods_total = _inspection_state.setdefault("_modules_total", {})
-    # 每题只在首次 evidence 时 +1（用 qid 去重防重复）
-    _qid = f"auto-Q{qidx:03d}"  # 先粗略 qid 做去重 key
-    if big:
-        _qid = f"auto-Q{big:02d}-{qidx:02d}"
-    # ★ 去重集合用 dict（JSON 不支持 set → _save_inspection_state 会整体序列化失败丢状态！）
-    _seen = _inspection_state.setdefault("_seen_qids", {})
-    _seen_key = _qid + "@" + _mod_key
-    if not _seen.get(_seen_key):
-        _seen[_seen_key] = 1
-        _mods_total[_mod_key] = _mods_total.get(_mod_key, 0) + 1
     # ★ 2026-08-25 修复：口语训练"第N大题·第M小题"结构下，不同大题的小题号重复
     #   （每个大题都有小题1-5）→ 旧 qid "auto-Q{小题号}" 会被后面大题的同号小题覆盖，
     #   只剩最后一大题。改为 "auto-Q{大题:02d}-{小题:02d}" 保证每题唯一；
@@ -3281,6 +3453,50 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
         qid = f"auto-Q{big:02d}-{qidx:02d}"
     else:
         qid = f"auto-Q{qidx:03d}"
+
+    # ★ 2026-09-10 通用防御（与巧记单词"跑完6关只剩15题"同一个根因）：
+    #   题号来自【阶段内题号】，而每个阶段/子模块都从 1 重新开始
+    #   （听力专项的「练习」+「测试」、巧记单词的 第1关~boss关…），
+    #   于是同一个 qid 被后一阶段覆盖，审查结果只剩最后一个阶段的题。
+    #   这里用 _qid_owner 记录每个 qid 属于哪个 (模块|阶段|大题) 作用域：
+    #   发现同号却来自不同作用域 → 会互相覆盖 → 立刻分配一个全新号，并记一条可见日志。
+    #   （已在模块内部做过全局编号的模块不会触发，零副作用）
+    _qid_owner = _inspection_state.setdefault("_qid_owner", {})
+    # (作用域 + 原始题号) → 最终 qid 的稳定映射：同一题重复上报（完整性检查 +
+    # 扬声器内容检查）必须落回同一个 qid，否则一道题会被拆成两条记录。
+    _qid_map = _inspection_state.setdefault("_qid_map", {})
+    _scope_key = f"{_current_module_name}|{_current_stage_name}|{big or ''}"
+    _map_key = f"{_scope_key}#{qid}"
+    if _map_key in _qid_map:
+        qid = _qid_map[_map_key]
+    else:
+        _owner = _qid_owner.get(qid)
+        if _owner is not None and _owner != _scope_key:
+            _mx = 0
+            for _k in _qid_owner:
+                for _m in re.finditer(r"[Qq]0*(\d+)", str(_k)):
+                    _mx = max(_mx, int(_m.group(1)))
+            _new_qid = f"auto-Q{_mx + 1:03d}"
+            while _new_qid in _qid_owner:      # 兜底：绝不撞已有号
+                _mx += 1
+                _new_qid = f"auto-Q{_mx + 1:03d}"
+            try:
+                log_msg(f"⚠ 题目编号冲突：「{_scope_key}」与「{_owner}」同为 {qid} → 已重编号 {_new_qid}",
+                        "warning")
+            except Exception:
+                pass
+            qid = _new_qid
+        _qid_map[_map_key] = qid
+    _qid_owner[qid] = _scope_key
+
+    # 去重 key 与最终 qid 保持一致（否则重编号的题在分模块统计里会算两次）
+    _qid = qid
+    # ★ 去重集合用 dict（JSON 不支持 set → _save_inspection_state 会整体序列化失败丢状态！）
+    _seen = _inspection_state.setdefault("_seen_qids", {})
+    _seen_key = _qid + "@" + _mod_key
+    if not _seen.get(_seen_key):
+        _seen[_seen_key] = 1
+        _mods_total[_mod_key] = _mods_total.get(_mod_key, 0) + 1
 
     # ★ 描述文字：让检查人员知道题目大概内容和位置
     # ★ 描述文字：让检查人员知道题目大概内容和位置
@@ -3294,7 +3510,7 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
         progress_str = f"Q{qidx}"
     _loc = {"big": big} if big else {}
 
-    _inspection_state["questions"][qid] = {
+    _new_rec = {
         "idx": qidx,
         "total": total,
         "question_type": question_type,
@@ -3348,6 +3564,13 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
             "script_stem": _sq_stem_hit,
         } if _sq_cur else None,
     }
+    # ★ 2026-09-10 修复：同一题可能发多条证据（"完整性检查" + "检查（扬声器内容）"），
+    #   旧代码直接赋值 → 后一条把前一条整条覆盖，已检出的维度全丢。
+    #   改为：已有记录则合并（六维取"不通过 > 通过 > 未检"优先）
+    _prev_rec = _inspection_state["questions"].get(qid)
+    if _prev_rec:
+        _new_rec = _merge_evidence_record(_prev_rec, _new_rec)
+    _inspection_state["questions"][qid] = _new_rec
     _inspection_state["current_question_idx"] = qidx
     # ★ 每 10 题保存一次到文件（供错题溯源 trace 页面读取，避免只存内存导致 trace 看不到）
     if total % 10 == 0:
@@ -5228,6 +5451,27 @@ def api_modules_run():
                 _inspection_state["unit"] = _first_unit
             units_desc = f"（单元: {units}）" if units else ""
             log_msg(f"多模块检测启动: {version} {grade} → {'、'.join(module_names)}{units_desc}")
+            # ★ 2026-09-10 LLM 体检：额度耗尽时流程不会报错、只会静默降级，
+            #   所以开跑前明确告知"本次 AI 结论是否可信"，避免用户误判成"AI 瞎判"。
+            try:
+                _t_ok, _v_ok, _llm_detail = _llm_health_check()
+                if _t_ok and _v_ok:
+                    log_msg("✅ AI 核查可用（文本 + 视觉模型均正常）", "success")
+                else:
+                    _bad = []
+                    if not _t_ok:
+                        _bad.append("文本")
+                    if not _v_ok:
+                        _bad.append("视觉")
+                    log_msg(
+                        f"⚠ AI 核查不可用（{'/'.join(_bad)}模型调用失败）：{_llm_detail}"
+                        f"本次将只做界面级检查，AI 相关结论不可信；"
+                        f"请检查各供应商额度/密钥（DeepSeek 余额耗尽→402、"
+                        f"通义千问免费额度用尽→403）后重新运行",
+                        "warning",
+                    )
+            except Exception as _e:
+                log_msg(f"⚠ LLM 体检异常（不影响自动化答题）: {str(_e)[:90]}", "warning")
             import importlib
             sys.path.insert(0, str(Path(__file__).parent / "scripts"))
             sched = importlib.import_module("scheduler")
