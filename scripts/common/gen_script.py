@@ -36,6 +36,9 @@ try:
 except Exception:
     _HAS_DOCX = False
 
+# ⚠ 已废弃（2026-09-10）：旧 `_auto_knowledge` 用它拼"涉及XX相关知识点"——
+#   该表达被用户明令禁止，兜底逻辑已改为给出具体答案内容/明确标注待补充。
+#   保留常量仅为兼容可能的外部引用，新代码请勿使用。
 _KNOWLEDGE_KWS = ("语法", "句型", "词汇", "单词", "固定搭配", "时态", "发音",
                   "am/is/are", "can", "like", "want", "what", "where", "who",
                   "When", "How", "Do ", "Does ", "Is ", "Are ")
@@ -91,7 +94,10 @@ def _extract_ui_question(xml, answer="", qtype_hint=""):
              "巧记单词", "语音评测", "全脑记词", "单词听写", "查看解析",
              "正确答案", "错误答案", "本大题", "本小题", "分值", "满分",
              "考前突破", "当前版本", "练习记录", "训练规则说明", "好的",
-             "播放", "暂停", "重听", "上一页", "下一页")
+             "播放", "暂停", "重听", "上一页", "下一页",
+             # ★ 2026-09-10 新增：应用锁遮罩提示会被当成题干混进脚本
+             #   （真机实测题干出现"听录音，选择与录音内容相符的释义。 / 应用锁保护中"）
+             "应用锁保护中", "应用锁", "解锁后继续")
 
     def _is_noise(t):
         if t in noise or any(n in t for n in noise):
@@ -138,6 +144,12 @@ def _extract_ui_question(xml, answer="", qtype_hint=""):
         # ★ 2026-08-26 清洗题干前缀题号进度（如 "13/32 选择各组中不同类的一项" →
         #   "选择各组中不同类的一项"）。App 常把题号进度和题干放同一 TextView。
         t = re.sub(r"^\s*\d+\s*[/／]\s*\d+\s*", "", t).strip()
+        # ★ 2026-09-10 清洗关卡进度段（巧记单词"第6关 5/15" / "第6关  5"）：
+        #   App 把关卡进度与题干放在相邻节点，合并后题干会拖一条" / 第6关 5"杂质
+        #   （真机实测），导致脚本题干不干净、与脚本 docx 比对时误判不一致。
+        if re.fullmatch(r"第\s*\d+\s*关[\s\d/／]*", t):
+            continue  # 整段就是关卡进度 → 丢弃
+        t = re.sub(r"^\s*第?\s*\d+\s*关\s*\d+\s*[/／]\s*\d+\s*", "", t).strip()
         if not t:
             continue
         if any(t == s or t in s or s in t for s in _merged):
@@ -192,15 +204,23 @@ class QuestionCollector:
         os.makedirs(self.save_root, exist_ok=True)
         self.questions = []       # 当前单元收集的题（含题干可解析的）
         self.skipped_no_stem = 0  # 无题干跳过的题数（纯听音等）
+        # ★ 2026-09-10 知识点缓存（题目内容 → 解析文案）与 LLM 客户端复用，
+        #   避免同一道题重复触发 LLM（用户明确要求知识点生成具备确定性）
+        self._knowledge_cache = {}
+        self._knowledge_cache_hits = 0
+        self._llm = None
+        # ★ 2026-09-10 熔断状态：LLM 额度/密钥不可用时置 True，剩余题目不再调用 LLM
+        self._llm_disabled = False
+        self._llm_fail_streak = 0
 
     # ------------------------------------------------------------
     def add(self, qno, stem="", options=None, answer="", qtype="",
             unit=0, recording="", knowledge="", big=None, image_path="",
-            allow_listen=False, speaker_word=""):
+            allow_listen=False, speaker_word="", level=None):
         """收集一道题。仅当有题干（非纯听音）才保留，否则跳过。
 
         Args:
-            qno: 题号（单元内序号）
+            qno: 题号（全局/单元内序号）
             stem: 题干文字（空 = 纯听音/无题干 → 跳过）
             options: 选项列表 ['A. xx', 'B. xx', ...]
             answer: 答案（点击的选项，如 'B'）
@@ -213,6 +233,10 @@ class QuestionCollector:
             allow_listen: ★ 2026-08-26 是否允许收集听音题（巧记单词传 True——
               听音选释义题题干+扬声器识别词+选项都应进解析脚本；听力专项/口语训练仍 False）
             speaker_word: ★ 2026-08-26 扬声器播放的单词（ASR 识别，听音题用，放题干后展示）
+            level: ★ 2026-09-10 关卡号（巧记单词"第N关"，位置行/分组显示用）。
+              **None = 该模块无关卡概念**（单元自检等，行为与旧版完全一致）；
+              **0 = boss 关**（巧记单词最后一关，App 里显示为"第6关"）。
+              ⚠ 不能用 0 当"无关卡"默认值——否则 boss 关会被静默丢掉分组标签。
         """
         stem = (stem or "").strip()
         answer = (answer or "").strip()
@@ -229,6 +253,7 @@ class QuestionCollector:
                     "qno": int(qno) if str(qno).isdigit() else qno,
                     "stem": stem, "options": [], "answer": str(answer).strip(),
                     "qtype": qtype or "", "unit": int(unit) if str(unit).isdigit() else unit,
+                    "level": level,
                     "recording": recording,
                     "knowledge": "", "big": big,
                     "image_path": image_path,
@@ -281,6 +306,7 @@ class QuestionCollector:
             "speaker_word": (speaker_word or "").strip(),  # ★ 扬声器识别词（听音题）
             "knowledge": (knowledge or "").strip(),
             "big": big,
+            "level": level,  # ★ 2026-09-10 关卡号（巧记单词"第N关"）
             "time": datetime.now().strftime("%H:%M:%S"),
         })
 
@@ -288,11 +314,31 @@ class QuestionCollector:
     def _llm_knowledge(self, q):
         """用大模型生成知识点解析：符合该版本年级的知识水平，精简有说服力。
         像"为什么1+1=2"要用小学方法解释——不模糊、直接给出该年级该懂的结论。
+
+        ★ 2026-09-10 两处优化（用户要求"知识点生成需具备确定性，避免同一题重复触发 LLM"）：
+          1. **题目内容级缓存**：key = 题干 + 选项 + 答案（不含关卡/单元）——
+             巧记单词整单元 101 题里有大量重复词（同一单词在多个关卡反复出现），
+             缓存后同一题只调一次 LLM，既省时间（实测可省 50%+ 调用）又保证
+             同一道题的解析文案**逐字一致**（确定性）。
+          2. **复用 LLMClient**：原来每题都 `LLMClient.from_config()` 重建客户端，
+             整单元 101 题就是 101 次初始化；改为实例内复用。
         """
+        _key = self._knowledge_key(q)
+        _hit = self._knowledge_cache.get(_key)
+        if _hit:
+            self._knowledge_cache_hits += 1
+            return _hit
+        # ★ 2026-09-10 熔断：LLM 已判定不可用（额度耗尽/密钥失效）→ 不再逐题重试。
+        #   否则整单元 101 题 × 每题 2 次尝试 × ~10s = 半小时纯空转（用户以为卡死）。
+        if self._llm_disabled:
+            return self._auto_knowledge(q)
+        _last_raw = ""
         try:
             sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-            from src.reviewer_common import LLMClient
-            llm = LLMClient.from_config()
+            from src.reviewer_common import LLMClient, is_fatal_llm_error
+            if self._llm is None:
+                self._llm = LLMClient.from_config()
+            llm = self._llm
             opt_str = " ".join(q["options"]) if q["options"] else "（无文字选项）"
             # ★ 固定模板（KNOWLEDGE_PROMPT_TEMPLATE），保证解析规范一致
             prompt = KNOWLEDGE_PROMPT_TEMPLATE.format(
@@ -301,14 +347,47 @@ class QuestionCollector:
             ans = ""
             for _try in range(2):  # 不合格重试一次
                 ans = (llm.ask(prompt) or "").strip()
+                _last_raw = ans
                 if ans and len(ans) > 5 and "LLM 调用失败" not in ans and self._check_knowledge_ok(ans):
+                    _ans = ans[:120]
+                    self._knowledge_cache[_key] = _ans
+                    self._llm_fail_streak = 0
+                    return _ans
+                if is_fatal_llm_error(ans):   # 额度/密钥问题 → 重试无意义
                     break
                 ans = ""  # 不合格 → 重试
-            if ans:
-                return ans[:120]
+            # 走到这里说明本次生成失败：判定是否致命 → 熔断并**大声**提示（只提示一次）
+            self._llm_fail_streak += 1
+            if is_fatal_llm_error(_last_raw) or self._llm_fail_streak >= 3:
+                self._llm_disabled = True
+                _why = _last_raw[:110] if _last_raw else "连续多次生成不合格"
+                print(f"  ⚠ 知识点 LLM 已停用（{_why}）"
+                      f"→ 本单元剩余 {len(self.questions)} 题改用兜底解析，"
+                      f"请检查 LLM 额度/密钥后重新生成脚本")
+                try:
+                    from common.logger import log_msg
+                    log_msg(f"⚠ 知识点 LLM 不可用（{_why}）→ 已熔断，剩余题目改用兜底解析；"
+                            f"请检查 DeepSeek 余额/密钥（额度耗尽会返回 402 Payment Required）",
+                            "warning")
+                except Exception:
+                    pass
         except Exception as _e:
             print(f"  ⚠ 知识点 LLM 生成失败: {_e}")
         return self._auto_knowledge(q)
+
+    # ------------------------------------------------------------
+    @staticmethod
+    def _knowledge_key(q):
+        """知识点缓存 key：仅由题目内容决定（题干+答案+选项），与关卡/单元无关。
+
+        ★ 用内容做 key 是刻意的：同一道题无论出现在第几关第几单元，
+          知识点文案必须完全一致（确定性），不能"同一个词两种解释"。
+        """
+        return "|".join([
+            (q.get("stem") or "").strip(),
+            (q.get("answer") or "").strip(),
+            "~".join(q.get("options") or []),
+        ])
 
     # ------------------------------------------------------------
     @staticmethod
@@ -336,9 +415,14 @@ class QuestionCollector:
         if not _HAS_DOCX:
             print("  ❌ python-docx 不可用，无法生成脚本")
             return None
-        # ★ 知识点用大模型生成（每题一次调用，串行；该年级知识点有说服力）
-        print(f"  🧠 正在为 {len(self.questions)} 题生成知识点解析（LLM）…")
+        # ★ 知识点用大模型生成（题目内容去重后调用；该年级知识点有说服力）
         _total_q = len(self.questions)
+        _need = sum(1 for q in self.questions
+                    if not q.get("knowledge")
+                    and self._knowledge_key(q) not in self._knowledge_cache)
+        _dup = _total_q - _need - sum(1 for q in self.questions if q.get("knowledge"))
+        print(f"  🧠 正在为 {_total_q} 题生成知识点解析（LLM）…"
+              + (f"（去重后可省 {_dup} 次重复调用）" if _dup > 0 else ""))
         for _gi, q in enumerate(self.questions, 1):
             if not q.get("knowledge"):
                 q["knowledge"] = self._llm_knowledge(q)
@@ -349,6 +433,8 @@ class QuestionCollector:
                     log_msg(f"⏳ 脚本生成进行中 {_gi}/{_total_q}…", "info")
                 except Exception:
                     print(f"  ⏳ 脚本生成进行中 {_gi}/{_total_q}…")
+        if self._knowledge_cache_hits:
+            print(f"  ♻ 知识点命中缓存 {self._knowledge_cache_hits} 题（同一题目复用解析，保证文案一致）")
         # ★ 图片题识别补全：选项为空但有截图 → 视觉模型识别图片内容 → 补全选项/答案
         #   （用户需求：图片题脚本只有"A./B."占位无法核对 → 识别截图填内容）
         _img_qs = [q for q in self.questions
@@ -417,8 +503,29 @@ class QuestionCollector:
         # 文档标题（大号黑色加粗，不用 Title 样式）
         _add_line(f"{self.module} · {self.grade} {_u} · 题目解析脚本", bold=True, size=16, space_after=6)
         _add_line(f"版本：{self.version}　|　单元：{_u}　|　生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}", size=10, space_after=2)
-        _add_line(f"共 {len(self.questions)} 题（无题干/纯听音 {self.skipped_no_stem} 题跳过）", size=10, space_after=10)
+        _add_line(f"共 {len(self.questions)} 题（无题干/纯听音 {self.skipped_no_stem} 题跳过）", size=10, space_after=6)
+        # ★ 2026-09-10：按【关卡】分组列出（巧记单词一个单元 6 关，各关题号都从 1 重来，
+        #   平铺列表会让审查员分不清"第3题"是哪一关的）——有关卡时插入关卡分组标题，
+        #   并在"共 N 题"下方给出每关题数明细；无 level（None）的模块（单元自检等）行为完全不变。
+        #   ⚠ level=0 是 boss 关（真关卡），必须用 `is not None` 判断，不能当"无关卡"。
+        _lv_counts = {}
+        for _q in self.questions:
+            if _q.get("level") is not None:
+                _lv_counts[_q["level"]] = _lv_counts.get(_q["level"], 0) + 1
+        if _lv_counts:
+            _detail = "　|　".join(
+                f"{self._level_label(k)} {v} 题" for k, v in sorted(_lv_counts.items()))
+            _add_line(f"分关卡：{_detail}", size=10, space_after=10)
+        else:
+            _add_line("", size=10, space_after=4)
+        _last_lv = "__none__"
         for i, q in enumerate(self.questions, 1):
+            # ★ 关卡分组标题（level 变化时插入，只插一次）
+            _lv = q.get("level")
+            if _lv is not None and _lv != _last_lv:
+                _add_line(f"━━ {self._level_label(_lv)}（{_lv_counts.get(_lv, 0)} 题）━━",
+                          bold=True, size=14, space_after=4)
+                _last_lv = _lv
             # 题号（标题，简洁）
             _add_line(f"第{i}题", bold=True, size=13, space_after=2)
             # 题干（完整内容：指令+具体内容，如"请找出与下面选项不符的一项"）
@@ -444,11 +551,27 @@ class QuestionCollector:
         return path
 
     # ------------------------------------------------------------
+    @staticmethod
+    def _level_label(lv):
+        """关卡显示名：0 = boss关，其余 = 第N关。
+
+        ★ 巧记单词一个单元 6 关（1~5 数字关 + boss 关），App 里 boss 关也显示成"第6关"，
+          这里统一用"boss关"标识，避免与数字关号混淆。
+        """
+        return "boss关" if not lv else f"第{lv}关"
+
+    # ------------------------------------------------------------
     def _loc_str(self, q):
-        """App 位置描述：模块 · 单元 · 第N题（含大题时带大题号）"""
+        """App 位置描述：模块 · 单元 · 第N关 · 第N题（含大题时带大题号）
+
+        ★ 2026-09-10：补"第N关"——巧记单词一个单元有 6 个关卡，各关题号都从 1 开始，
+          不带关卡时"第3题"无法定位到是哪一关的第3题。
+        """
         _parts = [self.module]
         if q.get("unit"):
             _parts.append(f"U{q['unit']}")
+        if q.get("level") is not None:   # ⚠ 0 = boss关，必须 is not None
+            _parts.append(self._level_label(q["level"]))
         if q.get("big"):
             _parts.append(f"第{q['big']}大题")
         if q.get("qno"):
@@ -477,12 +600,38 @@ class QuestionCollector:
     # ------------------------------------------------------------
     @staticmethod
     def _auto_knowledge(q):
-        """从题干/答案自动推断知识点（简单启发式；复杂可后续接 LLM）"""
-        txt = f"{q['stem']} {q['answer']} {' '.join(q['options'])}"
-        for kw in _KNOWLEDGE_KWS:
-            if kw in txt:
-                return f"涉及{kw}相关知识点"
-        return "基础知识点"
+        """LLM 不可用时的兜底解析。
+
+        ★ 2026-09-10 修正（用户明令禁止含糊表达）：
+          旧兜底返回 "涉及{关键词}相关知识点" / "基础知识点" —— 这恰恰是用户禁止的
+          "涉及 XX 相关知识点"式套话，且会被 `_check_knowledge_ok` 判为不合格（自相矛盾）。
+          现改为：① 能给出具体信息的就具体给出（正确答案内容 / 听到的单词）；
+                  ② 实在无法生成时，明确标注"待补充 + 原因"，让审查员一眼看出需人工补，
+                     而不是拿一句套话充数。
+        """
+        _parts = []
+        _ans = (q.get("answer") or "").strip()
+        _opts = q.get("options") or []
+        _ans_txt = ""
+        if _ans and re.match(r"^[A-F]$", _ans.upper()):
+            _i = ord(_ans.upper()) - 65
+            if 0 <= _i < len(_opts):
+                _ans_txt = re.sub(r"^[A-F][.、．]\s*", "", str(_opts[_i])).strip()
+        elif _ans:
+            _ans_txt = _ans
+        _spk = (q.get("speaker_word") or "").strip()
+        # ★ 听音选释义：把"听到的词"和"正确释义"组合成真正有用的知识点
+        #   （例：扬声器 "new" + 正确项 "新的" → 「new」的意思是「新的」）
+        #   这比只写"正确答案是「新的」"更有解释力，仍是本地可得、无需 LLM。
+        if _spk and _ans_txt and _spk not in _ans_txt and not re.match(r"^[A-F]$", _ans_txt):
+            _parts.append(f"「{_spk}」的意思是「{_ans_txt}」")
+        elif _ans_txt:
+            _parts.append(f"正确答案是「{_ans_txt}」")
+        elif _spk:
+            _parts.append(f"录音中读到的词是「{_spk}」")
+        if _parts:
+            return "；".join(_parts) + "。"
+        return "（知识点待人工补充：本次未生成，请检查 LLM 额度/密钥后重新生成脚本）"
 
     # ------------------------------------------------------------
     def summary(self, unit):

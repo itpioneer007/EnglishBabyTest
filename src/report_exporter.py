@@ -233,6 +233,9 @@ class ReportExporter:
         passed = sum(1 for q in questions if q.get("overall_passed"))
         failed = total - passed
         uncertain = sum(1 for q in questions if q.get("error_dimensions", []))
+        # ★ 2026-09-10 修复：下面 HTML 模板里引用了 {pass_rate} 但从未定义 →
+        #   生成报告时直接抛 NameError（"查看报告"整体失败；tests/test_e2e_pipeline.py 同错）。
+        pass_rate = round(passed / total * 100) if total else 0
 
         # 平均置信度
         confs = []
