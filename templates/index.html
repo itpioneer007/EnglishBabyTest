@@ -3602,7 +3602,16 @@
             return `${mod}${q.stage ? " · " + q.stage : ""} · 脚本审查${q.position ? " · " + q.position : ""}`;
           }
           if (s.startsWith("auto-")) {
-            return `${String(q.question_type || "完整性检查").replace(/[（(].*?[）)]/g, "")} · 完整性检查`;
+            // ★ 2026-09-10 修复（用户要求）：实际测试题按「模块 · 单元关卡」分组。
+            //   巧记单词一个单元 6 个关卡（1~5关 + boss关）共 100+ 题，旧逻辑只用
+            //   question_type 分组 → 全部挤在一个"巧记单词 · 完整性检查"标题下，
+            //   分不清题来自哪一关。优先用后端写入的 module/stage（"巧记单词"+"U1 第1关"）。
+            const mod = String(
+              q.module ||
+                String(q.question_type || "完整性检查").replace(/[（(].*?[）)]/g, ""),
+            );
+            const st = q.stage ? " · " + String(q.stage) : "";
+            return `${mod}${st} · 完整性检查`;
           }
           const stage = (s.match(/(基础巩固|综合进阶|难点突破)/) || [])[1];
           const um = s.match(/U(\d+)/);

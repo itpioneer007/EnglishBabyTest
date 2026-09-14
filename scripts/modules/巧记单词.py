@@ -41,6 +41,13 @@ BOOK_VERSION = "湘少版"
 # ★ 题目解析收集器（run_module 初始化；巧记单词在可生成脚本白名单内）
 _coll = None
 _cur_unit = 0
+_cur_level = 0
+
+# ★ 2026-09-10 修复（用户反馈"跑完6关审查结果只有15题"）：
+#   全局题号分配器。App 页面进度 N/M 每关都从 1 重新开始，而审查结果用它做
+#   qid（"auto-Q{题号}"）→ 后一关的同号题覆盖前一关 → 6 关 100+ 题最后只剩
+#   max(单关题数) 条。改为给每题分配【跨关卡/跨单元全局递增】题号，qid 唯一。
+_GQ_NEXT = 0
 
 # 每单元关卡数（1~5 + boss = 6 关）
 LEVELS_PER_UNIT = 6
@@ -221,6 +228,47 @@ def _enter_qiaoji(d, expected_grade="", expected_version=""):
     return True
 
 
+def _qiaoji_empty_reason(d) -> str:
+    """★ 2026-09-10 新增：识别巧记单词「本书籍暂无内容」。
+
+    真机实测（湘少版五年级下册）：点「单词同步闯关」后页面弹出
+      「本书籍暂无巧记单词」气泡，进度区显示
+      「掌握 0/0 词 / 你已通关 0/0 关 / 你已获星 0/0 颗」——
+    说明该「版本 + 年级」组合在 App 后台未配置巧记单词内容。
+    ★ 用户约定：智能识别 → 日志报告 → 直接结束本模块（多模块则进下一个）。
+
+    返回：无内容原因字符串（非空 = 无内容）；有内容返回 ""。
+    """
+    try:
+        xml = d.dump_hierarchy()
+    except Exception:
+        return ""
+    try:
+        txts = " ".join(t for t in re.findall(r'text="([^"]+)"', xml))
+        # ① 显式无内容文案（最可靠）
+        for kw in ("本书籍暂无", "暂无巧记单词", "暂无单词", "暂无该内容",
+                   "该书籍暂无", "暂未开放", "敬请期待", "正在开发"):
+            if kw in txts:
+                return f"页面提示「{kw}」"
+        # ② 进度全 0/0：掌握 0/0词 + 你已通关 0/0关 + 你已获星 0/0颗
+        #   正常有内容的页面这些分母均 > 0（六上实测"掌握 0 /143 词"），不会出现 0/0。
+        #   ⚠ 页面文本是分开的节点（'掌握','0','/0','词'），join 后含空格，
+        #     故正则用 \s* 容忍 "0 /0" 形态。
+        _zeros = len(re.findall(r'0\s*/\s*0', txts))
+        if _zeros >= 2:
+            return f"进度全为 0/0（掌握/通关/获星，命中 {_zeros} 处）"
+        # ③ "掌握 N/M 词" 的分母 M == 0（总词数为 0）→ 无内容可学
+        #   用非贪婪避免吃掉斜杠（"掌握 0 /0 词"）
+        m_hold = re.search(r'掌握[^\u4e00-\u9fa5]{0,12}?(\d+)\s*/\s*(\d+)', txts)
+        if m_hold and int(m_hold.group(2)) == 0:
+            return f"掌握词数为 {m_hold.group(1)}/{m_hold.group(2)}（总词数为 0）"
+        if re.search(r'掌握\s*0\s*词', txts) or re.search(r'共\s*0\s*词', txts):
+            return "掌握词数为 0"
+    except Exception:
+        pass
+    return ""
+
+
 def _enter_sync_challenge(d):
     """点「单词同步闯关」→ 关卡地图"""
     if d(text="单词同步闯关").exists(timeout=3):
@@ -229,6 +277,203 @@ def _enter_sync_challenge(d):
         time.sleep(1.6)
         return True
     print(f"    ❌ 找不到单词同步闯关")
+    return False
+
+
+# ★ 2026-09-10 新增：闯关地图（Unit 选择页）Unit 卡片锚点
+#   真机实测（湘少版六年级上册）：卡片 resource-id = unit{N}_progress_bg_imageview
+_UNIT_CARD_RE = re.compile(
+    r'resource-id="[^"]*unit(\d+)_progress_bg_imageview"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"'
+)
+
+
+def _is_unit_map(d, xml=None) -> bool:
+    """★ 2026-09-10 新增：判定当前页是否「闯关地图」（Unit 选择页）。
+
+    ★ 用户反馈（六上）：进入巧记单词多了一步——「单词同步闯关」之后不是直接到
+      熟悉的单元闯关界面，而是先到「闯关地图」，要滑动找到目标 Unit 再进入。
+    判定特征（满足其一即认为是闯关地图）：
+      ① 页面出现「闯关地图」标题
+      ② 存在 >= 3 张 unitN_progress_bg_imageview 卡片（岛屿式 Unit 卡片）
+    """
+    if xml is None:
+        try:
+            xml = d.dump_hierarchy()
+        except Exception:
+            return False
+    if "闯关地图" in xml:
+        return True
+    return len(_UNIT_CARD_RE.findall(xml)) >= 3
+
+
+def _enter_unit_from_map(d, unit_no, max_swipes=8) -> bool:
+    """★ 2026-09-10 新增：「闯关地图」→ 滑动/定位找到 Unit N 并进入。
+
+    真机实测（湘少版六年级上册，2026-09-10）：
+      - 「单词同步闯关」→「闯关地图」，Unit 1~Unit 10 以岛屿卡片铺开
+      - 卡片 resource-id = unit{N}_progress_bg_imageview（199x202）
+      - 卡片下方是 "Unit N" 文本，卡片中心比该文字 top 高约 74px
+      - 首页进度 "掌握 0 /143 词"；卡片进度 "0/15"（Unit 内关卡数）
+
+    定位策略（按可靠性排序）：
+      ① rid 精确匹配 unit{N}_progress_bg_imageview → 点卡片中心（无需滑动）
+      ② 目标不在当前视口 → 交替上滑/下滑，每轮重新 dump 后再试
+      ③ 兜底：匹配 "Unit N" 文本 → 点其上方 74px（卡片中心）
+    返回 True=已点击进入；False=未找到。
+    """
+    _w, _h = d.window_size()
+    for _i in range(max_swipes + 1):
+        try:
+            xml = d.dump_hierarchy()
+        except Exception:
+            xml = ""
+        # ① rid 精确匹配（最优：与卡片归属强绑定，不受文本/布局差异影响）
+        for m in _UNIT_CARD_RE.finditer(xml):
+            if int(m.group(1)) != unit_no:
+                continue
+            x1, y1, x2, y2 = (int(m.group(k)) for k in (2, 3, 4, 5))
+            cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+            if 0 < cy < _h:  # 卡片中心需在可视区内
+                d.click(cx, cy)
+                step_log(f"🎯 选中 Unit {unit_no}（卡片 rid）@({cx},{cy})", "info")
+                time.sleep(1.4)
+                return True
+        # ② 兜底："Unit N" 文本 → 卡片中心 = 文字上方 74px
+        m_txt = re.search(
+            rf'text="Unit\s*{unit_no}"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml)
+        if m_txt:
+            bx = (int(m_txt.group(1)) + int(m_txt.group(3))) // 2
+            by = int(m_txt.group(2))
+            cx, cy = bx, by - 74
+            if 0 < cy < _h:
+                d.click(cx, cy)
+                step_log(f"🎯 选中 Unit {unit_no}（文本兜底）@({cx},{cy})", "info")
+                time.sleep(1.4)
+                return True
+        # ③ 滑动查找：偶数轮上滑（找下方 Unit），奇数轮下滑（找上方 Unit）
+        _mid_x = _w // 2
+        if _i % 2 == 0:
+            S_swipe(d, _mid_x, 1900, _mid_x, 800, 0.35)
+        else:
+            S_swipe(d, _mid_x, 800, _mid_x, 1900, 0.35)
+        time.sleep(0.5)
+    step_log(f"⚠ 闯关地图未找到 Unit {unit_no}", "warning")
+    return False
+
+
+def _current_map_unit(d, xml=None) -> int:
+    """★ 2026-09-10 新增：识别「单元关卡地图」当前是哪个 Unit（0 = 不在关卡地图页）。
+
+    ⚠ 必须与「闯关地图」（Unit 选择页）区分，否则会把选择页的卡片文字误当当前 Unit：
+      - 闯关地图（选择页）：有「闯关地图」标题 / 多张 unit{N}_progress_bg_imageview 卡片
+      - 关卡地图（单元内）：有 boss关 / 上一单元 / 下一单元 + 标题 "Unit N XXX"
+    本函数只认后者。
+    """
+    if xml is None:
+        try:
+            xml = d.dump_hierarchy()
+        except Exception:
+            return 0
+    _txts = " ".join(t for t in re.findall(r'text="([^"]+)"', xml))
+    if not any(k in _txts for k in ("boss关", "上一单元", "下一单元")):
+        return 0
+    m = re.search(r'Unit\s*(\d+)\b', _txts)
+    return int(m.group(1)) if m else 0
+
+
+def _switch_unit_by_arrows(d, from_u, to_u, max_steps=12) -> bool:
+    """★ 2026-09-10 新增：在关卡地图页用「上一单元」/「下一单元」逐级切换 Unit。
+
+    真机实测（湘少版六上，2026-09-10）：
+      - 关卡地图页底部有「上一单元」「下一单元」按钮，**每次点击切换 1 个单元**
+      - 到边界（Unit 1 / 最后一个单元）时，对应方向的按钮会消失 → 作为停止条件
+      - 双向可逆：Unit 3 →(上一单元)→ 2 → 1；Unit 1 →(下一单元)→ 2
+      - 页面标题含 "Unit N XXX" → 用 _current_map_unit 复读实际 Unit，避免盲点
+
+    ⚠ 为什么不 back 回主页重进：App 会记忆"上次进入的 Unit"，
+      点「单词同步闯关」每次都回到同一个 Unit（实测反复回到 Unit 3）。
+    """
+    if from_u == to_u:
+        return True
+    _btn = "下一单元" if to_u > from_u else "上一单元"
+    _steps = min(abs(to_u - from_u), max_steps)
+    _cur = from_u
+    for _i in range(_steps):
+        if not d(text=_btn).exists(timeout=2):
+            step_log(f"⚠ 巧记单词：「{_btn}」按钮不存在（可能已到边界），当前 Unit {_cur}", "warning")
+            return False
+        d(text=_btn).click()
+        time.sleep(1.3)
+        _new = _current_map_unit(d)
+        if _new:
+            _cur = _new
+        if _cur == to_u:
+            return True
+    return _cur == to_u
+
+
+def _ensure_target_unit(d, unit_no, max_try=3) -> bool:
+    """★ 2026-09-10 新增：确保当前处在【目标 Unit】的关卡地图。
+
+    真机实测发现（六上，2026-09-10）：App 会**记忆上次进入的 Unit**，
+    重启后点「单词同步闯关」会直接落到上次那个 Unit 的关卡地图
+    （activity=EWWordLadderActivity），而不是「闯关地图」。此时若只判断
+    _is_unit_map 就会**跳过选 Unit 步骤 → 跑错单元**
+    （实测：请求 U1，却在跑 Unit 3 的关卡 12~16）。
+
+    策略（按可靠性排序）：
+      ① 已在目标 Unit → 直接 True
+      ② 在「闯关地图」（Unit 选择页）→ 点目标 Unit 卡片并确认
+      ③ 在**其他 Unit 的关卡地图** → 用「上一单元」/「下一单元」逐级切换
+         （真机验证可行）；失败才回退到巧记单词主页重进（兜底）
+    """
+    for _i in range(max_try):
+        try:
+            _xml = d.dump_hierarchy()
+        except Exception:
+            _xml = ""
+        _cur = _current_map_unit(d, _xml)
+        # ① 已在目标 Unit
+        if _cur == unit_no:
+            step_log(f"🗺 已在 Unit {unit_no} 关卡地图，直接开始", "info")
+            return True
+        # ② 闯关地图（Unit 选择页）→ 点卡片选 Unit
+        if _is_unit_map(d, _xml):
+            step_log(f"🗺 检测到闯关地图，定位并进入 Unit {unit_no}", "info")
+            if _enter_unit_from_map(d, unit_no):
+                time.sleep(1.0)
+                if _current_map_unit(d) in (0, unit_no):
+                    step_log(f"✅ 已进入 Unit {unit_no} 关卡地图", "success")
+                    return True
+            step_log(f"⚠ 闯关地图选中 Unit {unit_no} 后未进入，重试（{_i + 1}/{max_try}）", "warning")
+        # ③ 在其他 Unit 的关卡地图 → 逐级切换
+        elif _cur:
+            _dir = "下一单元" if unit_no > _cur else "上一单元"
+            step_log(
+                f"⚠ 当前在 Unit {_cur} 关卡地图（App 记忆上次单元），"
+                f"用「{_dir}」切到 Unit {unit_no}",
+                "warning",
+            )
+            if _switch_unit_by_arrows(d, _cur, unit_no):
+                step_log(f"✅ 已切换到 Unit {unit_no} 关卡地图", "success")
+                return True
+            _left = _current_map_unit(d)
+            step_log(f"⚠ 逐级切换未成功（当前 Unit {_left or '未知'}），尝试回主页重进", "warning")
+        # 兜底：回退到巧记单词主页后重进「单词同步闯关」
+        for _b in range(2):
+            try:
+                d.press("back")
+            except Exception:
+                pass
+            time.sleep(0.8)
+            try:
+                if "单词同步闯关" in d.dump_hierarchy():
+                    break
+            except Exception:
+                pass
+        if _enter_sync_challenge(d):
+            time.sleep(1.2)
+    step_log(f"⚠ 巧记单词：多次尝试仍未进入 Unit {unit_no}，跳过本单元", "warning")
     return False
 
 
@@ -430,10 +675,31 @@ def _answer_loop(d, max_q=20):
     _ev_q = -1  # 已发证据卡的题号（每题只发一次，按 App 实际题号）
     _last_progress = 0  # 上一次读取到的 App 进度题号（防重复发卡）
     _no_question_logged = False  # 无试题关卡是否已记过提示（只记一次）
+    # ★ 2026-09-10：本关的全局题号基准（进入本关前已累计的题数）。
+    #   本关第 1 题 → 全局第 (_gq_base+1) 题；保证跨关卡 qid 不冲突。
+    global _GQ_NEXT
+    _gq_base = _GQ_NEXT
+    _local_q = 0    # ★ 页面读不到进度时的本地题号兜底
+    _local_sig = ""  # ★ 上一题的内容签名（题干+选项），用于判定"换题了"
+    _start_progress = 0   # ★ 本关起始题号（App 记忆进度时可能从"第4题"开始）
+    _max_progress = 0     # ★ 本关读到过的最大题号
+
+    def _done_count():
+        """本次实际完成题数 = 本关最大进度 - 起始进度 + 1。
+
+        ★ 2026-09-10 修复统计口径：旧代码返回 `max(_cur_progress, q)`，而 App 会记住
+          关卡内进度（本关可能从"第4题"开始）→ 报出"2关 完成 13 题"却只有 11 条
+          审查结果（用户看到自相矛盾）。改后与审查结果条数严格一致。
+        """
+        if _start_progress and _max_progress >= _start_progress:
+            return _max_progress - _start_progress + 1
+        return q
+
     while True:
         # ★ 从 App 页面读取进度 N/M（"第1关 1/15" / "1/15" / "15/15"）
         _cur_progress = 0
         _total_progress = 0
+        _xml_prog = ""  # ★ 本轮 dump 的层级（复用做证据卡，省一次 dump；异常时为空串）
         try:
             _xml_prog = d.dump_hierarchy()
             m = re.search(r'第?\d+\s*关\s*(\d+)/(\d+)', " ".join(
@@ -450,12 +716,76 @@ def _answer_loop(d, max_q=20):
         except Exception:
             pass
         # ★ 以 App 实际题号为准（答错重做同一题时 _cur_progress 不变 → 不重复计数）
-        _cur_q = _cur_progress if _cur_progress > 0 else q + 1
+        #   ★ 2026-09-10：读不到进度时（少数关卡页面结构差异）不再直接退回 q+1
+        #     （q 只在部分题型分支自增，会导致整关只算出 1~2 题 → 其余全丢），
+        #     改用【题干+选项内容签名变化】判定换题，保证一关能数出全部题。
+        if _cur_progress > 0:
+            _cur_q = _cur_progress
+            # ★ 2026-09-10 题数统计口径修复：App 会记住关卡内进度，本关可能从
+            #   "第4题"开始（前面的题上次已做过）→ 旧代码用 max(_cur_progress, q)
+            #   报出"2关 完成 13 题"而审查结果只有 11 条（用户看到自相矛盾）。
+            #   这里记录本关起始/最大进度，返回【本次实际做的题数】= 最大-起始+1，
+            #   与审查结果条数严格一致。
+            if _start_progress == 0:
+                _start_progress = _cur_progress
+            _max_progress = max(_max_progress, _cur_progress)
+        else:
+            _sig = ""
+            try:
+                if _xml_prog:
+                    from common.gen_script import _extract_ui_question as _euq
+                    _qi_s = _euq(_xml_prog)
+                    _sig = ((_qi_s.get("stem") or "") + "|" +
+                            "|".join(_qi_s.get("options") or [])).strip("|")
+            except Exception:
+                _sig = ""
+            if _sig and _sig != _local_sig:
+                _local_sig = _sig
+                _local_q += 1
+            _cur_q = max(_local_q, 1)
+        # ★ 2026-09-10：全局题号 = 本关基准 + 【关内相对题号】（跨关卡唯一 → qid 不覆盖）
+        #   用相对号（而不是页面绝对号）保证编号连续：上一关 18 题 → 本关从 19 开始，
+        #   不会因为本关页面从"第4题"起算而跳到 22。
+        _rel = (_cur_q - _start_progress + 1
+                if (_start_progress and _cur_q >= _start_progress) else _cur_q)
+        if _rel < 1:
+            _rel = 1
+        _gq = _gq_base + _rel
+        if _gq + 1 > _GQ_NEXT:
+            _GQ_NEXT = _gq + 1
         # ★ 每题界面级完整性检查证据（题型/题干/选项/音频/作答）→ 前端证据卡
         #   按 App 实际题号去重（答错重做同一题不再重复发卡）
-        if _cur_q != _ev_q and _cur_progress > 0:
+        #   ★ 2026-09-10 修复（用户反馈"很多题目根本没进审查结果"）：
+        #     旧条件要求 _cur_progress > 0（必须读到页面"N/M"进度）才发卡，
+        #     一旦某关进度文本读不到（页面结构差异/渲染延迟），【整关题目全部丢失】，
+        #     审查结果里只剩读过进度的关卡。改为：读不到进度时，只要页面确实
+        #     存在答题元素（检查/提交/原音/重新答题…）也照常发卡。
+        _ev_ok = _cur_progress > 0
+        _xml_ev = _xml_prog  # 复用本轮已 dump 的 XML，避免重复取层级
+        # ★ 2026-09-10：护眼/休息提示页【不是题目】——真机实测它被当成一道"题"记进
+        #   审查结果（题干"请眺望一下远方，活动活动身体，休息好了再回来！"），
+        #   既虚增题数又会产生假错题。这里显式识别并跳过计题/发卡。
+        _is_break_page = False
+        try:
+            _p_txt = " ".join(re.findall(r'text="([^"]+)"', _xml_ev or ""))
+            _is_break_page = any(k in _p_txt for k in (
+                "眺望", "活动活动身体", "休息好了再回来", "休息一下", "做眼保健操",
+                "保护视力", "让眼睛休息"))
+        except Exception:
+            _is_break_page = False
+        if not _ev_ok and not _is_break_page:
             try:
-                _xml_ev = d.dump_hierarchy()
+                _ev_ok = any(k in " ".join(re.findall(r'text="([^"]+)"', _xml_ev))
+                             for k in ("检查", "提交", "原音", "点击录音",
+                                       "重新答题", "下一题", "跳过"))
+            except Exception:
+                _ev_ok = False
+        if _is_break_page:
+            _ev_ok = False
+        if _cur_q != _ev_q and _ev_ok:
+            try:
+                if not _xml_ev:
+                    _xml_ev = d.dump_hierarchy()
                 # ★ 2026-08-26 扬声器播放内容：优先用反馈页提取的（"听力内容：new"，
                 #   最可靠），其次页面英文单词兜底；追加到证据卡（题干后展示）
                 _ev = collect_ui_evidence(_xml_ev, qtype="巧记单词")
@@ -465,14 +795,14 @@ def _answer_loop(d, max_q=20):
                     _ev.append({"field": "扬声器", "type": "info",
                                 "expected": "听音题扬声器播放的单词",
                                 "actual": _spk, "diff": f"扬声器播放：{_spk}"})
-                step_log(f"  第{_cur_q}题 完整性检查", "info", _ev)
+                step_log(f"  第{_gq}题 完整性检查", "info", _ev)
                 _ev_q = _cur_q
             except Exception:
                 pass
         # ★ 停止检查：web_server 收到停止请求 → 中断
         if should_stop():
             step_log("⏹ 收到停止请求，中断当前模块", "warning")
-            return q
+            return _done_count()
         # ★ 2026-09-02 用户约定：识别"当前关卡无试题"立即跳到下一关，不要卡住。
         #   原阈值 6 帧~4.8s 太长（无试题关卡视觉上像死循环）；改为：显式气泡立即跳；
         #   隐式"无答题元素+无进度"连续 2 帧~1.6s 也立即跳，秒过不浪费时间。
@@ -492,10 +822,13 @@ def _answer_loop(d, max_q=20):
             ))
             if _no_q_txt:
                 if not _no_question_logged:
-                    step_log(f"⚠ 本关无试题（页面：{_st_txts[:40]}），跳过本关继续下一关", "warning")
+                    step_log(
+                        f"⚠ U{_cur_unit} 第{_cur_level}关无试题（页面提示：{_st_txts[:40]}），跳过并进入下一关",
+                        "warning",
+                    )
                     _no_question_logged = True
-                # 返回已完成的题数（0），跳出关卡
-                return q
+                # 返回本次实际完成的题数，跳出关卡
+                return _done_count()
             # ★ 2026-09-02 隐式无题（既无答题元素也无 N/M 进度）阈值由 6 → 2，
             #   让"无试题但页面没气泡文案"的关卡也能秒过，单元不被拖慢
             if not _has_answer_elm and not _has_progress and _cur_progress == 0:
@@ -504,7 +837,7 @@ def _answer_loop(d, max_q=20):
                 if _no_answer_frames >= 2:
                     step_log(f"⚠ 本关进入后未出现答题元素（可能未出好题），跳过本关（当前页：{_st_txts[:40]}）", "warning")
                     _answer_loop._no_answer_frames = 0
-                    return q
+                    return _done_count()
             else:
                 _answer_loop._no_answer_frames = 0
         except Exception:
@@ -519,7 +852,8 @@ def _answer_loop(d, max_q=20):
             time.sleep(0.8)
             # ★ 2026-08-26：以 App 实际题号（_cur_progress）为准返回完成题数，
             #   答错重做不计入（_cur_progress 未变）
-            return max(_cur_progress, q) if _cur_progress else q
+            # ★ 2026-09-10：改为"本关进度跨度"（与审查结果条数一致），见 _done_count
+            return _done_count()
         # ★ 题目解析收集：有题干的题收集（含听音题——巧记单词 allow_listen=True）
         #   ★ 2026-08-26：听音选释义题（题干含"听"）之前被跳过，现在也收集，
         #     题干 + 选项 + 扬声器识别词(speaker_word) + recording 一并进解析脚本
@@ -540,8 +874,11 @@ def _answer_loop(d, max_q=20):
                     if _ans_q:
                         # ★ 2026-08-26：qno 用 App 实际题号（_cur_q），避免答错重做重复记；
                         #   allow_listen=True 让听音题也进脚本
-                        _coll.add(qno=_cur_q, stem=_stem_q, options=_qi["options"],
+                        # ★ 2026-09-10：改传全局题号 _gq + 关卡号 level（脚本"位置"行
+                        #   显示成"巧记单词 · U1 · 第1关 · 第3题"，跨关卡不再同名混淆）
+                        _coll.add(qno=_gq, stem=_stem_q, options=_qi["options"],
                                   answer=_ans_q, qtype="巧记单词", unit=_cur_unit,
+                                  level=_cur_level,
                                   recording=_speaker_word, speaker_word=_speaker_word,
                                   allow_listen=True)
         except Exception:
@@ -612,7 +949,7 @@ def _answer_loop(d, max_q=20):
                         _fb_ev.append({"field": "扬声器", "type": "info",
                                        "expected": "听音题扬声器播放的单词",
                                        "actual": _fb_spk, "diff": f"扬声器播放：{_fb_spk}"})
-                        step_log(f"  第{_cur_q}题 检查（扬声器内容）", "info", _fb_ev)
+                        step_log(f"  第{_gq}题 检查（扬声器内容）", "info", _fb_ev)
                         print(f"    🔊 扬声器内容: {_fb_spk}")
                     except Exception:
                         pass
@@ -743,17 +1080,30 @@ def _answer_loop(d, max_q=20):
         time.sleep(0.8)
         if idle >= 5:
             print(f"    ⚠ 连续 {idle} 次未知，退出循环")
-            return q
-    return q
+            return _done_count()
+    return _done_count()
 
 
 def _run_one_level(d, level_no):
     """跑一个关卡：进入 → 答题（答完自动提交）→ back 回地图"""
-    print(f"\n  🎮 关卡 {level_no}")
+    global _cur_level
+    _lv_name = "boss关" if level_no == 0 else f"{level_no}关"
+    _cur_level = level_no
+    # ★ 2026-09-10 修复（用户要求"题目按单元+关卡分类"）：把关卡写入模块上下文，
+    #   审查结果总览即按「巧记单词·U1 第1关」分组统计，不再所有关卡混成一个数字。
+    #   （web_server 的 _mod_key = 模块名·stage，stage 即这里的关卡标签）
+    _lv_tag = f"U{_cur_unit} boss关" if level_no == 0 else f"U{_cur_unit} 第{level_no}关"
+    try:
+        from common.logger import set_current_module
+        set_current_module("巧记单词", _lv_tag)
+    except Exception:
+        pass
+    step_log(f"🎮 进入{_lv_name}", "info")
     if not _enter_level(d, level_no):
+        step_log(f"⚠ 巧记单词：{_lv_name} 进入失败，跳过", "warning")
         return 0
     q = _answer_loop(d, max_q=40)  # 关卡15+题，max_q 要够大（含重试轮次）
-    print(f"  ✅ 关卡 {level_no} 完成: {q} 题")
+    step_log(f"✅ {_lv_name} 完成: {q} 题", "success")
     # 报告页/答题页 → back 回地图（最多 3 次）
     for _ in range(3):
         texts = [e.text for e in (d.xpath('//*[@text!=""]').all() or []) if e.text]
@@ -766,16 +1116,44 @@ def _run_one_level(d, level_no):
 
 
 def _run_one_unit(d, unit_no, start_level):
-    """跑一个单元的关卡（start_level 到 start_level+4 数字关 + 最后 boss 关）
+    """跑一个单元的所有关卡（数字关 + boss 关）
+
     unit_no: 单元号（1 开始）
-    start_level: 本单元起始关卡序号（U1=1, U2=7, U3=13...）
+    start_level: 本单元起始关卡序号（仅作读不到页面关卡时的兜底）
+
+    ★ 2026-09-10 重构（随「闯关地图」新步骤一起修复）：
+      不再依赖"全局关卡号公式"(1+(unit-1)*6) 推算关卡号，改为**直接读当前
+      关卡地图页面上实际存在的关卡数字**，按升序逐个进入。
+      真机实测（湘少版六上，2026-09-10）Unit 3 的关卡号是 12~16，
+      而旧公式推算为 13~17 → ① 漏掉第 12 关 ② 请求 17 时走
+      `level_no > max(nums)` 兜底 → 重复点第 16 关（漏测+重复）。
+      动态枚举后与 App 实际编号解耦，任何年级/版本都自适应。
     """
     total = 0
-    # 数字关 start_level ~ start_level+4（5 关）
-    for i in range(5):
-        level_no = start_level + i
-        q = _run_one_level(d, level_no)
+    _done = []           # 本轮已进入过的数字关
+    _rounds = 0
+    while _rounds < 8:   # 5 个数字关 + 容错余量
+        _rounds += 1
+        pos = _find_level_positions(d)
+        nums = sorted(n for n in pos if n > 0)
+        if not nums:
+            break
+        todo = [n for n in nums if n not in _done]
+        if not todo:
+            break
+        target = todo[0]
+        _done.append(target)
+        q = _run_one_level(d, target)
         total += q
+    # ★ 兜底：页面读不到任何关卡数字（异常/加载中）→ 退回旧的公式顺序
+    if not _done:
+        step_log("⚠ 巧记单词：未读到页面关卡数字，回退公式顺序", "warning")
+        for i in range(5):
+            total += _run_one_level(d, start_level + i)
+    step_log(
+        f"📚 Unit {unit_no} 数字关完成: {sorted(_done) if _done else '(公式兜底)'}",
+        "info",
+    )
     # boss 关（level_no=0 表示 boss）
     q = _run_one_level(d, 0)
     total += q
@@ -802,9 +1180,11 @@ def run_module(d, units=None, expected_grade="", expected_version=""):
     print(f"\n📋 巧记单词 · 单词同步闯关（单元 {_units[0]}-{_units[-1]} · {len(_units)}个）")
 
     # ★ 题目解析收集器（有题干的题收集，单元答完生成脚本 docx）
-    global _coll, _cur_unit
+    global _coll, _cur_unit, _cur_level, _GQ_NEXT
     _coll = None
     _cur_unit = 0
+    _cur_level = 0
+    _GQ_NEXT = 0  # ★ 全局题号分配器归零（本次运行内题号连续唯一）
     try:
         from common.gen_script import QuestionCollector
         _g_ver = os.environ.get("YYB_VERSION", BOOK_VERSION)
@@ -815,9 +1195,31 @@ def run_module(d, units=None, expected_grade="", expected_version=""):
 
     # 1. 进入巧记单词
     if not _enter_qiaoji(d, expected_grade, expected_version):
+        step_log("⚠ 巧记单词：未能进入模块页面，跳过本模块", "warning")
+        return 0
+    # ★ 2026-09-10 无内容检测①：主页即提示「本书籍暂无巧记单词」（如湘少版五下）
+    #   用户约定：智能识别 → 日志报告 → 直接结束本模块（多模块则进入下一个）
+    _empty = _qiaoji_empty_reason(d)
+    if _empty:
+        step_log(
+            f"⚠ 巧记单词：{_empty} → 本书籍/年级暂无巧记单词内容，"
+            f"跳过本模块，直接进入下一个模块",
+            "warning",
+        )
+        print(f"  ⚠ {_empty}，跳过本模块")
         return 0
     # 2. 单词同步闯关
     if not _enter_sync_challenge(d):
+        step_log("⚠ 巧记单词：找不到「单词同步闯关」入口，跳过本模块", "warning")
+        return 0
+    # ★ 2026-09-10 无内容检测②：部分年级点进闯关后才提示无内容（此处补检一次）
+    _empty = _qiaoji_empty_reason(d)
+    if _empty:
+        step_log(
+            f"⚠ 巧记单词：{_empty} → 跳过本模块，直接进入下一个模块",
+            "warning",
+        )
+        print(f"  ⚠ {_empty}，跳过本模块")
         return 0
 
     # 3. 逐单元闯关（关卡序号连续递增）
@@ -825,11 +1227,19 @@ def run_module(d, units=None, expected_grade="", expected_version=""):
     for unit_no in _units:
         start_level = 1 + (unit_no - 1) * LEVELS_PER_UNIT
         if start_level > 54:
-            print(f"  ⚠ Unit {unit_no} 超出范围（仅支持1-9），跳过")
+            step_log(f"⚠ 巧记单词：Unit {unit_no} 超出范围（仅支持1-9），跳过", "warning")
             continue
-        print(f"\n🏫 Unit {unit_no}（关卡 {start_level}~{start_level+5}）")
+        step_log(f"🏫 开始 Unit {unit_no} 闯关", "step")
+        # ★ 2026-09-10 新增步骤（用户反馈·六上）：新版流程「单词同步闯关」后可能先到
+        #   「闯关地图」（Unit 选择页），需定位到目标 Unit 再进入，才是熟悉的单元闯关界面。
+        #   ⚠ 也处理"App 记忆上次 Unit，直接落到别的 Unit 关卡地图"的情况（否则跑错单元）。
+        #   旧版无此页且在正确的 Unit → _ensure_target_unit 快速返回 True。
+        if not _ensure_target_unit(d, unit_no):
+            continue
+        _cur_unit = unit_no
         q = _run_one_unit(d, unit_no, start_level)
         total += q
+        step_log(f"🏁 Unit {unit_no} 闯关结束: {q} 题", "success")
         # ★ 单元答完：有题干的题汇总生成脚本 docx（无题干/纯听音跳过）
         try:
             if _coll is not None:
@@ -837,9 +1247,17 @@ def run_module(d, units=None, expected_grade="", expected_version=""):
                 if _script_path:
                     step_log(f"📄 已生成解析脚本: {os.path.basename(_script_path)}（可在「审查脚本」区下载）", "success")
         except Exception as _e:
-            print(f"  ⚠ 生成脚本失败: {_e}")
+            step_log(f"⚠ 巧记单词：生成脚本失败: {_e}", "warning")
 
-    print(f"✅ 巧记单词完成: {total} 题, 耗时 {time.time()-t0:.0f}s")
+    step_log(f"✅ 巧记单词完成: {total} 题, 耗时 {time.time()-t0:.0f}s", "success")
+    # ★ 2026-09-10：关卡标签（"U1 第3关"）只用于题目定位/分组统计，模块结束后必须
+    #   恢复模块级 stage —— 否则下游（内容补充检查的子模块过滤、下一个模块）会把
+    #   关卡标签误当成"脚本子模块名"，导致脚本层审查范围出错。
+    try:
+        from common.logger import set_current_module
+        set_current_module("巧记单词", "")
+    except Exception:
+        pass
     return total
 
 
