@@ -18,6 +18,7 @@ import os
 import sys
 import time
 import re
+import html
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import uiautomator2 as u2
@@ -225,6 +226,23 @@ def _find_active_sub_question(d, xml=None):
     sub_no, total_sub = None, None
     stems = []
     ax1, ay1, ax2, ay2 = active
+
+    # ★ 2026-09-14 "结合句型"图片题：先定位本小题配图（pic_iv 与 speech_box 同级）
+    #   真机 big3.xml：
+    #     ll_container [0,885][1080,1598]
+    #       speech_box / speech_content '1.例句：I travelled to ...&#10;(2分)'
+    #       pic_iv [203,1152][877,1512]
+    #   有配图时 "例句：xxx" 是**句型模板**而非普通题干 —— 旧逻辑被 '分' in t 丢弃，
+    #   结果图片只被"看图描述"，句型信息完全没用上（用户实测反馈）。
+    _pic_box = None
+    for pm in re.finditer(
+            r'<node[^>]*resource-id="[^"]*pic_iv"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml):
+        px1, py1, px2, py2 = map(int, pm.groups())
+        if px1 >= ax1 and py1 >= ay1 and px2 <= ax2 and py2 <= ay2:
+            _pic_box = (px1, py1, px2, py2)
+            break
+    _pattern = ""          # 句型模板（仅"结合句型 + 配图"场景非空）
+
     for m in re.finditer(r'<node[^>]*text="([^"]+)"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml):
         t = m.group(1).strip()
         x1, y1, x2, y2 = int(m.group(2)), int(m.group(3)), int(m.group(4)), int(m.group(5))
@@ -238,6 +256,19 @@ def _find_active_sub_question(d, xml=None):
         mm = re.match(r"^(\d+)[\.、]\s*$", t)
         if mm:
             sub_no = int(mm.group(1))
+            continue
+        # ★ 2026-09-14 句型模板："1.例句：I travelled to ...&#10;(2分)"
+        #   ① 本小题有配图 → 只记下句型，题干交给视觉模型按句型补全
+        #   ② 无配图（图片加载失败 / 纯句型提示题）→ 句型本身即题干，
+        #      必须保留；否则会因含"(2分)"被下方 '分' in t 丢弃 → 退化成"听音频跟读"
+        _pt = _extract_sentence_pattern(t)
+        if _pt:
+            _pattern = _pt
+            _no = re.match(r"^\s*(\d+)\s*[\.、]", t)
+            if _no and sub_no is None:
+                sub_no = int(_no.group(1))
+            if _pic_box is None:
+                stems.append(_pt)
             continue
         # ★ 2026-08-25 噪音过滤（按真实页面补充）：
         #   ① 动作文本（麦克风区按钮文字，不是题干）："点击录音"/"点击结束"/"点击完成"/"继续作答"
@@ -255,37 +286,79 @@ def _find_active_sub_question(d, xml=None):
         if not t or len(t) < 1:
             continue
         stems.append(t)
-    if stems:
+    if _pic_box and (_pattern or not stems):
+        # ★ 2026-08-30 图片题：截图交给视觉模型识别
+        #   ① 无句型（普通看图说句）→ 用简短英文句子描述图片大意
+        #   ② 有句型（"结合句型"变种，2026-09-14 新增）→ 严格沿用给定句型，
+        #      把省略号处按图片内容补全成完整句子
+        #        'I travelled to ...' + 图片(北京) → 'I travelled to Beijing.'
+        stem = _oral_vision_stem(d, _pic_box, sub_no, pattern=_pattern)
+    elif stems:
         stem = " / ".join(stems[:2])
     else:
-        # ★ 2026-08-30 无文字题干 → 区分「图片题」与「听音口语题」：
-        #   ① 当前小题容器内有 pic_iv → 图片题：截图交给视觉模型识别，
-        #      用符合小学年级水平的简短英文句子描述图片大意作为题干
-        #   ② 容器内无图片也无文字 → 听音口语题（点喇叭听音跟读），
-        #      明确提示"听音频跟读"，不再误标"图片题"
-        _pic_box = None
-        for pm in re.finditer(
-                r'<node[^>]*resource-id="[^"]*pic_iv"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml):
-            px1, py1, px2, py2 = map(int, pm.groups())
-            if px1 >= ax1 and py1 >= ay1 and px2 <= ax2 and py2 <= ay2:
-                _pic_box = (px1, py1, px2, py2)
-                break
-        if _pic_box:
-            stem = _oral_vision_stem(d, _pic_box, sub_no)
-        else:
-            stem = "听音频跟读"
+        # 容器内既无配图也无文字 → 听音口语题（点喇叭听音跟读），不误标"图片题"
+        stem = "听音频跟读"
     return sub_no, total_sub, stem, active
 
 
 # ★ 2026-08-30 口语训练图片题：视觉识别题干缓存（同一小题不重复识别）
 _ORAL_VISION_CACHE = {}
 
+# ★ 2026-09-14 "结合句型"图片题：例句/句型标签与英文内容判据
+_SENT_PATTERN_KW = re.compile(r"(例句|句型提示|参考句型|句型|sentence\s*pattern)", re.I)
+_SENT_PATTERN_EN = re.compile(r"[A-Za-z]")
 
-def _oral_vision_stem(d, pic_box, sub_no):
-    """图片题：截取当前小题 pic_iv 区域 → 视觉模型识别 → 简短英文句子题干。
-    识别失败/无法调用时回退"图片题"。结果按 (小题号,区域) 缓存，避免重复调用。
+
+def _extract_sentence_pattern(t):
+    """从容器文本中提取"例句/句型"模板（口语训练 · 结合句型图片题）。
+
+    真机样例（screenshots/oral_probe/big3.xml，ll_container 内 speech_content）：
+        '1.例句：I travelled to ...&#10;(2分)'  →  'I travelled to ...'
+        '2.例句：I did ...&#10;(2分)'            →  'I did ...'
+
+    返回 "" 表示该文本不是句型模板（保持原有题干逻辑）。
+    ★ 仅当小题容器内确有配图（pic_iv）时调用 —— 否则纯文字题的
+      "句型提示：Which one do you want, ...?" 会被误吞。
     """
-    _key = (sub_no, pic_box)
+    if not t:
+        return ""
+    # 正则直接取自 xml 字符串（未反转义）→ 需解开 &#10; / &quot; 等实体
+    raw = html.unescape(t).replace("\u200e", "").replace("\u200f", "")
+    if not _SENT_PATTERN_KW.search(raw):
+        return ""
+    s = raw
+    s = re.sub(r"^\s*\d+\s*[\.、]\s*", "", s)          # 去小题序号 "1."
+    s = _SENT_PATTERN_KW.sub("", s)                     # 去 "例句/句型提示" 标签
+    s = re.sub(r"[\r\n]?\s*[（(]\s*\d+\s*分\s*[)）]", " ", s)   # 去 "(2分)"
+    s = re.sub(r"[\r\n]?\s*\d+\s*分\s*$", " ", s)               # 去尾部裸 "2分"
+    # 从第一个英文字母起截取（清掉"参考句型："/残余冒号等中文前缀）
+    _m = _SENT_PATTERN_EN.search(s)
+    if _m:
+        s = s[_m.start():]
+    s = re.sub(r"\s+", " ", s).strip(" \t:：-—")
+    if not _SENT_PATTERN_EN.search(s):     # 无英文 → 不是句型（防误吞中文说明）
+        return ""
+    if len(s) > 120:
+        return ""
+    return s
+
+
+def _oral_vision_stem(d, pic_box, sub_no, pattern=""):
+    """图片题：截取当前小题 pic_iv 区域 → 视觉模型识别 → 题干。
+
+    两种模式：
+      ① 无句型（普通看图说句）：用符合年级水平的简短英文句子描述图片大意；
+      ② 有句型（"结合句型"变种，2026-09-14 新增）：严格沿用给定句型，
+         只把省略号处按图片内容补全成完整句子：
+             'I travelled to ...' + 图片(北京/长城) → 'I travelled to Beijing.'
+
+    识别失败/无法调用时回退"图片题"。结果按 (小题号, 句型, 图片指纹) 缓存，避免重复调用。
+      缓存用**图片内容指纹**而非 pic_box：页面滚动会改变 pic_box（真机实测小题2
+      滚动前后坐标不同）→ 旧键必然 miss → 同一道题被反复送给 LLM 重复计费。
+    """
+    pattern = (pattern or "").strip()
+    _key = (sub_no, pic_box, pattern)          # 兜底键（无法截图时使用）
+    _ckey = _key
     if _key in _ORAL_VISION_CACHE:
         return _ORAL_VISION_CACHE[_key]
     stem = ""
@@ -294,6 +367,25 @@ def _oral_vision_stem(d, pic_box, sub_no):
             raise RuntimeError("无设备连接（离线解析），跳过视觉识别")
         img = d.screenshot()
         im = img.crop(pic_box)
+        # ★ 图片内容指纹：同一张图无论出现在屏幕哪个位置，都命中同一条缓存
+        try:
+            import hashlib
+            _fp = hashlib.md5(im.tobytes()).hexdigest()[:12]
+            _ckey = (sub_no, pattern, _fp)
+            if _ckey in _ORAL_VISION_CACHE:
+                _ORAL_VISION_CACHE[_key] = _ORAL_VISION_CACHE[_ckey]
+                return _ORAL_VISION_CACHE[_ckey]
+        except Exception:
+            _ckey = _key
+        # ★ 图片被屏幕裁断告警：pic_iv 下边界顶到可滚动区底部（真机 scrollView 底 = 2079）
+        #   时，crop 只能拿到图上半部分 → 视觉结论可能不准（不静默）
+        try:
+            _vis_bottom = min(d.window_size()[1], 2400)
+            if pic_box[3] >= _vis_bottom - 12:
+                print(f"      ⚠ 小题{sub_no}配图被屏幕裁断（pic_iv 下边界 {pic_box[3]} ≈ 可视底），"
+                      f"识别可能不准")
+        except Exception:
+            pass
         _dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                             "screenshots", "script_imgs")
         os.makedirs(_dir, exist_ok=True)
@@ -302,16 +394,36 @@ def _oral_vision_stem(d, pic_box, sub_no):
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
         from src.reviewer_common import LLMClient
         llm = LLMClient.from_config()
-        prompt = (f"这是中国小学{GRADE_LEVEL}英语口语题的配图。"
-                  "请用符合该年级学生水平的简短英文句子（不超过8个单词）描述图片大意，"
-                  "只输出这个英文句子本身，不要引号、不要任何其他内容。")
-        ans = (llm.ask(prompt, image_path=_p) or "").strip()
+        # 实际年级优先读环境变量（web_server 调度时设置 YYB_GRADE）
+        _grade = os.environ.get("YYB_GRADE", "") or GRADE_LEVEL
+        if pattern:
+            prompt = (
+                f"这是中国小学{_grade}英语口语题的配图。"
+                f"题目要求「结合句型和图片说句子」，给出的句型是：{pattern}\n"
+                "请仔细观察图片内容，把句型中省略的部分（... / …）补全，"
+                "组成一句完整、正确、符合图片内容的英文句子。"
+                "要求：严格沿用给定句型结构，只补齐省略部分；"
+                "单词之间用空格分隔；句首字母大写；句末加英文句号。"
+                "只输出这一句英文，不要引号、不要中文、不要任何解释。"
+            )
+        else:
+            prompt = (f"这是中国小学{_grade}英语口语题的配图。"
+                      "请用符合该年级学生水平的简短英文句子（不超过8个单词）描述图片大意，"
+                      "只输出这个英文句子本身，不要引号、不要任何其他内容。")
+        ans = (llm.ask(prompt, image_path=_p, temperature=0) or "").strip()
         if ans and "LLM 调用失败" not in ans and len(ans) <= 80:
-            stem = ans
+            # 清理常见的格式残留：引号 / 多行 / "答案：" 前缀 / 中文尾注
+            ans = ans.split("\n")[0].strip()
+            ans = re.sub(r"^\s*(答案|句子|Answer)\s*[:：]\s*", "", ans, flags=re.I)
+            ans = ans.strip(" \t\"'“”‘’")
+            if ans:
+                stem = ans
     except Exception as e:
         print(f"      ⚠ 图片题视觉识别失败: {e}")
     stem = stem or "图片题"
     _ORAL_VISION_CACHE[_key] = stem
+    if _ckey != _key:
+        _ORAL_VISION_CACHE[_ckey] = stem
     return stem
 
 
