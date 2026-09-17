@@ -1549,12 +1549,14 @@ def run_inspect_questions_task():
         set_running("inspect_questions")
         config = load_config()
         adb = get_adb()
+        # ★ 跨机器可移植：自动定位 adb（不再写死任何人的绝对路径）
+        adb_path = ADBController._find_adb()
 
         # 1. 启动APP
         log_msg("启动APP...")
-        sp.run(['C:/Users/bunana/AppData/Local/Microsoft/WinGet/Packages/Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe/platform-tools/adb.exe', '-s', config.device.serial, 'shell', 'am', 'force-stop', 'com.dinoenglish.yyb'])
+        sp.run([adb_path, '-s', config.device.serial, 'shell', 'am', 'force-stop', 'com.dinoenglish.yyb'])
         time.sleep(2)
-        sp.run(['C:/Users/bunana/AppData/Local/Microsoft/WinGet/Packages/Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe/platform-tools/adb.exe', '-s', config.device.serial, 'shell', 'am', 'start', '-n', 'com.dinoenglish.yyb/.base.SplashActivity'])
+        sp.run([adb_path, '-s', config.device.serial, 'shell', 'am', 'start', '-n', 'com.dinoenglish.yyb/.base.SplashActivity'])
         time.sleep(5)
         adb.tap(*AD_CLOSE)  # 关启动广告
         time.sleep(3)
@@ -1616,9 +1618,9 @@ def run_inspect_questions_task():
 
             # 截图
             shot_path = out_dir / f"q_{q_idx+1:02d}.png"
-            sp.run(['C:/Users/bunana/AppData/Local/Microsoft/WinGet/Packages/Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe/platform-tools/adb.exe', '-s', config.device.serial, 'shell', 'screencap', '-p', '/sdcard/_q.png'])
-            sp.run(['C:/Users/bunana/AppData/Local/Microsoft/WinGet/Packages/Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe/platform-tools/adb.exe', '-s', config.device.serial, 'pull', '/sdcard/_q.png', str(shot_path)])
-            sp.run(['C:/Users/bunana/AppData/Local/Microsoft/WinGet/Packages/Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe/platform-tools/adb.exe', '-s', config.device.serial, 'shell', 'rm', '/sdcard/_q.png'])
+            sp.run([adb_path, '-s', config.device.serial, 'shell', 'screencap', '-p', '/sdcard/_q.png'])
+            sp.run([adb_path, '-s', config.device.serial, 'pull', '/sdcard/_q.png', str(shot_path)])
+            sp.run([adb_path, '-s', config.device.serial, 'shell', 'rm', '/sdcard/_q.png'])
 
             # 检测题目类型
             question_type = "未知"
@@ -4265,12 +4267,14 @@ def api_hardware_info():
     config = load_config()
     info = {"serial": config.device.serial, "screen": "1080x2400"}
     try:
-        r = sp.run(["C:/Users/bunana/AppData/Local/Microsoft/WinGet/Packages/Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe/platform-tools/adb.exe", "-s", config.device.serial, "shell", "getprop", "ro.product.model"],
+        # ★ 跨机器可移植：自动定位 adb（不再写死任何人的绝对路径）
+        adb_path = ADBController._find_adb()
+        r = sp.run([adb_path, "-s", config.device.serial, "shell", "getprop", "ro.product.model"],
                    capture_output=True, text=True, timeout=5,
                    encoding="utf-8", errors="replace")
         if r.returncode == 0:
             info["model"] = r.stdout.strip()
-        r2 = sp.run(["C:/Users/bunana/AppData/Local/Microsoft/WinGet/Packages/Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe/platform-tools/adb.exe", "-s", config.device.serial, "shell", "getprop", "ro.product.brand"],
+        r2 = sp.run([adb_path, "-s", config.device.serial, "shell", "getprop", "ro.product.brand"],
                     capture_output=True, text=True, timeout=5,
                     encoding="utf-8", errors="replace")
         if r2.returncode == 0:
