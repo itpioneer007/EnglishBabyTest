@@ -25,6 +25,7 @@ from common.logger import step_log
 from common.evidence import collect_ui_evidence
 from common.screenshot import shot_to_file
 from engine import _handle_match_question, _handle_sort_question
+from question_types import _has_letter_tiles
 
 APP_PACKAGE = "com.dinoenglish.yyb"
 GRADE_LEVEL = "六年级上册"
@@ -244,6 +245,40 @@ def _wait_new_ready(d, q, max_wait=1.8):
     return False
 
 
+def _collect_letter_fill(xml_src, qno, coll, unit):
+    """★ 字母块补全单词题收集：题干(tv_caption) + 字母块(选项) + 推断出的单词(答案)
+
+    为什么单独收集：题干是中文指令、选项是单字母，通用的 _extract_ui_question
+    提不到"选项"（没有 A./B. 前缀），答案也不在页面上（需推断），
+    走通用分支只会得到题干 + 空选项 → 被答案准入闸门或图片题逻辑处理得四不像。
+    这里直接给结构化数据，脚本里就是"题干 + 字母块 + 正确答案"一条干净记录。
+
+    ★ 模块级函数（非 _answer_loop 内闭包）：便于 mock 测试直接调用。
+    """
+    try:
+        if coll is None:
+            return
+        import engine as _eng
+        from question_types import parse_letter_fill
+        _info = parse_letter_fill(xml_src)
+        _d = getattr(_eng, "_LAST_LETTER_FILL", {}) or {}
+        _word = (_d.get("word") or "").strip()
+        if not _word:
+            return
+        _cap = (_d.get("cap") or _info.get("cap") or "").strip()
+        _tiles = [t["text"].strip() for t in _info.get("tiles") or [] if t["text"].strip()]
+        _hint = _d.get("hint") or _info.get("hint") or ""
+        _stem = _cap or "选择正确的字母补全单词。"
+        if _hint:
+            _stem += f"（提示：{_hint}）"
+        _src = _d.get("source") or ""
+        coll.add(qno=qno, stem=_stem, options=_tiles, answer=_word,
+                 qtype="字母块补全单词" + (f"·{_src}" if _src else ""),
+                 unit=unit, allow_listen=True)
+    except Exception:
+        pass
+
+
 def _answer_loop(d, max_q=200):
     """单元自检答题循环 —— ★ 用户确认的最原始简单流程：
     判断题型 → 调用对应回答方法 → 点"检查"
@@ -296,12 +331,31 @@ def _answer_loop(d, max_q=200):
                 else:
                     # 即使不是借口，无选项题也不强写字母答案
                     _ans = "人工核查（图片题）"
+            # ★ 2026-09-15 图片题解析：题干/选项是图片时 XML 提不到文字 →
+            #   先把答题页截图存盘，脚本生成阶段（finish_unit）用视觉模型识别补全。
+            _img_path = ""
+            if _is_picture_q or not _qi.get("options"):
+                try:
+                    from common.gen_script import is_image_question, save_image_shot
+                    if is_image_question(_xml_src):
+                        _img_path = save_image_shot(d, "单元自检", q, tag="q")
+                except Exception:
+                    _img_path = ""
             if _stem0 and _ans:
                 _coll.add(qno=q, stem=_stem0, options=_qi["options"],
                           answer=_ans, qtype=_qi["qtype"] or "单元自检", unit=_cur_unit,
-                          allow_listen=True)
+                          allow_listen=True, image_path=_img_path)
+            elif _img_path:
+                # ★ 纯图片题（无题干、无文字选项）同样进脚本：内容交视觉识别补全。
+                #   ⚠ 不能因"无题干"就丢掉——这正是本次要补的缺口。
+                _coll.add(qno=q, stem="", options=[], answer=_ans or "",
+                          qtype="图片题", unit=_cur_unit,
+                          allow_listen=True, image_path=_img_path)
         except Exception:
             pass
+
+    def _collect_letter_fill_inner(_xml_src):
+        _collect_letter_fill(_xml_src, q, _coll, _cur_unit)
 
     # 进入时读当前题号 X/Y 初始化 q（中途接管时计数不错位）
     for _ in range(3):
@@ -413,6 +467,21 @@ def _answer_loop(d, max_q=200):
                 print(f"      → 第{q}题(填空)")
                 step_log(f"  第{q}题 填空完成", "info")
                 _collect_q(xml0)   # ★ 填空也收集（有题干时）
+                continue
+        # ── 4.4 字母块补全单词（★ 2026-09-15 新增，必须排在选词填空之前！）──
+        #   页面：首字母 + select_tv 空位 + select_btn 全是"单个字母"
+        #   为什么必须提前：它与选词填空**物理同构**（select_tv + select_btn），
+        #   会被下面的 `select_tv and select_btn` 结构兜底抢走 → 进 _handle_word_fill
+        #   后因「词长 ≥2」+「词库位于 y1500-2250」两条过滤都不命中而空转，
+        #   最终落到未知题型 → 连续 5 次后退出循环（本次线上现象：单元自检跑到
+        #   13 题就"完成"，设备停在 14/40）。
+        if _has_letter_tiles(xml0):
+            from engine import _handle_letter_fill
+            if _handle_letter_fill(d, {}):
+                q += 1
+                print(f"      → 第{q}题(字母补全单词)")
+                step_log(f"  第{q}题 字母补全单词完成", "info")
+                _collect_letter_fill_inner(xml0)   # ★ 字母补全题收集（题干+字母块+答案）
                 continue
         # ── 5. 阅读多小题检测（多组字母选项）──
         # ★ 速度优化：传入已 dump 的 xml0，避免函数内重复 dump

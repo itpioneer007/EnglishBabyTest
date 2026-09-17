@@ -96,6 +96,30 @@ def _back_to_home(d):
     close_ad(d)
 
 
+def _ensure_screen_on(d):
+    """★ 2026-09-15 跑前亮屏：设备息屏时 uiautomator dump 拿不到 UI。
+
+    实测（口语训练 U1 复跑）：手机闲置息屏后点开始检测，切版本/年级与
+    找模块入口全部失败，日志却显示"完成 0 题"——看起来像模块没内容，
+    实际是屏幕没亮。这里先亮屏并上滑解除无密码锁屏（坐标按屏幕尺寸算，
+    不写死）。
+    """
+    try:
+        if (d.info or {}).get("screenOn"):
+            return
+        step_log("💡 设备息屏中，先亮屏...", "step")
+        d.screen_on()
+        time.sleep(1.2)
+        _w, _h = d.window_size()
+        try:
+            d.swipe(_w // 2, int(_h * 0.8), _w // 2, int(_h * 0.3), 0.1)
+        except Exception:
+            pass
+        time.sleep(0.8)
+    except Exception as e:
+        print(f"  ⚠ 亮屏检查异常: {e}")
+
+
 def run_all(module_names=None, d=None, version=None, grade=None, units=None, stop_check=None, on_module_done=None):
     """依次跑指定模块（默认全部），返回 {模块: {q, t, ok}}
 
@@ -143,9 +167,11 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
     units = units or {}
 
     # 0. 重启 App 回主页（保证干净起点，避免停留在上个模块的答题页）
+    # ★ 移除 app_start 前的 d.press("home")：紧接着就是 app_stop 直接杀进程，回不回桌面无区别，
+    #   每次点开始检测那一下"回主页"纯属多余且拖慢启动。
     step_log("🔄 重启 App，准备开始检测...", "step")
     try:
-        d.press("home"); time.sleep(0.4)
+        _ensure_screen_on(d)   # ★ 息屏时 dump 为空 → 会跑出"0 题"假成功
         d.app_stop(APP_PACKAGE); time.sleep(0.8)
         d.app_start(APP_PACKAGE); time.sleep(3)
     except Exception as e:
@@ -319,8 +345,8 @@ def main():
         print(f"📌 单元范围: {units_map}")
 
     d = u2.connect()
-    # 重启 App 回主页（保证干净起点）
-    d.press("home"); time.sleep(0.4)
+    # 重启 App 回主页（保证干净起点）；app_start 前无需 press home（app_stop 直接杀进程）
+    _ensure_screen_on(d)   # ★ 息屏时 dump 为空 → 会跑出"0 题"假成功
     d.app_stop(APP_PACKAGE); time.sleep(0.8)
     d.app_start(APP_PACKAGE); time.sleep(3)
     run_all(names if names else None, d, version=version, grade=grade, units=units_map)

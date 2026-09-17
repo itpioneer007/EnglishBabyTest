@@ -38,6 +38,32 @@ APP_PACKAGE = "com.dinoenglish.yyb"
 GRADE_LEVEL = "五年级上册"
 BOOK_VERSION = "湘少版"
 
+# ★ 2026-09-15 测试卷题目解析收集器（run_test_module 初始化，单元结束写脚本）
+#   练习部分走 engine.run_single_module（由 engine 侧统一收集），此处只服务「测试」部分。
+_test_coll = None
+_test_unit = 0
+
+
+def _collect_test_q(d, xml_now, qno, answer="", image_path=""):
+    """测试卷题目收集：题干 + 选项 + 答案 → 脚本收集器（单元结束写 docx）。
+
+    ★ 图片题（题干/选项是图片）没有文字题干，靠 image_path 交视觉模型补全，
+      因此"无题干但有截图"的题也要收集，不能因为题干为空就丢掉。
+    """
+    try:
+        if _test_coll is None:
+            return
+        from common.gen_script import _extract_ui_question
+        _qi = _extract_ui_question(xml_now) if xml_now else {"stem": "", "options": [], "qtype": ""}
+        _stem = (_qi.get("stem") or "").strip()
+        if not _stem and not image_path:
+            return
+        _test_coll.add(qno=qno, stem=_stem, options=_qi.get("options") or [],
+                       answer=answer, qtype=("听力专项测试" if _stem else "图片题"),
+                       unit=_test_unit, allow_listen=True, image_path=image_path)
+    except Exception:
+        pass
+
 
 def _env_units():
     """从环境变量读取单元范围 (scheduler 设置); 未设置时默认 Unit 1"""
@@ -407,6 +433,8 @@ def _test_answer_loop(d, max_q=45):
                     continue
         if opt:
             q += 1  # ★ 先计数再打印：第1题从1开始（原逻辑先打印第0题再+1，导致计数偏移）
+            # ★ 2026-09-15 题目解析收集：作答前 xml_now 还是完整题目页 → 题干/选项/答案
+            _collect_test_q(d, xml_now, q, answer=opt)
             d.click(*opt_xy) if opt_xy else d(text=opt).click()
             print(f"      → 选 {opt}")
             step_log(f"  第{q}题: 选 {opt} → 检查", "info")
@@ -436,6 +464,7 @@ def _test_answer_loop(d, max_q=45):
         if _img_xy:
             # ★ 图片题截图：供脚本生成时视觉识别补全选项内容/答案
             #   （脚本图片题选项只有"A./B."占位 → 识别截图填内容，审查可核对）
+            _img_saved = ""
             try:
                 _img_dir = os.path.join(
                     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -450,12 +479,15 @@ def _test_answer_loop(d, max_q=45):
                         if _ir >= 2:
                             raise
                         time.sleep(0.4)
+                _img_saved = os.path.join(_img_dir, _img_f)
                 print(f"      → 图片题截图: script_imgs/{_img_f}")
             except Exception:
                 pass
             d.click(*_img_xy)
             opt = "图片选项"
             q += 1
+            # ★ 2026-09-15 图片题也进解析脚本：题干/选项/答案由视觉模型识别补全
+            _collect_test_q(d, xml_now, q, answer="", image_path=_img_saved)
             print(f"      → 选 图片选项 (CheckBox)")
             step_log(f"  第{q}题: 选图片选项 → 检查", "info")
             time.sleep(0.15)
@@ -553,6 +585,20 @@ def run_test_module(d, test_units=None):
     _desc = "、".join(str(x) for x in _tunits)
     print(f"\n📋 听力专项·测试 · 目标: {_desc} · {len(_tunits)}项")
 
+    # ★ 2026-09-15 测试卷题目解析脚本收集器（单元答完写 docx）
+    #   ⚠ module 用"听力专项测试"而非"听力专项"：练习部分由 engine 侧收集并写出
+    #     "…听力专项U1.docx"，若此处同名 → 测试脚本会把练习脚本覆盖掉。
+    global _test_coll, _test_unit
+    _test_coll = None
+    _test_unit = 0
+    try:
+        from common.gen_script import QuestionCollector
+        _g_ver = os.environ.get("YYB_VERSION", "") or BOOK_VERSION
+        _g_grade = os.environ.get("YYB_GRADE", "") or GRADE_LEVEL
+        _test_coll = QuestionCollector(module="听力专项测试", version=_g_ver, grade=_g_grade)
+    except Exception as _e:
+        print(f"  ⚠ 脚本收集器初始化失败（不影响答题）: {_e}")
+
     # 确认在听力专项页 → 点"测试" tab
     if not d(text="测试").exists(timeout=3):
         if not scroll_and_find(d, "听力专项"):
@@ -591,6 +637,7 @@ def run_test_module(d, test_units=None):
 
     for ui, unit_num in enumerate(_tunits):
         print(f"\n  🎯 测试目标 [{unit_num}] [{ui+1}/{len(_tunits)}]")
+        _test_unit = unit_num   # ★ 当前单元号（脚本收集器标注 unit 用）
         # ★ 智能定位：数字/区间/关键词（期中/期末/AI检测…）随机应变找"去答题"
         #   ★ App 测试模块已恢复：正常点击测试 tab 后逐单元测（此前下线时自动跳过）
         found = smart_find_unit_row(d, unit_num, click_text="去答题")
@@ -607,6 +654,15 @@ def run_test_module(d, test_units=None):
         q = _test_answer_loop(d)
         total += q
         print(f"  ✅ U{unit_num} 测试完成: {q} 题")
+        # ★ 单元答完 → 生成解析脚本（含图片题：视觉模型识别补全内容）
+        try:
+            if _test_coll is not None:
+                _p = _test_coll.finish_unit(unit=unit_num)
+                if _p:
+                    step_log(f"📄 已生成解析脚本: {os.path.basename(_p)}（可在「审查脚本」区下载）",
+                             "success")
+        except Exception as _e:
+            print(f"  ⚠ 生成脚本失败: {_e}")
         # back 回测试列表
         for _ in range(3):
             if d(text="去答题").exists(timeout=1.5):

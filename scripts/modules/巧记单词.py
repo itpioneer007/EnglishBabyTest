@@ -560,29 +560,54 @@ def _enter_level(d, level_no):
             "无题", "敬请期待", "正在开发",
         ))
     # 单词浏览页 → 先点单词卡片（"点击显示释义"，解锁马上闯关）→ 点马上闯关
-    for _ in range(8):
+    for _retry in range(8):
         if d(text="马上闯关").exists(timeout=1):
-            # ★ 浏览页级早识别"当前关卡无试题"：一样点马上闯关让关卡走完，
-            #   然后 _answer_loop 兜底也会识别到并 0 退出，不影响下一关
+            # ★ 浏览页级早识别"当前关卡无试题"：直接跳过，不再强点马上闯关
+            #   （无试题关卡点"马上闯关"可能按钮被弹窗遮挡或 selector 失效）
             try:
                 _xml_pv = d.dump_hierarchy()
                 if _no_question_in(_xml_pv):
                     step_log(
-                        f"⚠ 关卡 {level_no} 无试题（浏览页气泡），直接点马上闯关走完",
+                        f"⚠ 关卡 {level_no} 无试题（浏览页气泡），跳过本关进入下一关",
                         "warning",
                     )
+                    return True
             except Exception:
                 pass
             # 先点单词卡片（浏览页 5 个单词卡片，点第一个解锁即可）
             try:
                 if d(text="点击显示释义").exists(timeout=0.5):
-                    el = d(text="点击显示释义")
-                    el.click()
+                    d(text="点击显示释义").click()
                     time.sleep(0.5)
+                    # 点开后按钮可能重绘，重新等一次"马上闯关"
+                    if not d(text="马上闯关").exists(timeout=1):
+                        step_log(f"⚠ 关卡 {level_no}：点开释义后未出现马上闯关，尝试直接进入答题", "warning")
+                        if d(text="提交").exists(timeout=0.5) or d(text="原音").exists(timeout=0.5):
+                            return True
+                        continue
             except Exception:
                 pass
-            d(text="马上闯关").click()
-            print(f"    ✅ 点马上闯关")
+            # 点击"马上闯关"加保护：若 selector 失效，尝试从 XML 里读坐标兜底
+            try:
+                d(text="马上闯关").click()
+                print(f"    ✅ 点马上闯关")
+            except Exception as _e:
+                step_log(f"⚠ 关卡 {level_no}：点「马上闯关」失败（{_e}），尝试坐标兜底", "warning")
+                try:
+                    _xml_btn = d.dump_hierarchy()
+                    _m = re.search(r'text="马上闯关"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', _xml_btn)
+                    if _m:
+                        _bx = (int(_m.group(1)) + int(_m.group(3))) // 2
+                        _by = (int(_m.group(2)) + int(_m.group(4))) // 2
+                        d.click(_bx, _by)
+                        print(f"    ✅ 坐标兜底点马上闯关 @({_bx},{_by})")
+                    else:
+                        # 兜底也找不到：如果已经在答题页，直接继续
+                        if d(text="提交").exists(timeout=0.5) or d(text="原音").exists(timeout=0.5):
+                            return True
+                        continue
+                except Exception:
+                    continue
             time.sleep(1.2)
             # 确认进入答题（出现 原音/提交/第N关 数字 等答题特征）
             try:
@@ -868,19 +893,28 @@ def _answer_loop(d, max_q=20):
                 #   其次页面英文单词兜底，最后 ASR（未接入返回空）
                 _fb_spk_cached = getattr(_answer_loop, "_last_fb_spk", "") or ""
                 _speaker_word = _fb_spk_cached or _speaker_word_of(_xml_q)
-                if _stem_q:
-                    _m_opt = re.search(r'text="([TFABCDE])"', _xml_q)
-                    _ans_q = _m_opt.group(1) if _m_opt else ""
-                    if _ans_q:
-                        # ★ 2026-08-26：qno 用 App 实际题号（_cur_q），避免答错重做重复记；
-                        #   allow_listen=True 让听音题也进脚本
-                        # ★ 2026-09-10：改传全局题号 _gq + 关卡号 level（脚本"位置"行
-                        #   显示成"巧记单词 · U1 · 第1关 · 第3题"，跨关卡不再同名混淆）
-                        _coll.add(qno=_gq, stem=_stem_q, options=_qi["options"],
-                                  answer=_ans_q, qtype="巧记单词", unit=_cur_unit,
-                                  level=_cur_level,
-                                  recording=_speaker_word, speaker_word=_speaker_word,
-                                  allow_listen=True)
+                _m_opt = re.search(r'text="([TFABCDE])"', _xml_q)
+                _ans_q = _m_opt.group(1) if _m_opt else ""
+                # ★ 2026-09-15 图片题解析：无题干时判断是不是"图片题"（题干/选项是图片），
+                #   是则截图存盘，脚本生成阶段用视觉模型识别补全题干/选项/答案。
+                _img_path = ""
+                if not _stem_q:
+                    try:
+                        from common.gen_script import is_image_question, save_image_shot
+                        if is_image_question(_xml_q):
+                            _img_path = save_image_shot(d, "巧记单词", _gq, tag="q")
+                    except Exception:
+                        _img_path = ""
+                if (_stem_q and _ans_q) or _img_path:
+                    # ★ 2026-08-26：qno 用 App 实际题号（_cur_q），避免答错重做重复记；
+                    #   allow_listen=True 让听音题也进脚本
+                    # ★ 2026-09-10：改传全局题号 _gq + 关卡号 level（脚本"位置"行
+                    #   显示成"巧记单词 · U1 · 第1关 · 第3题"，跨关卡不再同名混淆）
+                    _coll.add(qno=_gq, stem=_stem_q or "", options=_qi["options"],
+                              answer=_ans_q, qtype=("巧记单词" if _stem_q else "图片题"),
+                              unit=_cur_unit, level=_cur_level,
+                              recording=_speaker_word, speaker_word=_speaker_word,
+                              allow_listen=True, image_path=_img_path)
         except Exception:
             pass
         # 弹窗处理：退出确认弹窗（带"温馨提示"标题才是真弹窗；正常答题页的

@@ -196,14 +196,25 @@ def _answer_loop(d, max_q=120):
                 _xml_q = d.dump_hierarchy()
                 _qi = _extract_ui_question(_xml_q)
                 _stem_q = (_qi["stem"] or "").strip()
-                if _stem_q and "听" not in _stem_q:
-                    _ans_q = ""
-                    _m_opt = re.search(r'text="([TFABCDE])"', _xml_q)
-                    if _m_opt:
-                        _ans_q = _m_opt.group(1)
-                    if _ans_q:
-                        _coll.add(qno=q+1, stem=_stem_q, options=_qi["options"],
-                                  answer=_ans_q, qtype="知识过关", unit=_cur_unit)
+                _ans_q = ""
+                _m_opt = re.search(r'text="([TFABCDE])"', _xml_q)
+                if _m_opt:
+                    _ans_q = _m_opt.group(1)
+                # ★ 2026-09-15 图片题解析：题干/选项是图片时 XML 提不到文字 →
+                #   截图存盘，脚本生成阶段用视觉模型识别补全题干/选项/答案。
+                _img_path = ""
+                if not (_stem_q and "听" not in _stem_q):
+                    try:
+                        from common.gen_script import is_image_question, save_image_shot
+                        if is_image_question(_xml_q):
+                            _img_path = save_image_shot(d, "知识过关", q + 1, tag="q")
+                    except Exception:
+                        _img_path = ""
+                if (_stem_q and "听" not in _stem_q and _ans_q) or _img_path:
+                    _coll.add(qno=q + 1, stem=_stem_q, options=_qi["options"],
+                              answer=_ans_q,
+                              qtype=("知识过关" if _stem_q else "图片题"),
+                              unit=_cur_unit, image_path=_img_path)
         except Exception:
             pass
 

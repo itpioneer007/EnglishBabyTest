@@ -33,6 +33,15 @@ APP_PACKAGE = "com.dinoenglish.yyb"
 GRADE_LEVEL = "五年级上册"
 BOOK_VERSION = "湘少版"
 
+# ★ 2026-09-15 解析脚本收集器（run_module 初始化，单元答完尝试写 docx）
+#   ⚠ 规则已收紧（用户明确）：**只有"有明确答案"的题目才做解析**。
+#     口语训练全是跟读 / 看图说句题，App 里没有标准答案 → 收集器的准入规则会
+#     全部拦下，本模块通常**不产出**解析脚本（finish_unit 会在日志说明原因）。
+#     保留调用是为了把"收不收"的判定集中在 gen_script（单一规则来源），
+#     而不是在这里写死模块白名单——将来规则若放宽也无需改本文件。
+_oral_coll = None
+_oral_unit = 0
+
 
 def _env_units():
     """从环境变量读取单元范围 (scheduler 设置); 未设置时默认 Unit 1"""
@@ -169,6 +178,14 @@ def _wait_ready_for_record(d, timeout=20):
     return False
 
 
+# ★ 2026-09-15 最近一次小题题干的来源：
+#   "vision" = 由视觉模型识别配图得到（概率性结论，脚本需标注人工复核）
+#   "text"   = 页面文字直接给出（句型题 / 朗读题，确定）
+#   "audio"  = 容器内无图无字（纯听音跟读，无文字内容）
+#   供脚本收集时决定是否打"内容由视觉识别·需人工复核"标记。
+_LAST_STEM_SRC = ""
+
+
 def _find_active_sub_question(d, xml=None):
     """定位当前正在作答的小题（含 record_btn 的 ll_container）。
 
@@ -286,6 +303,7 @@ def _find_active_sub_question(d, xml=None):
         if not t or len(t) < 1:
             continue
         stems.append(t)
+    global _LAST_STEM_SRC
     if _pic_box and (_pattern or not stems):
         # ★ 2026-08-30 图片题：截图交给视觉模型识别
         #   ① 无句型（普通看图说句）→ 用简短英文句子描述图片大意
@@ -293,11 +311,14 @@ def _find_active_sub_question(d, xml=None):
         #      把省略号处按图片内容补全成完整句子
         #        'I travelled to ...' + 图片(北京) → 'I travelled to Beijing.'
         stem = _oral_vision_stem(d, _pic_box, sub_no, pattern=_pattern)
+        _LAST_STEM_SRC = "vision" if stem else ""
     elif stems:
         stem = " / ".join(stems[:2])
+        _LAST_STEM_SRC = "text"
     else:
         # 容器内既无配图也无文字 → 听音口语题（点喇叭听音跟读），不误标"图片题"
         stem = "听音频跟读"
+        _LAST_STEM_SRC = "audio"
     return sub_no, total_sub, stem, active
 
 
@@ -726,6 +747,20 @@ def _answer_big_question(d, big_idx=0):
         # 作答
         if _speak_one_sub(d):
             q += 1
+            # ★ 2026-09-15 口语题尝试进脚本（options/answer 均为空）。
+            #   ⚠ 按收紧后的准入规则（只收"有明确答案"的题），这里会被收集器
+            #     拦下并计入 skipped_no_answer —— 属**预期行为**：
+            #     视觉识别出的画面描述只用于让学生跟读，不作为解析脚本内容。
+            try:
+                if _oral_coll is not None and stem:
+                    # 看图题题干由视觉模型识别（概率性结论），qtype 带"看图"，
+                    # 便于日志与后续规则区分来源
+                    _qt = "口语题·看图" if _LAST_STEM_SRC == "vision" else "口语题"
+                    _oral_coll.add(qno=q, stem=stem, options=[], answer="",
+                                   qtype=_qt, unit=_oral_unit, big=big_idx,
+                                   allow_listen=True)
+            except Exception:
+                pass
             time.sleep(0.3)
             continue
         else:
@@ -983,6 +1018,18 @@ def run_module(d, units=None):
     _units = _resolve_units(units, UNITS)
     print(f"\n📋 口语训练 · 单元 {_units[0]}-{_units[-1]} · {len(_units)}个单元")
 
+    # ★ 2026-09-15 口语题解析脚本收集器（单元答完写 docx）
+    global _oral_coll, _oral_unit
+    _oral_coll = None
+    _oral_unit = 0
+    try:
+        from common.gen_script import QuestionCollector
+        _g_ver = os.environ.get("YYB_VERSION", "") or BOOK_VERSION
+        _g_grade = os.environ.get("YYB_GRADE", "") or GRADE_LEVEL
+        _oral_coll = QuestionCollector(module="口语训练", version=_g_ver, grade=_g_grade)
+    except Exception as _e:
+        print(f"  ⚠ 脚本收集器初始化失败（不影响答题）: {_e}")
+
     # ① 先确保在主页（口语训练入口在主页专项突破区，直接可见，不需要滑动）
     #   ★ 修复：不能用 back 硬退（练习报告/子页面 back 会退出 App 到桌面）
     #   → 先检查是否 yyb 前台，非 yyb 冷启动；yyb 内 back 循环回主页
@@ -1035,10 +1082,21 @@ def run_module(d, units=None):
 
     # 逐单元执行
     for ui, unit_num in enumerate(_units):
+        _oral_unit = unit_num   # ★ 当前单元号（脚本收集器标注 unit 用）
         # U1 已训练过（重新答题），U2+ 开始答题
         is_retry = (unit_num == 1)
         q = _run_one_unit(d, unit_num, is_retry)
         total += q
+        # ★ 单元答完 → 尝试生成解析脚本（受 gen_script 准入规则约束：
+        #   口语题无明确答案 → 会被全部跳过，通常不产出脚本文件）
+        try:
+            if _oral_coll is not None:
+                _p = _oral_coll.finish_unit(unit=unit_num)
+                if _p:
+                    step_log(f"📄 已生成解析脚本: {os.path.basename(_p)}（可在「审查脚本」区下载）",
+                             "success")
+        except Exception as _e:
+            print(f"  ⚠ 生成脚本失败: {_e}")
         # 答完退出到口语训练列表
         for _ in range(3):
             if d(text="口语训练").exists(timeout=1) or d(text="开始答题").exists(timeout=1):

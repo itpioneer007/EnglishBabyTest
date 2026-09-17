@@ -52,6 +52,28 @@ QUESTION_TYPES = [
         "handler": "_handle_match_question",
         "note": "人物-字母匹配 / 字母延迟出现时自动重试 / 字母连线（左右点配对）",
     },
+    # ── 优先级 3：字母块补全单词（必须早于 select_fill！）──
+    #   ★ 2026-09-15 新增（用户反馈"这道题目为什么app识别不了"）：
+    #     物理结构与选词填空**完全同构**（select_tv 空位 + select_btn 词库），
+    #     区别只在"词"是**单个字母**：填的不是单词，而是用字母块补齐首字母之后的剩余字母
+    #     （如已给 b + 提示"通过，凭借（做某事）" → 点 y 组成 by）。
+    #     若不单独识别，会被 select_fill 的结构兜底抢走 → 该 handler 的
+    #     `[A-Za-z]{2,}` 词长过滤 + y1500-2250 词库位置过滤双双不命中 → 空转。
+    {
+        "name": "letter_fill_questions",
+        "priority": 3,
+        "keywords": None,   # ★ 纯 DOM 判据（不看关键词）：
+                            #   题干变体多（"根据中文提示…"/"听录音…"/"看图…"），
+                            #   而 select_tv+单字母select_btn 的结构特征已足够唯一；
+                            #   关键词一旦漏配就会退回 select_fill 空转（本次 bug 成因）。
+        "dom_features": {
+            # ★ 只要有 select_tv 空位 + select_btn 全是"单字母"就成立（不看关键词，
+            #   因为题干可能是"听录音，选择正确的字母补全单词"等变体）
+            "letter_tiles": True,
+        },
+        "handler": "_handle_letter_fill",
+        "note": "字母块补全单词：已给首字母 + select_tv 空位 + 单字母 select_btn；点字母自动填空位",
+    },
     # ── 优先级 3：选词填空（+ 看图选词 复用同一处理）──
     {
         "name": "select_fill_questions",
@@ -110,6 +132,7 @@ QUESTION_TYPES = [
 HANDLER_MAP = {
     "sort_questions":           "_handle_sort_question",
     "match_questions":          "_handle_match_question",
+    "letter_fill_questions":    "_handle_letter_fill",
     "select_fill_questions":    "_handle_select_fill",
     "fill_blank_questions":     "_handle_fill_blank",
     "reading_multi_questions":  "_handle_reading_multi",
@@ -164,6 +187,81 @@ def _has_two_column_clickable(xml: str) -> bool:
     return True
 
 
+def _has_letter_tiles(xml: str) -> bool:
+    """★ 字母块补全单词题特征（2026-09-15）
+
+    判据 = 有 select_tv 空位 **且** 所有 select_btn 文本都是"单个英文字母"。
+      - 选词填空的 select_btn 是单词/短语（≥2 字符）→ 不会误判；
+      - 要求至少 2 个字母块（单块不足以证明是字母池）。
+    属性顺序按 dump 实际：text 在 resource-id 之前，故一次性只在 tag 内分别取。
+    """
+    if "select_tv" not in xml:
+        return False
+    cnt = 0
+    for m in re.finditer(r"<node\b[^>]*>", xml):
+        tag = m.group(0)
+        if "select_btn" not in tag:
+            continue
+        tm = re.search(r'text="([^"]*)"', tag)
+        t = (tm.group(1) if tm else "").strip()
+        if not t:
+            continue
+        if not re.fullmatch(r"[A-Za-z]", t):
+            return False        # 有一个不是单字母 → 是真单词库（选词填空）
+        cnt += 1
+    return cnt >= 2
+
+
+def parse_letter_fill(xml: str) -> dict:
+    """解析「字母块补全单词」页 → dict(prefix, slots, tiles, hint, cap)
+
+    实测结构（湘少六上 U1 单元自检，2026-09-15，真机 dump 见 tmp_gen/letter_fill_q15.xml）：
+      tv_caption      : 题干（"根据中文提示，选择正确的字母补全单词。(共1分)"）
+      question_flexbox: question_title_tv(已给首字母，如 "b") + select_tv(CheckBox 空位)
+                        ★ 中文提示 "[通过，凭借（做某事）]" 会被 flexbox 按字宽拆成
+                          多个 question_title_tv 片段 + 独立 "[" / "]" 文本节点
+      option_flexbox  : select_btn（TextView，单个字母）+ 外层 clickable LinearLayout
+
+    slots/tiles 元素: {"text": str, "b": (x1, y1, x2, y2)}
+    属性顺序在 uiautomator dump 里是 text 在 resource-id 之前，但这里**各自独立搜索**，
+    不依赖顺序，避免不同版本 dump 顺序变化导致失效。
+    """
+    ns = []
+    for m in re.finditer(r"<node\b[^>]*>", xml):
+        tag = m.group(0)
+        bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+        if not bm:
+            continue
+        rid = re.search(r'resource-id="([^"]*)"', tag)
+        tm = re.search(r'text="([^"]*)"', tag)
+        ns.append({
+            "rid": (rid.group(1).split("/")[-1] if rid else ""),
+            "text": (tm.group(1) if tm else ""),
+            "b": tuple(int(v) for v in bm.groups()),
+        })
+    slots = [n for n in ns if n["rid"] == "select_tv"]
+    tiles = [n for n in ns if n["rid"] == "select_btn" and n["text"].strip()]
+    cap = next((n["text"] for n in ns if n["rid"] == "tv_caption"), "")
+    # 已给首字母 = 第一个空位**左侧**的纯字母 question_title_tv（中文提示片段非 ASCII，自动排除）
+    prefix = ""
+    if slots:
+        sx = min(s["b"][0] for s in slots)
+        for n in ns:
+            if (n["rid"] == "question_title_tv" and n["b"][2] <= sx
+                    and re.fullmatch(r"[A-Za-z]+", n["text"].strip())):
+                prefix += n["text"].strip()
+    # 中文提示 = 页面文本里 [] 之间的内容（拼接后再搜，被拆散的片段能拼回整句）
+    alltext = "".join(n["text"] for n in ns)
+    hm = re.search(r"\[([^\[\]]{1,40})\]", alltext)
+    return {
+        "prefix": prefix,
+        "slots": slots,
+        "tiles": tiles,
+        "hint": (hm.group(1).strip() if hm else ""),
+        "cap": cap,
+    }
+
+
 def _has_multi_letter_groups(xml: str) -> bool:
     """页面是否有 2+ 组字母选项（阅读多小题特征）：字母按 y 聚类"""
     opts = []
@@ -203,6 +301,10 @@ def detect_question_type(xml: str) -> str:
                     continue
             if df.get("multi_letter_groups"):
                 if not _has_multi_letter_groups(xml):
+                    continue
+            if df.get("letter_tiles"):
+                # ★ 字母块补全单词：select_tv 空位 + 单字母 select_btn
+                if not _has_letter_tiles(xml):
                     continue
             if df.get("two_column_clickable"):
                 # ★ 字母连线题特征：左右两列各 2+ 个可点节点（x 明显分两列、y 范围接近）

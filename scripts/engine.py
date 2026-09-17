@@ -4,11 +4,17 @@
 close_ad / ensure_grade / run_single_module 等核心逻辑
 """
 import uiautomator2 as u2
-import os, time, re
+import os, sys, time, re
 from config import MODULE_CONFIG, GLOBAL_POPUPS, APP_PACKAGE, GRADE_LEVEL, BOOK_VERSION
 from common.tools import S, S_swipe, S_h, S_w, applock_blocked, settle_ads
 from common.logger import step_log, should_stop
 from question_types import detect_question_type
+
+# ★ 2026-09-15 题目解析脚本收集器（由 run_single_module 在单元循环里初始化/收尾）
+#   走本引擎通用答题循环的模块（如听力专项）据此自动生成解析脚本；
+#   图片题（题干/选项是图片）答题时截图，脚本生成阶段由视觉模型识别补全内容。
+_SCRIPT_COLL = None
+_SCRIPT_UNIT = 0
 
 
 def _find_control(xml: str, keywords: tuple, rid_pattern: str = None) -> tuple:
@@ -1221,6 +1227,18 @@ def _answer_loop(d, config, module_name):
             ev.append({"field": "作答", "type": "text_ok" if _act else "text_mismatch",
                        "expected": "可作答（检查/录音/输入/选项）", "actual": "可作答" if _act else "⚠ 未见作答元素",
                        "diff": "作答元素存在" if _act else "⚠ 检查/录音/输入元素未识别"})
+            # ★ 2026-09-15 图片题解析收集：题干/选项是图片时 XML 提不到文字 →
+            #   截图存盘，脚本生成阶段用视觉模型识别补全题干/选项/答案。
+            #   时机正好：本函数在"作答前"被调用，_xml 仍是完整题目页。
+            #   ⚠ 题号用 q：各分支都在 `q += 1` 之后才调用本函数，q 已是当前题号。
+            if _SCRIPT_COLL is not None:
+                from common.gen_script import is_image_question, save_image_shot
+                if is_image_question(_xml):
+                    _ip = save_image_shot(d, module_name, q, tag="q")
+                    if _ip:
+                        _SCRIPT_COLL.add(qno=q, stem="", options=[], answer="",
+                                         qtype=(qtype or "图片题"), unit=_SCRIPT_UNIT,
+                                         allow_listen=True, image_path=_ip)
         except Exception:
             pass
         return ev
@@ -1414,6 +1432,14 @@ def _answer_loop(d, config, module_name):
                 _handle_match_question(d, config)
             _idle = 0
             time.sleep(0.4); _need_dump = True; continue
+        elif qtype == "letter_fill_questions":
+            # ★ 字母块补全单词（2026-09-15）：首字母 + select_tv 空位 + 单字母 select_btn
+            q += 1
+            step_log(f"📸 第{q}题（字母补全单词）", "step")
+            step_log(f"  第{q}题 检查", "info", _collect_ui_evidence("字母补全单词"))
+            _handle_letter_fill(d, config)
+            _idle = 0
+            time.sleep(0.4); _need_dump = True; continue
         elif qtype == "select_fill_questions":
             # ★ 选词填空（听力专项）：点空格→点词库词，全部填完→检查
             q += 1
@@ -1536,6 +1562,20 @@ def run_single_module(d, module_name, config):
     questions = 0
     entry = config["entry_text"]
     sub_modules = config.get("sub_modules")     # 子模块列表（None=无子模块）
+
+    # ★ 2026-09-15 题目解析脚本：本模块题目收集器
+    #   跨子模块累积，单元答完写 docx；图片题答题时截图交视觉模型补全内容。
+    global _SCRIPT_COLL, _SCRIPT_UNIT
+    _SCRIPT_COLL = None
+    _SCRIPT_UNIT = 0
+    if config.get("units"):
+        try:
+            from common.gen_script import QuestionCollector
+            _g_ver = os.environ.get("YYB_VERSION", "") or BOOK_VERSION
+            _g_grade = os.environ.get("YYB_GRADE", "") or GRADE_LEVEL
+            _SCRIPT_COLL = QuestionCollector(module=module_name, version=_g_ver, grade=_g_grade)
+        except Exception as _e:
+            print(f"  ⚠ 脚本收集器初始化失败（不影响答题）: {_e}")
 
     # 1. 找模块入口
     print(f"  [1] 查找「{entry}」...")
@@ -1679,13 +1719,18 @@ def run_single_module(d, module_name, config):
                 step_log(f"📌 当前子模块: {shown or sub['name']}（第{i+1}/{len(sm)}个，左滑{swiped}次）", "step")
                 print(f"    👈 切到 {sub['name']}（左滑{swiped}次）→ 当前显示: {shown or '?'}")
             else:
-                # 第1个子模块：先右滑回最左（基础巩固），处理上次遗留位置（可能停在 Level 3）
-                for _ in range(4):
-                    cur_texts = _sub_texts()
-                    if any("基础巩固" in t for t in cur_texts):
-                        break
+                # 第1个子模块：默认即最左（基础巩固）。
+                # ★ 移除原"每次无条件右滑回最左"循环：重启 App + 重新进入模块后子模块区本就在
+                #   最左，原循环因页面未稳误判「基础巩固」不可见而每次白滑一次，既无意义又拖慢流程。
+                #   改为仅在确不在最左时才补滑 1 次兜底（避免真漂移时从错误子模块开始作答）。
+                cur_texts = _sub_texts()
+                if not any("基础巩固" in t for t in cur_texts):
+                    step_log(
+                        f"⚠ 第1子模块未检测到「基础巩固」（当前显示：{cur_texts}），补滑1次回最左",
+                        "warning",
+                    )
                     d.swipe_ext("right", scale=0.5)
-                    time.sleep(0.9)
+                    time.sleep(1.2)
                 # 读取展示
                 cur_texts = _sub_texts()
                 shown = next((t for t in cur_texts if sub["name"] in t), cur_texts[0] if cur_texts else "")
@@ -1743,6 +1788,8 @@ def run_single_module(d, module_name, config):
             print(f"\n  {'='*40}")
             print(f"  🎯 Unit {unit_num} [{ui+1}/{len(units)}]")
             print(f"  {'='*40}")
+            # ★ 当前单元号（供答题循环里的脚本收集器标注 unit）
+            _SCRIPT_UNIT = unit_num
             # 在模块列表里找该单元的"去练习"并点击
             clicked = False
             for _ in range(20):  # 滚动+查找
@@ -1764,6 +1811,15 @@ def run_single_module(d, module_name, config):
             print(f"  ✅ U{unit_num} 去练习")
             # 跑子模块
             run_sub_modules()
+            # ★ 单元答完 → 生成解析脚本（含图片题：视觉模型识别补全内容）
+            try:
+                if _SCRIPT_COLL is not None:
+                    _p = _SCRIPT_COLL.finish_unit(unit=unit_num)
+                    if _p:
+                        step_log(f"📄 已生成解析脚本: {os.path.basename(_p)}（可在「审查脚本」区下载）",
+                                 "success")
+            except Exception as _e:
+                print(f"  ⚠ 生成脚本失败: {_e}")
             # 回单元列表
             print(f"  ↩ 回单元列表...")
             for _ in range(5):
@@ -1879,6 +1935,235 @@ _KEYBOARD_LETTERS = {
     'b': (610, 1110), 'n': (725, 1110), 'm': (840, 1110),
     ' ': (450, 1215),
 }
+
+
+# ══════════════════════════════════════════════════════════════════
+# ★ 字母块补全单词（2026-09-15 新增题型）
+#   用户反馈："这道题目为什么app识别不了"（湘少六上 U1 单元自检 14/40）
+# ══════════════════════════════════════════════════════════════════
+
+# 最近一次字母补全题推断结果（供单元自检收集进解析脚本：题干+字母块+答案）
+_LAST_LETTER_FILL = {}
+
+# 中文提示型：首字母 + 括号里的中文释义 → 对应单词
+_LETTER_FILL_HINT_PROMPT = (
+    "小学英语「首字母补全单词」题：单词开头字母是 {prefix}，共 {n} 个字母；"
+    "括号里的中文提示是「{hint}」。\n"
+    "请给出对应的英语单词（必须正好 {n} 个字母、以 {prefix} 开头）。\n"
+    "只输出这个单词（小写英文字母），不要解释、不要标点。"
+)
+
+# 无文字提示型（听录音）：只能靠"字母池 + 首字母 + 长度"推断最可能的课本单词
+_LETTER_FILL_POOL_PROMPT = (
+    "小学英语「听录音补全单词」题：单词开头字母是 {prefix}，共 {n} 个字母；"
+    "页面可点字母块（含干扰字母）为：{pool}。\n"
+    "请推断最可能出现在小学英语课本里的那个单词（必须正好 {n} 个字母、"
+    "以 {prefix} 开头，且除首字母外的字母都在上面的字母块里能找到）。\n"
+    "只输出这个单词（小写英文字母），不要解释、不要标点。"
+)
+
+
+def _letter_fill_parse(d):
+    """解析「字母块补全单词」页 → dict(prefix, slots, tiles, hint, cap)
+
+    ★ 解析逻辑放在 question_types.parse_letter_fill（单一来源），
+      这里只负责 dump——同一份解析同时给 engine handler 与单元自检的脚本收集用。
+    """
+    from question_types import parse_letter_fill
+    return parse_letter_fill(d.dump_hierarchy())
+
+
+def _letter_fill_ask_llm(prompt):
+    """调 LLM 推断单词（复用项目 LLMClient；不可用返回 ""）
+
+    ⚠ 路径坑（2026-09-15 真机探针实测踩到）：`from src.reviewer_common import LLMClient`
+      要求项目根在 sys.path 上。gen_script.py 在 scripts/common/ 里用 dirname³ 拿根，
+      而本文件在 scripts/ 里，照抄 dirname³ 会指到项目**上一级** → ModuleNotFoundError: src。
+      这里改为**向上找含 src/ 的目录**，与文件所在层级解耦。
+    """
+    try:
+        _p = os.path.dirname(os.path.abspath(__file__))
+        for _ in range(4):
+            if os.path.isdir(os.path.join(_p, "src")):
+                break
+            _p = os.path.dirname(_p)
+        if _p not in sys.path:
+            sys.path.insert(0, _p)
+        from src.reviewer_common import LLMClient
+        return (LLMClient.from_config().ask(prompt) or "").strip()
+    except Exception as _e:
+        print(f"    ⚠ 字母补全题 LLM 调用失败: {_e}")
+        return ""
+
+
+def _letter_fill_word(prefix, hint, tile_pool, n_slot=1):
+    """推断目标单词：① 中文提示 → LLM；② 无提示（听录音）→ 字母池 + 长度推断
+
+    ★ 真机实测（tools/probe_letter_fill_live.py）：LLM 会无视"只能用字母块里的字母"
+      的约束（如 prefix=d、2 空位、池里没有 g，却答 'dog'）→ 因此这里对结果做
+      **长度 + 字母池**双重校验，不通过就带纠错提示重问一次，仍不通过才放弃。
+      宁可返回空（上层不瞎答），也不要填一个字母块里根本没有的字母。
+
+    返回 (word, source)；失败返回 ("", "")。
+    """
+    prefix = (prefix or "").strip().lower()
+    if not prefix:
+        return "", ""
+    n_letters = len(prefix) + max(1, int(n_slot))
+    pool = [(p or "").strip().lower() for p in (tile_pool or []) if (p or "").strip()]
+    use_hint = bool(hint and re.search(r"[\u4e00-\u9fff]", hint))
+    src = "中文提示" if use_hint else "字母池推断(低置信度)"
+    _extra = ""
+    _bad = ""
+    for _try in range(2):
+        if use_hint:
+            prompt = _LETTER_FILL_HINT_PROMPT.format(
+                prefix=prefix, hint=hint, n=n_letters)
+        else:
+            prompt = _LETTER_FILL_POOL_PROMPT.format(
+                prefix=prefix, n=n_letters, pool=" ".join(pool))
+        if _extra:
+            prompt += _extra
+        ans = _letter_fill_ask_llm(prompt)
+        m = re.search(r"[A-Za-z]{2,}", ans or "")
+        if not m:
+            _bad, _extra = "（未给出英文单词）", ""
+            continue
+        word = m.group(0).lower()
+        if len(word) != n_letters:
+            _bad = word
+            _extra = (f"\n注意：你上次给的 '{word}' 是 {len(word)} 个字母，"
+                      f"必须是正好 {n_letters} 个字母，以 {prefix} 开头。")
+            continue
+        if not word.startswith(prefix):
+            _bad = word
+            _extra = (f"\n注意：你上次给的 '{word}' 不以 {prefix} 开头，"
+                      f"必须以 {prefix} 开头。")
+            continue
+        if not use_hint and any(c not in pool for c in word[len(prefix):]):
+            _bad = word
+            _extra = (f"\n注意：你上次给的 '{word}' 用到了字母块里没有的字母。"
+                      f"只能用这些字母块：{' '.join(pool)}（除首字母 {prefix} 外的字母"
+                      f"必须全部来自这里）。")
+            continue
+        return word, src
+    if _bad:
+        print(f"    ⚠ LLM 两次都未给出合规单词（末次：'{_bad}'）→ 放弃")
+    return "", ""
+
+
+def _handle_letter_fill(d, config):
+    """★ 字母块补全单词：已给首字母 + 空位(select_tv) + 单字母块(select_btn)
+
+    ★ 实测交互（tools/probe_letter_fill.py，2026-09-15 真机）：
+      **直接点字母块即自动填入当前空位**，无需先点空位；填满后底部出现"检查"；
+      点检查 → 答对自动跳下一题 / 答错出"下一题"。
+
+    答案来源（三级）：
+      ① 中文提示 "根据中文提示…" → 括号内中文由 LLM 反查单词（确定性最好）
+      ② 听录音型（无文字提示）→ 把"首字母 + 字母池 + 词长"交给 LLM 推断最可能的课本单词
+         （⚠ 低置信度：仅用于让检测继续推进，日志会标注；ASR 链路当前不可用——
+           实测 scrcpy 录到的音频 max_volume -23dB、ASR 转写为空）
+      ③ 都拿不到 → 返回 False，交由上层"未知题型"兜底，不瞎答
+    """
+    print("    字母块补全单词题，处理中...")
+    info = _letter_fill_parse(d)
+    slots, tiles, prefix, hint = info["slots"], info["tiles"], info["prefix"], info["hint"]
+    n_slot = len(slots)
+    cap = info["cap"]
+    print(f"      → 题干={cap!r} 首字母={prefix!r} 空位={n_slot} 字母块={[t['text'] for t in tiles]} 提示={hint!r}")
+    if not slots or not tiles or not prefix:
+        print("    ⚠ 结构不完整（缺空位/字母块/首字母），放弃")
+        return False
+    step_log(f"🔤 字母补全单词：首字母 {prefix} · {n_slot} 个空位 · 提示「{hint or '（听录音）'}」", "step")
+
+    pool = [t["text"].strip() for t in tiles]
+    word, src = _letter_fill_word(prefix, hint, pool, n_slot=n_slot)
+    if not word:
+        print("    ⚠ 未能推断出单词（无提示且 LLM 不可用），放弃")
+        return False
+    if len(word) != len(prefix) + n_slot:
+        print(f"    ⚠ 推断单词 '{word}' 长度({len(word)}) 与 首字母+空位({len(prefix)}+{n_slot}) 不符 → 放弃")
+        return False
+    need = word[len(prefix):]
+    if any(ch not in [p.lower() for p in pool] for ch in need):
+        print(f"    ⚠ 推断单词 '{word}' 需要的字母 {list(need)} 不在字母块 {pool} 中 → 放弃")
+        return False
+    # ★ 记录本次推断结果：单元自检据此把"题干 + 字母块 + 答案"写进解析脚本
+    _LAST_LETTER_FILL.clear()
+    _LAST_LETTER_FILL.update({"word": word, "prefix": prefix,
+                              "hint": hint, "source": src, "cap": cap})
+    step_log(f"🔤 推断单词 {word}（{src}）→ 依次点字母 {' '.join(need)}", "info")
+
+    used = set()
+    ok_cnt = 0
+    for ch in need:
+        # 每次重新找空位（填一个后布局/焦点会变）
+        try:
+            _cur = _letter_fill_parse(d)
+        except Exception:
+            _cur = info
+        _empty = [s for s in _cur["slots"] if not s["text"].strip()]
+        if _empty:
+            try:
+                _b = _empty[0]["b"]
+                d.click((_b[0] + _b[2]) // 2, (_b[1] + _b[3]) // 2)
+                time.sleep(0.35)
+            except Exception:
+                pass
+        _tiles_now = _cur["tiles"] or tiles
+        idx = None
+        for j, t in enumerate(_tiles_now):
+            if j in used:
+                continue
+            if t["text"].strip().lower() == ch:
+                idx = j
+                break
+        if idx is None:
+            print(f"    ⚠ 字母块中找不到未使用的 '{ch}' → 放弃剩余字母")
+            break
+        used.add(idx)
+        try:
+            _b = _tiles_now[idx]["b"]
+            d.click((_b[0] + _b[2]) // 2, (_b[1] + _b[3]) // 2)
+            ok_cnt += 1
+            print(f"      → 点字母 '{ch}' @({(_b[0]+_b[2])//2},{(_b[1]+_b[3])//2})")
+        except Exception:
+            pass
+        time.sleep(0.55)
+
+    # 全部填完 → 点"检查"
+    _checked = False
+    for _ in range(6):
+        try:
+            if d(text="检查").exists(timeout=1.2):
+                d(text="检查").click()
+                _checked = True
+                step_log(f"✅ 字母补全单词完成：{word}", "success")
+                time.sleep(0.8)
+                break
+        except Exception:
+            pass
+        time.sleep(0.5)
+    if not _checked:
+        print(f"    ⚠ 未找到「检查」（已填 {ok_cnt}/{len(need)} 个字母）")
+        return False
+    for _ in range(8):
+        try:
+            if 'text="检查"' not in d.dump_hierarchy():
+                break
+        except Exception:
+            pass
+        time.sleep(0.5)
+    # 答错 → "下一题"；答对 → App 自动跳下一题
+    try:
+        if d(text="下一题").exists(timeout=2):
+            d(text="下一题").click()
+            step_log("➡ 字母补全单词答完，进入下一题", "info")
+            time.sleep(0.8)
+    except Exception:
+        pass
+    return True
 
 
 def _handle_word_fill(d, config):
