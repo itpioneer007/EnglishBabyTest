@@ -321,10 +321,22 @@ def _detect_content_dimension(module: str = ""):
         # ★ 该模块的匹配脚本（多模块检测时 docx_map 已构建；单模块/快速检查无映射则跳过）
         _docx = (_GLOBAL_DOCX_MAP or {}).get(module, "")
         if not _docx:
+            _set_script_provenance(module, "", False, "未挂载脚本（docxMap 无该模块映射）")
             return
         docx_path = PROJECT_ROOT / "uploads" / _docx
         if not docx_path.exists():
+            _set_script_provenance(module, _docx, False, f"脚本文件不存在：{_docx}")
             return
+        # ★ 2026-09-20：版本/年级守卫（与 _run_llm_script_review 同源，防拿错脚本乱报）
+        _mismatch = _script_matches_run(_docx,
+                                        _inspection_state.get("version", ""),
+                                        _inspection_state.get("grade", ""))
+        if _mismatch:
+            log_msg(f"⛔ {module}：{_mismatch} → 跳过批量内容检查"
+                    f"（拿错年级/版本的脚本比对会报出根本没测过的题）", "warning")
+            _set_script_provenance(module, _docx, False, _mismatch)
+            return
+        _set_script_provenance(module, _docx, True)
         # ★ 按当前模块单元过滤脚本（用户要求：脚本含多单元，只比对所选单元）
         #   从 _inspection_state 读当前单元（多模块检测启动时记录）
         # ★ 从 _inspection_state 读当前单元（多模块检测启动时记录）——防御"NONE"/非数字
@@ -448,28 +460,28 @@ def _detect_content_dimension(module: str = ""):
                 q_obj = _inspection_state["questions"][qid]
                 v = str(item.get("verdict","REVIEW")).upper()
                 ls = item.get("lang") or []
-                # ★ 修复矛盾：ai_content(是否通过) 与 content_reason(解释词) 必须一致
-                #   PASS 但带 lang 语言问题 → 整体判不通过，reason 显示"有语言问题"而非"通过"
                 has_lang = len(ls) > 0
                 # ★ REVIEW=待审（信息不足无法判断，如选项内容为空）→ 计未检(None)而非不通过
                 #   用户实测：待审被当不通过 → 明明其他维度过却综合判定不通过
+                # ★ 2026-09-20（用户反馈"有一点不符就判不通过不太好，要真能找出
+                #   影响用户作答的内容"）：LLM 给 PASS、只是附带语言提醒（lang 非空）
+                #   → 判**通过**，提醒附在 reason 里；只有 LLM 明确 REJECT 才判不通过。
                 if v == "REVIEW":
                     passed = None
                     vv = "待审"
+                elif v == "PASS":
+                    passed = True
+                    vv = "通过（附语言提示）" if has_lang else "通过"
+                elif v == "REJECT":
+                    passed = False
+                    vv = "不通过"
                 else:
-                    passed = (v == "PASS" and not has_lang)
-                    if passed:
-                        vv = "通过"
-                    elif v == "REJECT":
-                        vv = "不通过"
-                    elif v == "PASS":
-                        vv = "通过但有问题"  # PASS 但带语言问题 → 不通过（与 ai_content=False 一致）
-                    else:
-                        vv = "待审"
-                b = (item.get("basis") or "")[:200]
+                    passed = None
+                    vv = "待审"
+                b = (item.get("basis") or "")[:150]
                 d = f"{vv}: {b}"
                 for li in ls[:3]:
-                    d += f"; [{li}]"
+                    d += f"; 提示[{str(li)[:60]}]"
                 q_obj["ai_content"] = passed
                 q_obj["content_reason"] = d[:300]
                 count += 1
@@ -539,7 +551,14 @@ def log_msg(msg: str, level: str = "info", evidence: list = None):
 
     # ★ 每题界面级完整性检查证据 → 同步写入审查结果区（多模块检测也能看到 AI 判断）
     #   触发条件：消息含"第N题 检查"且带 evidence（来自 engine.py _collect_ui_evidence）
-    if evidence and isinstance(evidence, list) and evidence:
+    # ★ 2026-09-20 根因修复（口语训练 20 题只剩 4 题）：
+    #   旧守卫 `if evidence and isinstance(evidence, list) and evidence:` 把
+    #   **显式传入的空列表** 也当成"没传证据"→ 直接跳过登记。而口语训练为了
+    #   避免重复证据卡，会把后续小题的证据消重成 [] 再 step_log →
+    #   这些题从未进入 questions（只有每个大题第 1 小题被登记）。
+    #   语义修正：None = 未传（普通流程日志）；[] = 传了（这确实是一道题，
+    #   只是本轮没有可展示的证据，六个维度记为"未检"）。二者必须区分。
+    if isinstance(evidence, list):
         try:
             # ★ 修复：兼容实际消息格式——"第1题 检查"(可能带前导空格) 与
             #   "第1题 完整性检查"(测试循环) 都能命中
@@ -548,15 +567,29 @@ def log_msg(msg: str, level: str = "info", evidence: list = None):
             #     "第1大题·第2小题（句型提示：xxx）完整性检查"——"小题"和"检查"之间
             #     夹着（题干内容）！旧正则要求紧跟导致匹配失败 → 界面证据从未写入，
             #     前端只有脚本审查结果（用户实测"没有实际测试记录，全是脚本审查"）
-            m = re.match(
-                r"\s*(?:第(\d+)大题·)?第(\d+)(?:题|小题)\s*"
-                r"(?:（[^）]*）)?\s*(?:完整性)?\s*检查", msg)
-            if m:
+            #   ★★ 2026-09-20 根因修复（口语训练 20 题只剩 19 题）：
+            #     08-25 那版仍是「中间恰好一个全角括号组」的写死结构
+            #     —— `(?:（[^）]*）)?`。而 `[^）]*` 碰到题干自带的右括号就停，
+            #     例：第3大题第1小题题干 = "第11题（仿照例句，说一说。）"，
+            #     日志变成 "…小题（第11题（仿照例句，说一说。））完整性检查"，
+            #     正则只吃到内层"）"，随后要求紧跟"完整性检查"→ 整体匹配失败
+            #     → 该题证据被 except 静默吞掉，审查结果里凭空少一题。
+            #     题目内容本来就是自由文本（可能含括号、标点、换行），
+            #     不可能用"括号结构"去描述它 → 改成契约式匹配：
+            #       「行首是第N[大]题·第M小题」+「消息里出现"检查"」
+            #     题号提取与题干文本彻底解耦，对任意题干/任意模块都成立。
+            m = re.match(r"\s*(?:第(\d+)大题·)?第(\d+)(?:题|小题)", msg)
+            if m and "检查" in msg:
                 _big = int(m.group(1)) if m.group(1) else None
                 qidx = int(m.group(2))
                 _record_module_evidence(qidx, msg, evidence, big=_big)
-        except Exception:
-            pass
+            elif "检查" in msg:
+                # 带着证据、又明说"检查"，却定位不到题号 → 必须暴露，
+                # 不能再像旧版那样静默丢弃（用户只会看到"少了几题"）
+                log_msg(f"⚠ 逐题证据未入库（无法从日志定位题号）: {msg.strip()[:60]}",
+                        "warning")
+        except Exception as _e_ev:
+            log_msg(f"⚠ 逐题证据入库异常: {str(_e_ev)[:120]}", "warning")
 
     # ★ 答错题目截图 → 同步到审查结果区（前端「最近截图」展示）
     #   触发条件：消息含"第N题 答错截图"且 evidence 带 type="wrong_shot" + screenshot 文件名
@@ -2926,6 +2959,45 @@ def save_script_review_index(index: dict):
     SCRIPT_REVIEW_INDEX_PATH.write_text(
         json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8")
 
+
+def _current_llm_signature() -> str:
+    """当前 LLM 签名 = "<文本模型>|<视觉模型>"，用于脚本审查缓存的失效判定。
+
+    ★ 2026-09-23 修复（换模型后结论不变）：
+      缓存此前只按 `script_hash` 判有效，**不含模型**。而缓存里存的是
+      "合并后的 auto-* 记录"，同时含脚本层（文本模型判）与界面层（视觉模型判）
+      的结论 —— 所以换了文本或视觉任一模型后，旧单元会静默复用旧模型的结论，
+      表现为"明明换了模型，重跑结论一模一样"。
+      加入模型签名后，模型一变即视为缓存失效，重新审查并打日志说明原因。
+    """
+    try:
+        from src.reviewer_common import LLMClient
+        _c = LLMClient.from_config()
+        return f"{_c.model or ''}|{_c.vision_model or ''}"
+    except Exception:
+        # 兜底：至少用环境变量里的文本模型名（_load_dotenv 可能尚未执行）
+        try:
+            from src.reviewer_common import _load_dotenv
+            _load_dotenv()
+        except Exception:
+            pass
+        return f"{os.environ.get('LLM_MODEL', '')}|{os.environ.get('VISION_MODEL', '')}"
+
+
+def _script_cache_reusable(cached: dict, docx_hash: str, cur_sig: str) -> bool:
+    """脚本审查缓存能否直接复用：status=done 且 脚本未变 且 **模型签名一致**。
+
+    ★ 2026-09-23：加入模型签名维度。
+      旧缓存没有 `llm_signature` 字段 → `.get(...,"")` 取到空串，
+      而真实签名最小也是 "|"，两者永不相等 → 旧缓存一律视为不可复用，
+      换模型后首次重跑会重新审查（这正是想要的行为）。
+    """
+    if not isinstance(cached, dict):
+        return False
+    return (cached.get("status") == "done"
+            and cached.get("script_hash") == docx_hash
+            and cached.get("llm_signature", "") == cur_sig)
+
 def _script_file_hash(docx_path) -> str:
     """计算脚本文件 md5 hash，用于检测脚本是否变更"""
     import hashlib
@@ -2963,10 +3035,20 @@ def _save_inspection_state_merge():
     except Exception:
         old = {}
     # 合并 questions：本次内存的覆盖同 qid；旧文件里不冲突的保留
+    # ★ 2026-09-20 修复（脚本自检结果丢失）：
+    #   旧写法 `_merged = dict(old)` + 只覆盖 questions/version/grade/... 几个键 →
+    #   **其他所有键都以旧文件为准**，于是本次运行刚写进内存的
+    #   `_script_issues`（脚本自检发现的"答案↔关键词不一致"等问题）、
+    #   `_reuse_info`、`_modules_total` 等统统被丢弃，
+    #   前端/报告读状态文件时看不到脚本问题（实测 API 返回 _script_issues 为空，
+    #   而前端日志里明明打了 3 处）。
+    #   改为"以内存为准，只从旧文件补 questions 与内存里没有的键"。
     _qs = dict(old.get("questions") or {})
     _qs.update(dict(_inspection_state.get("questions") or {}))
-    _merged = dict(old)
+    _merged = dict(_inspection_state)
     _merged["questions"] = _qs
+    for _k, _v in old.items():
+        _merged.setdefault(_k, _v)      # 内存没有的键才用旧文件兜底
     # 时间/模块信息以最新为准
     for k in ("version", "grade", "module", "start_time", "end_time"):
         if _inspection_state.get(k):
@@ -2991,6 +3073,15 @@ def _live_regen_error_report():
             "stage": state.get("stage", "全部"),   # ★ "?" 是 Windows 非法字符，会 WinError 123
             "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
             "total": len(qs_all),
+            # ★ 2026-09-20：脚本自检发现的问题（答案↔关键词不一致 / 知识点占位 / 字段名
+            #   不统一）必须随报告一起下发——此前只进前端日志，报告里一条都看不到，
+            #   用户反馈的正是"脚本有问题没检查出来"。报告侧会：
+            #     ① 位置含单元+小题号且与本单元匹配 → 归位到对应题卡；
+            #     ② 其余（"全文" / 其他单元）→ 报告末尾「脚本自检」区块。
+            "script_issues": state.get("_script_issues") or {},
+            # ★ 2026-09-21：脚本溯源（本次拿哪份脚本比对、是否适配）——报告据此
+            #   在头部写明"脚本层结论是否可信"，避免用户看到一份来源不明的错题单。
+            "script_provenance": state.get("_script_provenance") or {},
         }
         exp = ReportExporter()
         path = exp.export_html_live(qs_all, meta)
@@ -3116,19 +3207,41 @@ def _merge_evidence_record(prev: dict, new: dict) -> dict:
             new[k] = True
         else:
             new[k] = None
+    # ★ 2026-09-20：截图同样"非空优先"。同一题常常被上报多次（完整性检查 +
+    #   扬声器/答错检查），旧实现不保护 screenshot → 第二条证据（无图）会把第一条
+    #   抓到的截图覆盖成空，错题报告里该题就没有定位图了。
+    if not (new.get("screenshot") or "").strip() and (prev.get("screenshot") or "").strip():
+        new["screenshot"] = prev["screenshot"]
     # 原因文本：新的非空优先，否则沿用旧的
     for k in ("stem_reason", "content_reason", "image_reason",
               "answer_reason", "audio_reason", "post_error_reason"):
         if not (new.get(k) or "").strip():
             new[k] = prev.get(k) or ""
-    # 按合并后的维度重算 overall（与 _record_module_evidence 判定口径一致）
+    # ★ 2026-09-17：建议文本与控件坐标同样按"非空优先"合并，
+    #   否则同题两条证据合并后建议/坐标会丢，卡片又退回"建议=原因"。
+    for k in ("stem_suggestion", "content_suggestion", "image_suggestion",
+              "answer_suggestion", "audio_suggestion", "post_error_suggestion"):
+        if not (new.get(k) or "").strip():
+            new[k] = prev.get(k) or ""
+    _pb, _nb = prev.get("_boxes") or {}, new.get("_boxes") or {}
+    if _pb or _nb:
+        _mb = dict(_pb)
+        _mb.update(_nb)          # 新坐标优先（同一维度以最新页面为准）
+        new["_boxes"] = _mb
+    for k in ("_suggestions",):
+        if not new.get(k) and prev.get(k):
+            new[k] = prev[k]
+    # 按合并后的维度重算 overall —— 必须走 `_judge_overall`（判定口径唯一出口）
+    # ★ 2026-09-23 修复：这里曾用**旧口径** `len(_ck) >= 3 → True，否则 None`，
+    #   与 `_judge_overall`（≥2 维明确通过 或 ≥3 维已核验 → 通过）**不一致**。
+    #   后果：同一题只要被合并过（模块对同题发多条证据 → `_record_module_evidence`
+    #   第 4025 行调本函数），"只剩 2 维可查"的题就被旧口径压成"未判定"。
+    #   实测跑完教科五上 U7：第4大题（听录音作答）5 道题每题只有 选项+作答 两维
+    #   → 页面显示"通过 14 / 不通过 1 / 未审 5"，而这 5 题本该是"通过"。
+    #   （诊断路径：单条记录时 3830 行 `_judge_overall(dims)` 已判通过，说明是
+    #    合并路径把它改回 None —— 口径分叉的典型症状。）
     _ck = [new[k] for k in dim_keys if new[k] is not None]
-    if any(v is False for v in _ck):
-        new["overall_passed"] = False
-    elif len(_ck) >= 3:
-        new["overall_passed"] = True
-    else:
-        new["overall_passed"] = None
+    new["overall_passed"] = _judge_overall({k: new[k] for k in dim_keys})
     new["overall_score"] = round(
         sum(1 for v in _ck if v is True) / max(len(_ck), 1), 2) if _ck else 0.0
     # conclusions 同步（保持与六维一致的 pass/fail/na）
@@ -3170,6 +3283,110 @@ def _merge_evidence_record(prev: dict, new: dict) -> dict:
     return new
 
 
+# ★ 2026-09-20：六维键名（基础层与脚本层共用），以及"维度 → 脚本层建议键"的映射
+_SCRIPT_DIM_KEYS = ("stem", "content", "image", "answer", "audio", "post_error")
+_DIM_TO_SUGG_KEY = {
+    "stem": "题干", "content": "内容", "image": "图片",
+    "answer": "答案", "audio": "音频", "post_error": "答错检查",
+}
+
+
+def _judge_overall(dims: dict):
+    """统一综合判定 → True(通过) / False(不通过) / None(未判定)。
+
+    ★ 2026-09-20 抽出统一口径，结束"基础层用一套、脚本层用另一套"的打架局面。
+
+    规则：
+      · 任一维度明确不通过 → 不通过（"任一层 False 即记错"）
+      · 至少 2 个维度明确通过，或 ≥3 个维度已核验且无异常 → 通过
+      · 只有 1 个维度可查（信息太薄）→ 未判定，**绝不冒充"通过"**
+    说明：旧基础层口径是"可查维度必须 ≥3 才判通过"，而口语训练每题天生只有
+    题干+作答两维可查 → 20 题永远停在"未判定"，结果区显示"通过 0 / 未审 20"，
+    等于所有通过结论都被丢掉。故补一条"≥2 维明确通过"的通道。
+    """
+    checked = [v for v in (dims or {}).values() if v is not None]
+    if not checked:
+        return None
+    if any(v is False for v in checked):
+        return False
+    if sum(1 for v in checked if v is True) >= 2 or len(checked) >= 3:
+        return True
+    return None
+
+
+def _fold_script_layer(basic: dict, scr: dict) -> None:
+    """把「脚本层」（LLM 判脚本本身：题干/选项/答案/知识点）折算进基础层记录。
+
+    ★ 2026-09-20 修复 —— 用户反馈"脚本问题日志里明明打出来了，结果/报告里一条都看不到"。
+
+    旧代码在合并处只做了一件事：
+        _basic["script"] = _state["script"]      # 挂个子字典
+    六维布尔（ai_stem/ai_content/…）、原因文案、`overall_passed` **全都没动**。
+    于是脚本层判"不通过"的题（实测 U4 第3大题：LLM 指出脚本题干为空、缺例句）
+    在结果区依旧显示"未审"，实时错题报告里更是一条错题都没有 —— 因为报告按
+    `overall_passed is False` 取错题。
+
+    折算规则（基础层看界面、脚本层看脚本内容，两层互补）：
+      · 脚本层 False → 该维置 False，原因前置「❌ 脚本层不通过：」，并带出 LLM 建议；
+      · 脚本层 True  → **不冒充**"App 也通过"（脚本没问题 ≠ 界面没问题），
+                       仅留档在 `_script_dims` 里参与综合判定；
+      · 综合判定     → 用"基础层 ∪ 脚本层"的维度集合按 `_judge_overall` 重算。
+    """
+    if not isinstance(scr, dict) or not scr:
+        return
+    _dims = {k: basic.get(f"ai_{k}") for k in _SCRIPT_DIM_KEYS}
+    _scr_dims = {}
+    for k in _SCRIPT_DIM_KEYS:
+        v = scr.get(k)
+        if v is None:
+            continue
+        _scr_dims[k] = v
+        # 幂等：已经折算过（ai_ 已是 False）就不再重复拼接原因
+        if v is False and _dims.get(k) is not False:
+            _dims[k] = False
+            basic[f"ai_{k}"] = False
+            _r = (scr.get(f"{k}_reason") or "").strip()
+            # 去掉 LLM 自带的前缀噪音（"[不通过 | 置信度:92] | " / 开头的 ❌⚠ 等）
+            _r = re.sub(r"^\[(不通过|通过)\s*\|[^\]]*\]\s*\|\s*", "", _r).strip()
+            _r = re.sub(r"^[❌⚠✅✕✓\s]+", "", _r).strip()
+            _old = re.sub(r"^[✅\s]+", "", (basic.get(f"{k}_reason") or "").strip()).strip()
+            # 界面层文字常是"✅ …一致/…可点击"这类**通过**叙述，直接接在后面会自相矛盾
+            # → 用"｜界面层："显式分段，让检查人员看清"哪一层说了什么"
+            basic[f"{k}_reason"] = (
+                "❌ 脚本层不通过：" + (_r or "脚本内容本身存在问题（详见脚本核验）")
+                + (f"｜界面层：{_old}" if _old else ""))
+            if not (basic.get(f"{k}_suggestion") or "").strip():
+                _s = ((scr.get("suggestions") or {}).get(_DIM_TO_SUGG_KEY[k]) or "").strip()
+                basic[f"{k}_suggestion"] = _s[:220]
+    # 综合判定用"基础层维度 + 脚本层判错"的集合。
+    # ⚠ 脚本层的 True **绝不能**顶替基础层缺失的维度：脚本本身没问题 ≠ App 界面
+    #   与脚本一致。实测大4（听音跟读）App 侧题目内容根本没比对（只在音频里），
+    #   若让脚本层 True 顶上去，5 道未核验的题会被判成"通过" —— 正是用户最反感的
+    #   "假通过"。所以脚本层只参与"判错"，不参与"判过"；脚本层的逐维结论留档在
+    #   `_script_dims` 里供检查人员查看。
+    _union = dict(_dims)
+    basic["_script_dims"] = _scr_dims
+    basic["overall_passed"] = _judge_overall(_union)
+    _n_checked = sum(1 for v in _union.values() if v is not None)
+    basic["overall_score"] = round(
+        sum(1 for v in _union.values() if v is True) / max(_n_checked, 1), 2)
+    # conclusions 同步（前端卡片与报告读的是它，不是 ai_*）
+    _cons = basic.get("conclusions")
+    if isinstance(_cons, dict):
+        for _k, _rk in (("stem", "stem"), ("content", "content"), ("image", "image"),
+                        ("answer", "answerable"), ("audio", "audio")):
+            if _union.get(_k) is None or not isinstance(_cons.get(_rk), dict):
+                continue
+            _cons[_rk]["status"] = "pass" if _union[_k] is True else "fail"
+            if _union[_k] is False:
+                _cons[_rk]["detail"] = basic.get(f"{_k}_reason") or _cons[_rk].get("detail", "")
+        _fl = _cons.get("flow")
+        if isinstance(_fl, dict) and basic["overall_passed"] is not None:
+            _fl["status"] = "pass" if basic["overall_passed"] else "fail"
+            if basic["overall_passed"] is False:
+                _fl["detail"] = "脚本层核验存在不通过项（详见各维度）"
+
+
 def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None):
     """把 engine.py 每题收集的 5 维界面证据（题型/题干/选项/音频/作答）
     映射成前端六维卡片字段写入 _inspection_state["questions"]。
@@ -3204,14 +3421,43 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
             "answer": None, "audio": None, "post_error": None}
     reasons = {"stem": "", "content": "", "image": "",
                "answer": "", "audio": "", "post_error": ""}
+    # ★ 2026-09-17：基础层也产出「修改建议」，与原因区分开
+    #   （旧版只有原因，trace_engine 只能把原因原样当建议 → 卡片上两段一模一样）
+    _sugg = {"stem": "", "content": "", "image": "",
+             "answer": "", "audio": "", "post_error": ""}
+    # ★ 2026-09-17：证据里带的控件坐标（uiautomator node bounds）→ 用于精确红框/特写截图
+    boxes = {}
 
     # 收集实际显示文字（题干+选项，供前端卡展示）
     stem_text = ""
     option_text = ""
+    # ★ 2026-09-20 新增：口语训练「小题题干」（App 上真正呈现的题目内容本身）
+    sub_stem_text = ""
+    sub_stem_src = "dom"    # dom=界面真实文字 / vision=视觉识别（不可用于一致性判定）
+    # ★ 2026-09-20 新增：本小题的**大题说明是否按模块设计未上报**
+    #   （口语训练"同大题第2小题起不再重复上报大题说明"，只发这个标记）。
+    #   用于把"设计上就没报"与"App 真没渲染出来"区分开：
+    #   前者不能报警、也不能把题干维度压成"未检"；后者才需要人工连手机确认。
+    _caption_suppressed = False
     question_type = "界面检查"  # 默认
 
     for e in evidence:
         field = e.get("field", "")
+        # ★ 2026-09-20：小题题干必须在这里截获——它在 field_map 里没有对应维度，
+        #   走到下面 `dim = field_map.get(field); if not dim: continue` 就被丢掉了。
+        #   这正是用户反馈"基本题目内容检查不出来"的主因：App 上的单词/句子/问题原文
+        #   只作为日志括号显示，从未与脚本 stem 做过一致性比对。
+        if field == "小题题干":
+            _st = (e.get("actual") or "").strip()
+            if _st:
+                sub_stem_text = _st[:200]
+                sub_stem_src = (e.get("src") or "dom")
+            continue
+        # ★ 2026-09-20：口语训练"同大题第2小题起不再重复上报大题说明"的显式标记
+        #   （同样不在 field_map 里，必须在这里截获，否则被丢弃）
+        if field == "大题说明已省略":
+            _caption_suppressed = True
+            continue
         # ★ 分值等附加信息：写入 note（不参与六维判定），供检查人员参考
         if field == "分值":
             _sc = (e.get("actual") or e.get("diff") or "").strip()
@@ -3234,6 +3480,10 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
         dim = field_map.get(field)
         if not dim:
             continue
+        # ★ 控件坐标（evidence 里带 box 时）：供红框标注/出错区域特写用
+        _bx = e.get("box")
+        if isinstance(_bx, dict) and _bx.get("w") and _bx.get("h"):
+            boxes[dim] = _bx
         etype = e.get("type", "")
         # ★ mismatch 优先：同一维度多条证据时，只要有一条不通过就判不通过
         #   （口语题麦克风不可点 + 通用"作答元素存在"同时写入 answer 维度时，
@@ -3301,7 +3551,13 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
     _sq_stem_hit = ""       # 命中的脚本题干（供记录展示）
     try:
         _docx_cur = (_GLOBAL_DOCX_MAP or {}).get(_current_module_name, "")
-        if _docx_cur and stem_text and stem_text not in ("(无题干文字)", "(无)"):
+        # ★ 2026-09-20 放宽准入：原条件 `and stem_text` 导致**App 没有文字大题说明**时
+        #   整段脚本比对被跳过（实测口语训练第4大题：页面只有「序号 + 小喇叭 + (2分)」，
+        #   题干 evidence = "(无题干文字)" → stem_text="" → 连小题内容都不比了，
+        #   卡片只剩"界面题干: 未提取到题干文字"，脚本层等于没查）。
+        #   只要有任一层文字（大题说明 或 小题内容）就进入比对。
+        if _docx_cur and (stem_text or sub_stem_text) \
+                and stem_text not in ("(无题干文字)", "(无)"):
             _docx_path_cur = PROJECT_ROOT / "uploads" / _docx_cur
             if _docx_path_cur.exists():
                 # ★ 脚本解析缓存（每题调用一次，100题脚本重复解析太慢）
@@ -3311,12 +3567,26 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
                         docx_path=str(_docx_path_cur), unit=0, screenshot_dir="", verbose=False))
                     _SCRIPT_CACHE[_docx_cur] = _agent_cur.script_questions
                 _sq_list = _SCRIPT_CACHE[_docx_cur]
-                # ★ 当前单元号
-                _u_cur = _inspection_state.get("unit", 0)
+                # ★ 当前单元号 —— 必须是"模块正在作答的单元"，绝不是 state["unit"]
+                #   ★ 2026-09-23 根因修复（用户报"乱判 App 与脚本不符"）：
+                #     旧实现 `int(str(state["unit"]).split("-")[0])` 对连跑范围
+                #     "5-6" 永远取到 5 → U6 的题全部拿 U5 的脚本段落比对。
+                #     实测：App 上显示 "The quick queen is quite quiet."（U5 第2大题），
+                #     报告却写"App「What will I do in space?」，脚本应为「The quick
+                #     queen is quite quiet.」" —— 两边其实是**不同单元**的同一题号，
+                #     被硬拉到一起比，整个第2大题 5 道小题全假错。
+                #   取值优先级：① 模块上报的当前单元（口语训练每进一个单元就 set，
+                #     权威）→ ② state["unit"] 仅当它是**单值**（"5"）才可用；
+                #     带连字符（"5-6"）是范围，作最后兜底并交给下面的跨单元纠偏。
+                _u_cur = 0
                 try:
-                    _u_cur = int(str(_u_cur).split("-")[0])
+                    from common.logger import get_current_unit as _gcu
+                    _u_cur = int(_gcu() or 0)
                 except Exception:
                     _u_cur = 0
+                _u_raw = str(_inspection_state.get("unit", "") or "").strip()
+                if not _u_cur and re.match(r"^\d+$", _u_raw):
+                    _u_cur = int(_u_raw)
                 # ★ 巧记单词：内容匹配（无序号，按题型+内容找）
                 _qiaoji_ratio = 0.0
                 if _current_module_name == "巧记单词":
@@ -3344,6 +3614,19 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
                             if _s.global_idx == qidx:
                                 _sq_cur = _s
                                 break
+                    # ★ 2026-09-23 跨单元纠偏（兜底）：
+                    #   命中号对、单元不对时，用 App 实际文字在其它单元里找同号小题。
+                    #   例：连跑 U5-6，U6 第2大题第3小题被 U5 的同号题命中 →
+                    #   App" You'll see the moon and the stars." 在 U6 段落里逐字一致
+                    #   → 改用 U6 那道，并同步纠正 _u_cur 供后续小题复用。
+                    _sq_cur = _realign_script_unit(
+                        _sq_list, _sq_cur, _u_cur, big, qidx,
+                        (sub_stem_text or stem_text or "").strip())
+                    if _sq_cur is not None:
+                        try:
+                            _u_cur = int(getattr(_sq_cur, "unit", 0) or _u_cur)
+                        except Exception:
+                            pass
                 if _sq_cur:
                     _script_stem = (getattr(_sq_cur, "stem", "") or "").strip()
                     _sq_stem_hit = _script_stem
@@ -3377,70 +3660,220 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
                                                     f"扬声器内容需接入 ASR 才能核对（当前未识别到）")
                         elif dims["audio"] is None:
                             reasons["audio"] = f"脚本录音「{_script_rec[:60]}」"
-                    elif _script_stem:
-                        # ★ 相似度比对（App 提取文字可能带噪音，用包含/相似而非全等）
+                    elif _script_stem or (getattr(_sq_cur, "caption", "") or "").strip():
+                        # ★ 2026-09-17 修复（口语训练整单元 100% 误报"题干与脚本不符"）：
+                        #   口语训练页面顶部显示的是**大题说明**（脚本 caption：
+                        #   "请阅读短文，点击小喇叭播放问题…"，所有小题共用），
+                        #   而脚本每道小题的 stem 是小题题面本身（"mum moon" /
+                        #   "What will come tomorrow?"）。旧实现拿"大题说明"去比
+                        #   "小题题面"→ 两者永远不同 → 每道小题都判不通过
+                        #   （用户实测：20 题全挂、通过率 0%、红框还框在状态栏上）。
+                        #   同一层级才有可比性 → 有 caption 就先与 caption 比。
                         _app_stem = stem_text.strip()
-                        _ok = (_script_stem in _app_stem) or (_app_stem in _script_stem)
-                        if not _ok:
-                            import difflib as _dl
-                            _ratio = _dl.SequenceMatcher(None, _script_stem, _app_stem).ratio()
-                            _ok = _ratio >= 0.85
-                        if not _ok:
+                        _cap = (getattr(_sq_cur, "caption", "") or "").strip()
+                        _expect = _cap or _script_stem
+                        _what = "大题说明" if _cap else "题干"
+                        if not _app_stem and _caption_suppressed:
+                            # ★ 2026-09-20：本小题是**按设计**不重复上报大题说明
+                            #   （模块只在每大题第 1 小题发一次，避免重复证据卡；
+                            #    这里给它加过一个"大题说明已省略"标记）。
+                            #   所以这**不是缺陷**：既不能刷"⚠ 需连手机人工确认"的假告警，
+                            #   也不能把题干维度压成"未检"（否则 20 题里 16 题显示不出结论）。
+                            #   本小题的题干结论交给下面「小题目内容 ↔ 脚本 stem」同层级比对。
+                            pass
+                        elif not _app_stem:
+                            # ★ 2026-09-20：App 该题没有渲染文字题干（口语训练第4大题
+                            #   只有「序号 + 小喇叭 + (2分)」，问题由音频播放）。
+                            #   两种来源要分开处理：
+                            #     ① 基础层本来就报"未提取到题干文字" → 那是**取证失败/
+                            #        该题本就无文字**，直接判"题干不通过"是**假错**
+                            #        （实测 auto-Q04-01 因此成了不通过）→ 降为"未判定"
+                            #        并写明脚本应有内容，交人工确认；
+                            #     ② 已有真实的"与脚本不符"结论 → 保留，不能被覆盖。
+                            _old_stem_reason = reasons.get("stem") or ""
+                            _is_extract_fail = ("未提取到题干文字" in _old_stem_reason
+                                                or "无题干文字" in _old_stem_reason)
+                            if dims["stem"] is not False or _is_extract_fail:
+                                dims["stem"] = None       # 未判定，不计入不通过
+                                reasons["stem"] = (
+                                    f"⚠ App 未取到{_what}文字（脚本{_what}：「{_expect[:50]}」）"
+                                    f"——该题可能以音频/图片呈现，或页面未渲染；需连手机人工确认")
+                                # ★ 2026-09-20 修复 KeyError: 'stem'（整条记录写不进去）：
+                                #   这里原本是 `_sugg.pop("stem", None)` —— 清空"题干建议"。
+                                #   但 pop 会把 key **整个删掉**，而函数末尾（第3704行）
+                                #   `"stem_suggestion": _sugg["stem"]` 是**无条件下标取值**
+                                #   → 抛 KeyError，_record_module_evidence 中途失败，
+                                #   这道题既不进 questions 也留下一条"入库异常"告警。
+                                #   之所以现在才暴露：本分支只在"App 未取到文字"的
+                                #   **后续小题**（第2~5小题）才会走到，而这些题当年
+                                #   evidence=[] 被 log_msg 当成"没传证据"直接跳过，
+                                #   根本进不到这里（被"空证据被吞"那个 bug 掩盖了）。
+                                #   清空用赋值，绝不能用 pop 删除后续要读的键。
+                                _sugg["stem"] = ""
+                        elif not _expect:
+                            # ★ 2026-09-23：脚本该小题既无 caption 也无 stem/句型提示
+                            #   → 没有可比对对象。此时绝不能因为"脚本侧是空的"就判
+                            #   App 不通过（那是脚本没写内容，不是 App 写错）。
+                            pass
+                        elif _text_like(_app_stem, _expect):
+                            if dims["stem"] is not False:
+                                dims["stem"] = True
+                                _tail = ""
+                                if _cap and _script_stem:
+                                    _tail = (f"；小题题面「{_script_stem[:40]}」在音频/图片中呈现，"
+                                             f"需连手机核对播放内容")
+                                reasons["stem"] = (f"✅ {_what}与脚本一致"
+                                                   f"（脚本：{_expect[:50]}，App：{_app_stem[:50]}）{_tail}")
+                                # ★ 2026-09-20 新增：脚本带「例句/句型」时，App 文字里也必须
+                                #   出现该句型正文。实测教科版 U4 第3大题：App 说明是
+                                #     「例句：\n请结合例句和图片说句子，点击"录音"开始作答…」
+                                #   —— 只有「例句：」标签、正文为空，而脚本写明
+                                #   `例句：I will bring everything inside.`；同时该题
+                                #   小题题干来自**视觉识别**（DOM 无文字）→ 可判定 App 未
+                                #   渲染例句文本。这里做成**提示不判错**（正文可能被拆到别的
+                                #   text 节点或画在图上），需要人工确认。
+                                _sp = (getattr(_sq_cur, "sentence_pattern", "") or "").strip()
+                                if _sp and stem_text and ("例句" in stem_text or "句型" in stem_text):
+                                    _n_app = re.sub(r"\s+", "", stem_text)
+                                    _n_sp = re.sub(r"\s+", "", _sp)
+                                    if _n_sp and _n_sp[:10] not in _n_app:
+                                        reasons["stem"] += (
+                                            f"；⚠ 脚本例句「{_sp[:50]}」未出现在 App 文字中"
+                                            f"（App 只有「例句：」标签），需连手机确认是否漏显示")
+                        elif _text_diff_minor(_app_stem, _expect):
+                            # ★ 2026-09-20（用户反馈"有一点不符就判不通过不太好，
+                            #   要真能找出影响用户作答的内容"）：差异**只**属格式
+                            #   （标点有无/全半角、大小写、空格、连字符）→ 不影响学生
+                            #   作答，判通过并注明"仅格式差异"，不再制造错题卡。
+                            if dims["stem"] is not False:
+                                dims["stem"] = True
+                                reasons["stem"] = (f"✅ {_what}与脚本内容一致"
+                                                   f"（仅格式差异：App「{_app_stem[:50]}」/ "
+                                                   f"脚本「{_expect[:50]}」）")
+                        else:
                             dims["stem"] = False   # ★ mismatch 优先：脚本比对不通过 → 题干不通过
                             # ★ 2026-08-30 修复：big=None（听力专项等无大题概念）时只显示"第N题"，
                             #   不渲染"第None大题·第N小题"
                             _pos = f"第{big}大题·第{qidx}小题" if big else f"第{qidx}题"
-                            reasons["stem"] = (f"❌ 题干与脚本不符：App 显示「{_app_stem[:60]}」，"
-                                               f"脚本应为「{_script_stem[:60]}」（位置：{_pos}）")
-                        else:
-                            # ★ 通过也写比对原因（检查人员知道这题已核对过脚本）
+                            reasons["stem"] = (f"❌ {_what}与脚本不符：App「{_app_stem[:60]}」，"
+                                               f"脚本应为「{_expect[:60]}」")
+                            _sugg["stem"] = (f"把 App 该处{_what}改成脚本原文"
+                                            f"「{_ellipsis(_expect, 70)}」；"
+                                            f"若确认是脚本写错则同步修改脚本，两边须逐字一致")
+                    # ★ 2026-09-20 新增：小题目内容 ↔ 脚本 stem（同层级比对）
+                    #   为什么必须单独立这一维：App 顶部是"大题说明"（比 caption），
+                    #   而学生真正看到/朗读的**题目内容**是小题题面——脚本 stem
+                    #   （朗读单词 "mum moon"、朗读句子 "A typhoon is coming."、
+                    #   阅读题的问题 "What will come tomorrow?"）。旧逻辑拿 caption
+                    #   比完就收工，小题内容一个字都没对上过 → 脚本写错小题内容
+                    #   也永远检查不出来。
+                    #   只比"两边都有实义文字"的情形：看图题脚本 stem 是 [Image] 占位、
+                    #   App 未识别到小题文字时跳过，否则会把"图片题本就无文字题面"误报。
+                    _st_ph = ("[image]", "[图片]", "[img]", "(无题干文字)", "(无)", "/", "-", "none")
+                    # ★ 2026-09-23：脚本侧"应有题面"= stem（题目内容）**或**句型提示。
+                    #   口语训练 U6/U7 第3大题脚本只写「例句：I will talk to astronauts.」，
+                    #   小题 stem 为空 → 旧实现 `_s_txt=""` → 整大题跳过比对（等于没查）。
+                    #   ⚠ 绝不回退到 answer（参考答案）：那是评分参考，App 上不显示，
+                    #   拿来当"应有题面"必然造成"图片题全判不符"的假错（用户明确要求）。
+                    _s_pat = (getattr(_sq_cur, "sentence_pattern", "") or "").strip()
+                    _s_txt = (_script_stem or _s_pat).strip()
+                    _a_txt = (sub_stem_text or "").strip()
+                    # ★ 2026-09-20：App 上有些"文字"其实是 UI 标签而不是题目内容
+                    #   （实测口语训练第4大题的小题题干被读成「听录音作答」，而脚本
+                    #   该小题是 "What will come tomorrow?"）——直接比对会把
+                    #   "题目内容以音频呈现"这种**正常设计**判成"内容不符"，整单元假错。
+                    #   判据两条，命中即**不判定**（只登记脚本内容供人工听音频核对）：
+                    #     ① App 文字是常见 UI 标签（短，且命中标签词表）；
+                    #     ② 两侧语种不一致（一方含 ASCII 字母、另一方没有）
+                    #        → App 侧根本不是同一语言的内容，没有可比性。
+                    #   ★ 2026-09-23：模块侧占位标签由「听音频跟读」改为「听录音作答」
+                    #     （五上U6第4大题是"点小喇叭听题 → 口语作答"，不是跟读）。
+                    #     两个都留在词表里，兼容历史状态文件。
+                    _uikit = ("听录音作答", "听音频跟读", "点击录音", "听录音", "点击完成",
+                              "点击小喇叭", "开始录音", "录音中", "点击结束", "听音频",
+                              "跟读", "播放")
+                    _label_like = bool(_a_txt) and len(_a_txt) <= 12 and any(k in _a_txt for k in _uikit)
+                    _lang_diff = (bool(re.search(r"[A-Za-z]", _a_txt))
+                                  != bool(re.search(r"[A-Za-z]", _s_txt)))
+                    if _s_txt and _s_txt.lower() not in _st_ph and (_label_like or _lang_diff):
+                        # 允许在"已判为未判定（⚠ 开头）"时继续追加说明，否则
+                        # 第1小题（基础层已报未提取到题干）会吞掉这条信息
+                        if dims["stem"] is not False or (reasons.get("stem") or "").startswith("⚠"):
+                            _why = "App 显示的是界面标签" if _label_like else "App 文字与脚本语种不一致"
+                            reasons["stem"] = (reasons.get("stem") or "") + (
+                                f"；小题内容未做一致性判定（{_why}：「{_a_txt[:30]}」）；"
+                                f"脚本该小题内容：「{_s_txt[:50]}」，需连手机听音频核对")
+                    elif sub_stem_src in ("vision", "script") and _s_txt \
+                            and _s_txt.lower() not in _st_ph:
+                        # 图片/看图题：App 没有可判定的文字题面。
+                        #   src=vision → 题面由视觉模型描述（概率性，可能是参考答案）
+                        #   src=script → 模块直接取脚本内容作展示（2026-09-23 新增）
+                        # 两种情况都**不做"一致/不一致"判定**，只登记脚本应有内容
+                        # 供人工比对配图。绝不因为"图片题猜出来的句子≠脚本句型"判不通过。
+                        if dims["stem"] is not False or (reasons.get("stem") or "").startswith("⚠"):
+                            _src_txt = ("题面由视觉识别得到、未做一致性判定"
+                                        if sub_stem_src == "vision"
+                                        else "图片题：App 只显示图片+句型提示、不显示答案，"
+                                             "此处以脚本内容为准展示、未做一致性判定")
+                            reasons["stem"] = (reasons.get("stem") or "") + (
+                                f"；{_src_txt}"
+                                f"（脚本小题内容：{_s_txt[:50]}，需人工核对配图是否匹配）")
+                    elif _s_txt.lower() not in _st_ph and _a_txt.lower() not in _st_ph \
+                            and len(_s_txt) >= 2 and len(_a_txt) >= 2:
+                        if _text_same_strict(_a_txt, _s_txt):
                             if dims["stem"] is not False:
-                                dims["stem"] = True
-                                reasons["stem"] = f"✅ 题干与脚本一致（脚本：{_script_stem[:50]}，App：{stem_text[:50]}）"
+                                # ★ 2026-09-20：本小题"大题说明按设计未上报"（第2小题起），
+                                #   唯一可用的同层级证据就是这条「小题目内容 ↔ 脚本 stem」，
+                                #   它一致 → 题干维度判**通过**。
+                                #   不这么做的话整题长期停在"未检"，检查人员看不出
+                                #   这题究竟查过没有。第1小题不走这里（它已用大题说明比过 caption）。
+                                if _caption_suppressed:
+                                    dims["stem"] = True
+                                reasons["stem"] = (reasons.get("stem") or "") + (
+                                    f"；小题目内容与脚本一致（脚本：{_s_txt[:50]}，App：{_a_txt[:50]}）")
+                        elif _text_diff_minor(_a_txt, _s_txt):
+                            # ★ 2026-09-20：仅格式差异（标点/大小写/空格）→ 不判不通过，
+                            #   注明后通过；字母级差异（nose/note、take/bring）仍在上面的
+                            #   严格比对里判不通过——那才是真正影响学生作答的。
+                            if dims["stem"] is not False:
+                                if _caption_suppressed:
+                                    dims["stem"] = True
+                                reasons["stem"] = (reasons.get("stem") or "") + (
+                                    f"；小题目内容与脚本一致（仅格式差异："
+                                    f"App「{_a_txt[:50]}」/ 脚本「{_s_txt[:50]}」）")
+                        else:
+                            dims["stem"] = False   # 内容不符 → 题干维度不通过
+                            _pos2 = f"第{big}大题·第{qidx}小题" if big else f"第{qidx}题"
+                            # ★ 2026-09-20：改用严格比对（逐字一致）后，把"差多少"也写出来，
+                            #   便于一眼区分"整句都不对"和"只差一个字母的笔误"。
+                            import difflib as _dl2
+                            _r2 = _dl2.SequenceMatcher(
+                                None, _norm_for_cmp(_a_txt), _norm_for_cmp(_s_txt)).ratio()
+                            _hint = (f"（两侧高度相似 {_r2:.0%}，疑似拼写/用词笔误，请逐字核对）"
+                                     if _r2 >= 0.75 else "")
+                            reasons["stem"] = (
+                                f"❌ 小题目内容与脚本不符：App「{_a_txt[:60]}」，"
+                                f"脚本应为「{_s_txt[:60]}」{_hint}")
+                            _sugg["stem"] = (f"把 App 该小题内容改成脚本原文"
+                                            f"「{_ellipsis(_s_txt, 70)}」；"
+                                            f"若确认是脚本写错则同步修改脚本，两边须逐字一致")
                     if _script_rec and dims["audio"] is None:
                         # ★ 听力材料（脚本 recording）有内容但无音频证据 → 留空不渲染
                         pass
     except Exception:
         pass
 
-    # ★ 综合判定：可查维度数（非None）≥3 且 无任何不通过 → 通过
+    # ★ 综合判定：统一走 _judge_overall（2026-09-20 抽出）
+    #   旧口径"可查维度 ≥3 才判通过"把口语训练（每题天生只有 题干+作答 两维可查）
+    #   全部压成"未审"→ 结果区"通过 0 / 未审 20"，实测通过结论全被丢掉。
+    #   现补一条"≥2 维明确通过"的通道；只有 1 维可查仍算未判定，不冒充通过。
     checked = [d for d in dims.values() if d is not None]
-    failed = [d for d in dims.values() if d is False]
     passed_cnt = sum(1 for d in dims.values() if d is True)
+    overall = _judge_overall(dims)
 
-    if not checked:
-        overall = None   # 全未检 → 未审查
-    elif failed:
-        overall = False  # 任何不通过 → 不通过
-    elif len(checked) >= 3:
-        overall = True   # 至少查到3维且全通过 → 通过
-    else:
-        overall = None   # 检查不足3维 → 标未审
-
-    # ★ 自动截图：错题（overall=False）自动抓当前页面截图，供错题报告嵌入。
-    #   用户要求"错题日志中的每道错题都要有截图"；听力专项有答错截图，
-    #   口语训练等模块没有 → 这里统一兜底（每题判定不通过即截图）。
-    _auto_shot = ""
-    if overall is False:
-        try:
-            # ★ 截图前等 0.8s：页面内容（排序项/选项）渲染有延迟，立即截图
-            #   会截到空白/半渲染画面（用户实测"排序题内容还没出来"）
-            time.sleep(0.8)
-            _shot_dir = PROJECT_ROOT / "screenshots"
-            _shot_dir.mkdir(parents=True, exist_ok=True)
-            _auto_shot = f"auto_{_current_module_name or 'mod'}_q{qidx:03d}_{datetime.now().strftime('%H%M%S')}.png"
-            _conn = _connect_device()
-            if _conn is not None:
-                for _r in range(3):
-                    try:
-                        _conn.screenshot(str(_shot_dir / _auto_shot))
-                        break
-                    except OSError:
-                        if _r >= 2:
-                            raise
-                        time.sleep(0.5)
-        except Exception:
-            _auto_shot = ""
+    # ★ 2026-09-20 修复：自动截图原来在这里做，但那时 qid 还没算出来，
+    #   并且条件是「overall is False」（必须当场判错）——见下方题号确定后的真实截图点。
+    #   （占位：不要在此处抓图，否则拿不到题号就无法去重/补图）
 
     total = len(_inspection_state.get("questions", {})) + 1
     # ★ 2026-08-30 修复：按 (模块·stage) 维护题数，total 改为"各模块总题数"列表渲染，
@@ -3467,7 +3900,17 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
     # (作用域 + 原始题号) → 最终 qid 的稳定映射：同一题重复上报（完整性检查 +
     # 扬声器内容检查）必须落回同一个 qid，否则一道题会被拆成两条记录。
     _qid_map = _inspection_state.setdefault("_qid_map", {})
-    _scope_key = f"{_current_module_name}|{_current_stage_name}|{big or ''}"
+    # ★ 2026-09-23：作用域必须含**单元号**。旧实现只有「模块|阶段|大题」，
+    #   连跑 U5-6 时两个单元的第2大题第1小题都叫 auto-Q02-01 → 后跑的单元
+    #   把先跑的整批题**覆盖**掉（实测 state 里 20 条全是 U6 的题，U5 的题一条不剩，
+    #   而报告截图还是 U5 的 → "图上是 sit in the sun、文字却说 App 是 moon"）。
+    _scope_unit = ""
+    try:
+        from common.logger import get_current_unit as _gcu2
+        _scope_unit = str(_gcu2() or "")
+    except Exception:
+        _scope_unit = ""
+    _scope_key = f"{_current_module_name}|{_current_stage_name}|{_scope_unit}|{big or ''}"
     _map_key = f"{_scope_key}#{qid}"
     if _map_key in _qid_map:
         qid = _qid_map[_map_key]
@@ -3490,6 +3933,44 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
             qid = _new_qid
         _qid_map[_map_key] = qid
     _qid_owner[qid] = _scope_key
+
+    # ★ 2026-09-20 修复「错题报告写了题号、却没有定位截图」：
+    #   旧逻辑只在「本次上报当场判 False」时才截图。可口语训练这类模块的大量小题
+    #   在基础层是 None（未判定，比如小题目内容被判"仅有 UI 标签"），要等**收尾时**
+    #   脚本层折算（_fold_script_layer）才翻成 False —— 那一刻 App 早就翻页了，
+    #   再想补图只能拍到下一题的画面，于是错题报告里这几道题一张图都没有（实测
+    #   U6 第3大题第2~5小题就是这个情况）。
+    #   改法：趁 App 正停留在这道题的画面上，只要这一题还没有截图就抓一张留存。
+    #   之后无论判定怎么变（界面层→脚本层折算/缓存复用），错题报告都拿得到定位图。
+    _auto_shot = ""
+    _prev_rec = _inspection_state.setdefault("questions", {}).get(qid)
+    if _prev_rec and _prev_rec.get("screenshot"):
+        _auto_shot = _prev_rec["screenshot"]          # 已有图就复用，不重复拍
+    else:
+        try:
+            # ★ 等 0.8s：页面内容（排序项/选项）渲染有延迟，立即截图会截到空白
+            time.sleep(0.8)
+            _shot_dir = PROJECT_ROOT / "screenshots"
+            _shot_dir.mkdir(parents=True, exist_ok=True)
+            # ★ 文件名带大题号：不同大题的第1小题（Q02-01/Q03-01）原本都叫 q001，
+            #   同一秒内会互相覆盖。
+            _seq = f"b{big:02d}q{qidx:03d}" if big else f"q{qidx:03d}"
+            _auto_shot = (f"auto_{_current_module_name or 'mod'}_{_seq}_"
+                          f"{datetime.now().strftime('%H%M%S')}.png")
+            _conn = _connect_device()
+            if _conn is not None:
+                for _r in range(3):
+                    try:
+                        _conn.screenshot(str(_shot_dir / _auto_shot))
+                        break
+                    except OSError:
+                        if _r >= 2:
+                            raise
+                        time.sleep(0.5)
+            else:
+                _auto_shot = ""
+        except Exception:
+            _auto_shot = ""
 
     # 去重 key 与最终 qid 保持一致（否则重编号的题在分模块统计里会算两次）
     _qid = qid
@@ -3524,6 +4005,11 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
         "module": _current_module_name,
         "stage": _current_stage_name,
         "module_qno": _current_module_qno,
+        # ★ 2026-09-20 新增：这道题属于哪个单元。脚本自检问题里写的是
+        #   "U4 第4大题 第3小题"这种位置，要归位到题卡就必须知道题目自己的单元；
+        #   写入这一刻正是该单元在跑，取 state["unit"] 最可靠（事后猜多个单元的
+        #   运行会张冠李戴）。
+        "_unit": _inspection_state.get("unit", ""),
         **_loc,
         # 六维判定（旧格式，兼容已有消费者）
         "ai_stem": dims["stem"], "ai_content": dims["content"],
@@ -3535,6 +4021,15 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
         "stem_reason": reasons["stem"], "content_reason": reasons["content"],
         "image_reason": reasons["image"], "answer_reason": reasons["answer"],
         "audio_reason": reasons["audio"], "post_error_reason": reasons["post_error"],
+        # ★ 2026-09-17：修改建议（trace_engine 直接读取，避免"建议=原因"重复文案）
+        # ★ 2026-09-20：改用 .get() —— 这条记录是"一道题的价值全部所在"，
+        #   不允许因为某个建议键被误删（曾用 _sugg.pop("stem")）就整条写不进去。
+        #   六个维度名不齐只会让某条建议为空，不该让整题消失。
+        "stem_suggestion": _sugg.get("stem", ""), "content_suggestion": _sugg.get("content", ""),
+        "image_suggestion": _sugg.get("image", ""), "answer_suggestion": _sugg.get("answer", ""),
+        "audio_suggestion": _sugg.get("audio", ""), "post_error_suggestion": _sugg.get("post_error", ""),
+        # ★ 控件坐标：红框精准定位 + 出错区域特写（截图"截到问题上"的关键数据）
+        "_boxes": boxes,
         # ★ 审查体系改造：新结构——统一结论字典（旧字段兼容保留，迁移期并存）
         #   每个维度含 status(pass/fail/na) + detail(具体结论文本)
         #   na = 不适用（该维度无需检查），前端不渲染
@@ -3586,6 +4081,338 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
             _live_regen_error_report()
         except Exception:
             pass
+
+
+def _text_like(app: str, script: str) -> bool:
+    """App 提取文字与脚本文字是否"实质相同"（容忍空格/标点/HTML 实体差异）。
+
+    ★ 2026-09-17 新增：题干比对必须"同层级比同层级"。
+      口语训练页面顶部是大题说明（caption），脚本题面是小微题面（stem），
+      旧实现混着比 → 整单元误报"题干与脚本不符"。
+    """
+    import html as _html
+    def _n(s):
+        s = _html.unescape(str(s or ""))
+        s = re.sub(r"[\s\u00a0]+", "", s)
+        s = s.replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'")
+        return s
+    # ★ 2026-09-23：先剥「句型提示：/例句：」标签，否则 App「句型提示：Hello, this is ...」
+    #   与脚本「Hello, this is ...」会被判成不同（整大题假错）。
+    a, b = _n(_strip_prompt_label(app)), _n(_strip_prompt_label(script))
+    if not a or not b:
+        return False
+    if a in b or b in a:
+        return True
+    import difflib as _dl
+    return _dl.SequenceMatcher(None, a, b).ratio() >= 0.85
+
+
+def _norm_for_cmp(s: str) -> str:
+    """比对用归一化：HTML 实体、空白、引号/常见标点全半角差异都不算差异。"""
+    import html as _html
+    s = _html.unescape(str(s or ""))
+    s = re.sub(r"[\s\u00a0]+", "", s)
+    for _a, _b in (("“", '"'), ("”", '"'), ("‘", "'"), ("’", "'"),
+                   ("，", ","), ("。", "."), ("：", ":"), ("；", ";"),
+                   ("？", "?"), ("！", "!"), ("、", ","), ("（", "("), ("）", ")")):
+        s = s.replace(_a, _b)
+    return s
+
+
+def _strip_leading_index(s: str) -> str:
+    """去掉 App 侧常见的前导序号："1." / "1、" / "(1)" / "第1题" / "①" 等。"""
+    return re.sub(r"^(?:第?\d+\s*[、.．:：)）]?|[（(]\d+[)）]|[①-⑳])+", "", s).strip()
+
+
+def _text_same_strict(app: str, script: str) -> bool:
+    """题目内容"逐字一致"的**严格**比对（用户要求：两者必须逐字一致）。
+
+    只容忍：HTML 实体、空白、引号/标点全半角、App 侧前导序号。
+    **任何字母级差异都判不一致**。
+
+    为什么不能沿用 _text_like 的 0.85 相似度：
+      口语训练朗读题用的是**最小对立对**（mum moon / meet meat / nose note /
+      nut net / pet pig），差一个字母就是另一道题。实测
+      "nose nate" vs "nose note" 相似度 0.89 ≥ 0.85 → 会被判成"一致"，
+      于是**脚本把小题目内容写错也永远查不出来**（正是用户反馈的问题）。
+      长句同理：改一个词（see→saw）相似度通常 >0.9，也会被漏掉。
+    说明：_text_like（宽容模式）保留给"大题说明↔caption"这类长文本比对，
+      那种场景有渲染/换行差异，需要容忍度。
+    """
+    # ★ 2026-09-23：同 _text_like —— 先剥「句型提示：/例句：」标签再严格比对
+    a = _strip_leading_index(_norm_for_cmp(_strip_prompt_label(app)))
+    b = _strip_leading_index(_norm_for_cmp(_strip_prompt_label(script)))
+    if not a or not b:
+        return False
+    return a == b
+
+
+_GRADE_FILE_KW = {
+    "一年级上册": ("一上", "一年级上"), "一年级下册": ("一下", "一年级下"),
+    "二年级上册": ("二上", "二年级上"), "二年级下册": ("二下", "二年级下"),
+    "三年级上册": ("三上", "三年级上"), "三年级下册": ("三下", "三年级下"),
+    "四年级上册": ("四上", "四年级上"), "四年级下册": ("四下", "四年级下"),
+    "五年级上册": ("五上", "五年级上"), "五年级下册": ("五下", "五年级下"),
+    "六年级上册": ("六上", "六年级上"), "六年级下册": ("六下", "六年级下"),
+}
+_VERSION_FILE_KW = {
+    "湘少": ("湘少",), "湘鲁": ("湘鲁", "新湘鲁"), "教科": ("教科",),
+    "人教": ("人教", "PEP", "pep"), "外研": ("外研",), "译林": ("译林",),
+    "教研": ("教研",),
+}
+
+
+def _script_matches_run(docx: str, version: str = "", grade: str = "") -> str:
+    """★ 2026-09-20 新增（用户反馈：跑六上 U6 却匹配到五上 U4-7 脚本，
+    把根本没测的 U4/U7 题目错误写进日志）。
+
+    校验脚本文件名的版本/年级关键词与本次实跑是否一致。
+    返回 "" = 匹配或无法判断（文件名不含任何版本/年级关键词时放行）；
+    返回非空 = 不适配原因（调用方应跳过脚本比对并打日志）。
+    """
+    name = str(docx or "")
+    if grade:
+        _kws = _GRADE_FILE_KW.get(str(grade).strip())
+        if _kws and not any(k in name for k in _kws):
+            for _g, _ks in _GRADE_FILE_KW.items():
+                if _g != str(grade).strip() and any(k in name for k in _ks):
+                    return f"脚本是「{_g}」，本次实跑是「{grade}」"
+    if version:
+        for _v, _ks in _VERSION_FILE_KW.items():
+            if _v in str(version) and not any(k in name for k in _ks):
+                for _v2, _ks2 in _VERSION_FILE_KW.items():
+                    if _v2 != _v and any(k in name for k in _ks2):
+                        return f"脚本是「{_v2}」版，本次实跑是「{version}」"
+    return ""
+
+
+def _set_script_provenance(module: str, docx: str = "", matched=None, reason: str = ""):
+    """★ 2026-09-21：记录「本次到底拿哪份脚本比对的、这份脚本是否适配本次运行」。
+
+    用户连续两轮反馈"没测过的题也乱报""是不是故意输出这些内容"，根子都是
+    **报告里看不出结论是拿哪份脚本比出来的**。有了溯源，报告/前端就能明确写：
+      - 比对脚本：xxx.docx（版本/年级匹配 ✓）
+      - ⚠ 未做脚本层比对：脚本是「五年级上册」，本次实跑是「六年级上册」
+    旧状态没有这个字段 → 报告显示"未记录（旧版本产物）"，提示人工复核。
+    """
+    try:
+        if not module:
+            return
+        p = _inspection_state.setdefault("_script_provenance", {})
+        cur = p.get(module) or {"file": "", "matched": False, "reason": ""}
+        if docx and not cur.get("file"):
+            cur["file"] = docx
+        if matched is True:
+            cur["matched"] = True
+            cur["reason"] = ""
+        elif matched is False and not cur.get("matched"):
+            # 已有 True 的不降级（同一模块可能有多条比对路径，一条过即可信）
+            cur["matched"] = False
+            cur["reason"] = reason or cur.get("reason", "")
+        elif reason and not cur.get("reason"):
+            cur["reason"] = reason
+        p[module] = cur
+    except Exception:
+        pass
+
+
+def _run_units() -> set:
+    """本次实跑的单元集合（"6" → {6}；"2,4"/"2-4" → {2,4}；解析失败 → 空集=不过滤）"""
+    try:
+        _raw = str(_inspection_state.get("unit", "") or "")
+        return {int(x) for x in re.findall(r"\d+", _raw)}
+    except Exception:
+        return set()
+
+
+def _filter_issues_by_unit(issues: list) -> list:
+    """★ 2026-09-20（用户要求）只保留与本次实跑单元相关的脚本自检问题。
+
+    - location 带 U<单元号>：单元号不在本次实跑范围 → 丢弃
+      （"我测试的不包括你这些题目的单元，你也给我输出这些有错误题目的单元"）
+    - location 不带单元号（"全文"等结构性问题）：保留（它同样影响本次在跑的题）
+    """
+    _units = _run_units()
+    if not _units or not isinstance(issues, list):
+        return issues if isinstance(issues, list) else []
+    out = []
+    for it in issues:
+        if not isinstance(it, dict):
+            continue
+        m = re.search(r"U(\d+)", str(it.get("location") or ""))
+        if m and int(m.group(1)) not in _units:
+            continue
+        out.append(it)
+    return out
+
+
+def _log_script_issues(mod: str, docx: str, topn: int = 8) -> list:
+    """跑「确定性脚本完整性自检」并把问题写进前端日志（零 LLM 成本）。
+
+    ★ 2026-09-20 新增。用户反馈"脚本有问题没检查出来"，落点在这里：
+      真正要保证与 App 一致的脚本字段只有三类——
+        ① 题目内容（题干/小题题面/参考答案）
+        ② 关键词（判分锚点，与参考答案必须自洽）
+        ③ 基本知识性（知识点不能是 / 占位、不能有知识性错误）
+      加上结构性前提：题号连续、字段名统一。
+      这些都能确定性判定，不必花 LLM 的钱，也不会被 text[:3000] 截断。
+    """
+    try:
+        from src.script_reviewer import check_script_completeness
+        from src.review_agent import ReviewAgent, ReviewConfig
+        # ★ 2026-09-20：版本/年级守卫——五上脚本不能拿去比对六上的运行
+        _mismatch = _script_matches_run(docx,
+                                        _inspection_state.get("version", ""),
+                                        _inspection_state.get("grade", ""))
+        if _mismatch:
+            log_msg(f"⛔ {mod}：{_mismatch} → 跳过脚本自检"
+                    f"（拿错年级/版本的脚本检查会报出根本没测过的题）", "warning")
+            _set_script_provenance(mod, docx, False, _mismatch)
+            return []
+        _p = PROJECT_ROOT / "uploads" / docx
+        if not _p.exists():
+            return []
+        _key = "completeness::" + docx
+        if _key not in _SCRIPT_CACHE:
+            _ag = ReviewAgent(ReviewConfig(docx_path=str(_p), unit=0,
+                                           screenshot_dir="", verbose=False))
+            _SCRIPT_CACHE[_key] = _ag.script_questions or []
+        qs = _SCRIPT_CACHE[_key]
+        if not qs:
+            return []
+        issues = check_script_completeness(str(_p), qs) or []
+        # ★ 2026-09-20：只保留本次实跑单元的问题（U7/U4 的错误不该出现在 U6 的运行里）
+        _n_all = len(issues)
+        issues = _filter_issues_by_unit(issues)
+        if _n_all > len(issues):
+            log_msg(f"ℹ {mod} 脚本自检：{_n_all - len(issues)} 处问题属于其他单元，"
+                    f"已按「只查在跑单元」过滤", "info")
+        if not issues:
+            return []
+        _hi = sum(1 for i in issues if i.get("severity") == "高")
+        log_msg(f"⚠ {mod} 脚本自检发现 {len(issues)} 处问题（高 {_hi} 处）", "warning")
+        for i in issues[:topn]:
+            log_msg(
+                f"   ❗[{i.get('severity')}] {i.get('location')}："
+                f"{str(i.get('detail') or '')[:80]}"
+                + (f" → {str(i.get('suggestion') or '')[:60]}" if i.get("suggestion") else ""),
+                "warning",
+                [{"field": "脚本问题", "type": "text_mismatch",
+                  "expected": i.get("suggestion") or "（按脚本规范修正）",
+                  "actual": i.get("quote") or "",
+                  "diff": f"{i.get('type')}（{i.get('location')}）：{i.get('detail')}"}],
+            )
+        if len(issues) > topn:
+            log_msg(f"   … 另有 {len(issues) - topn} 处未逐条列出（详见报告）", "warning")
+        _inspection_state.setdefault("_script_issues", {})[mod] = issues
+        return issues
+    except Exception as e:
+        log_msg(f"⚠ {mod} 脚本自检异常: {str(e)[:100]}", "warning")
+        return []
+
+
+def _ellipsis(s, n: int = 60) -> str:
+    """截断到 n 字并在末尾加「…」，绝不把句子切得看不出意思。
+
+    ★ 2026-09-20：报告里的"改进建议"之前用 `[:40]` 硬切，把脚本原文截成
+      「…每小题有10秒钟的准备时间，15秒」这种半句，检查人员照着改都不知道
+      原文到哪结束。宁可给「完整原文 + 省略号」，也不要给断句。
+    """
+    _s = re.sub(r"\s+", " ", str(s or "")).strip()
+    if len(_s) <= n:
+        return _s
+    return _s[:n].rstrip("，,、；;。.：: ") + "…"
+
+
+def _text_diff_minor(app: str, script: str) -> bool:
+    """★ 2026-09-20 新增（用户反馈"有一点不符就判不通过不太好"）：
+    判断两段文字的差异是否**只**属于不影响作答的格式差异。
+
+    判为 minor（返回 True，即不应判不通过）的差异：
+      标点全半角/有无、大小写、空格/换行、连字符、引号样式、前后缀标点。
+    判为实质差异（返回 False，影响学生朗读/作答 → 判不通过）：
+      任何字母/数字/汉字级别的不同（哪怕一个字母：nose/note、take/bring）。
+
+    实现：在 _norm_for_cmp（实体/空白/全半角标点）基础上，
+    再去掉全部非字母数字汉字字符并统一小写 → 相等即 minor。
+    """
+    import html as _html
+    def _core(s: str) -> str:
+        s = _html.unescape(str(s or ""))
+        # ★ 2026-09-23：标签（句型提示/例句）不算差异
+        s = _norm_for_cmp(_strip_prompt_label(s)).lower()
+        return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", s)
+    return _core(app) == _core(script)
+
+
+# ★ 2026-09-23 新增：App 题面里的「句型提示：/例句：」标签，脚本 stem 里没有。
+#   实测教科五上 U5 第3大题：App 显示「3. 句型提示：Hello, this is ...」，
+#   脚本 stem 是「Hello, this is ...」——旧比对把标签算成实质差异，
+#   整个大题被判"小题目内容与脚本不符"（用户反馈的假错之一）。
+_PROMPT_LABEL_RE = re.compile(
+    r"^\s*(?:句型提示|参考句型|句型|例句|示例|sentence\s*pattern)\s*[:：]\s*", re.I)
+
+
+def _strip_prompt_label(s: str) -> str:
+    """去掉 App 侧题面的「句型提示：/例句：」等标签（多重标签也剥）。"""
+    _s = str(s or "")
+    for _ in range(3):          # 防御 "例句：句型提示：X"
+        _n = _PROMPT_LABEL_RE.sub("", _s, count=1)
+        if _n == _s:
+            break
+        _s = _n
+    return _s.strip()
+
+
+def _realign_script_unit(sq_list, cur, u_cur, big, qidx, app_text):
+    """★ 2026-09-23：按 App 实际内容纠正"脚本小题命中了别的单元"。
+
+    背景（用户报"乱判 App 与脚本不符"）：连跑多个单元时 `state["unit"]` 是范围
+    （"5-6"），旧实现固定取首段 5 → U6 的所有题都拿 U5 的脚本段落比对，
+    实测 App「What will I do in space?」被写成"脚本应为「The quick queen is
+    quite quiet.」"，整个第2大题 5 道小题全假错。
+
+    修法：先看当前命中的脚本小题是否与 App 文字对得上；对不上，就去**别的单元**
+    找同号小题（big / stage_idx 相同）里与 App 文字逐字一致的那道 → 以它为准。
+    找不到更合适的就原样返回（不能凭空判错，也不能凭空放过）。
+
+    返回纠正后的脚本小题对象。
+    """
+    if cur is None or not sq_list or not app_text:
+        return cur
+    _canon = lambda t: _strip_prompt_label(_norm_for_cmp(t))
+    _app = _canon(app_text)
+    if not _app:
+        return cur
+
+    def _hit(q) -> bool:
+        for _t in (getattr(q, "stem", "") or "",
+                   getattr(q, "sentence_pattern", "") or "",
+                   getattr(q, "caption", "") or ""):
+            _c = _canon(_t)
+            if _c and (_c == _app or _c in _app or _app in _c):
+                return True
+        return False
+
+    if _hit(cur):
+        return cur
+    _cur_unit = getattr(cur, "unit", None)
+    best = None
+    for s in sq_list:
+        try:
+            if getattr(s, "unit", None) == _cur_unit:
+                continue        # 当前单元已判过不合，不必重看
+            if big and int(getattr(s, "big", 0) or 0) != int(big):
+                continue
+            if int(getattr(s, "stage_idx", 0) or 0) != int(qidx):
+                continue
+        except Exception:
+            continue
+        if _hit(s):
+            if best is not None:
+                return cur      # 多个单元都命中 → 有歧义，不做纠正（宁可不判）
+            best = s
+    return best if best is not None else cur
 
 
 def _fmt_reason(field: str, diff: str, verdict: str) -> str:
@@ -3912,24 +4739,44 @@ def _score_breakdown(qd: dict) -> dict:
     }
 
 
-def _ensure_marked(qid: str, qd: dict, checks: list) -> str:
-    """生成红框标注图（同学C的 draw_mark），输出到 outputs/web/，已存在则复用（缓存）。
-    返回相对文件名（前端拼 /api/screenshot/<name>）；失败返回空串。"""
+def _ensure_marked(qid: str, qd: dict, checks: list):
+    """生成红框标注图 + 出错区域特写图（同学C的 draw_mark / crop_evidence）。
+
+    输出到 outputs/web/，已存在则复用（缓存）。返回 (标注图名, 特写图名)；失败返回 ("", "")。
+
+    ★ 2026-09-17：缓存前缀改为 marked_v2_/crop_v2_。
+      旧版 draw_mark 在没有真实坐标时会画一个固定占位框（框到手机状态栏上），
+      按文件名缓存会导致"改了标注逻辑但界面还是旧的假框"→ 必须换前缀使旧图失效。
+    """
     try:
         shot = qd.get("screenshot", "")
-        if not shot or not checks:
-            return ""
-        out_name = f"marked_{shot}"
-        out_path = PROJECT_ROOT / "outputs" / "web" / out_name
-        if out_path.exists():
-            return out_name
+        if not shot:
+            return "", ""
+        web_dir = PROJECT_ROOT / "outputs" / "web"
+        out_name = f"marked_v2_{shot}"
+        out_path = web_dir / out_name
+        crop_name = f"crop_v2_{shot}"
+        crop_path = web_dir / crop_name
+        if out_path.exists() and crop_path.exists():
+            return out_name, crop_name
         eng = _get_trace_engine()
         if not eng:
-            return ""
-        eng.draw_mark(shot, checks, str(out_path))
-        return out_name if out_path.exists() else ""
+            return "", ""
+        if not out_path.exists():
+            if checks:
+                eng.draw_mark(shot, checks, str(out_path))
+            else:
+                out_name = ""
+        # 出错区域特写：没有真实坐标时 crop_evidence 返回 ""（不硬裁），前端回退整图
+        if not crop_path.exists() and checks:
+            if not eng.crop_evidence(shot, checks, str(crop_path)):
+                crop_name = ""
+        elif not checks:
+            crop_name = ""
+        return (out_name if out_name and out_path.exists() else "",
+                crop_name if crop_name and crop_path.exists() else "")
     except Exception:
-        return ""
+        return "", ""
 
 
 def _enrich_inspect_state(state: dict):
@@ -3944,7 +4791,9 @@ def _enrich_inspect_state(state: dict):
         try:
             trace = eng.generate(qid, qd)
             qd["_trace"] = trace
-            qd["_marked"] = _ensure_marked(qid, qd, trace.get("checks", []))
+            _mk, _cr = _ensure_marked(qid, qd, trace.get("checks", []))
+            qd["_marked"] = _mk          # 红框标注图（有真实坐标才画框）
+            qd["_crop"] = _cr            # 出错区域特写图（截到问题所在的那几行）
         except Exception:
             pass
 
@@ -3970,6 +4819,12 @@ def api_inspect_state():
         "module": _inspection_state.get("module", ""),
         "_modules_total": _inspection_state.get("_modules_total", {}),
         "_reuse_info": _inspection_state.get("_reuse_info", ""),
+        # ★ 2026-09-20：脚本自检问题（答案↔关键词不一致 / 知识点占位 / 字段名不统一）
+        #   必须透出给前端——此前只写进日志，审查结果区看不到，检查人员会以为
+        #   "脚本没问题"（用户反馈："脚本有问题你没检查出来"）。
+        "_script_issues": _inspection_state.get("_script_issues", {}),
+        # ★ 2026-09-21：脚本溯源（比对脚本文件名 + 是否适配本次版本/年级）
+        "_script_provenance": _inspection_state.get("_script_provenance", {}),
     }
     try:
         _enrich_inspect_state(state)
@@ -5091,6 +5946,17 @@ def _qreview_to_state(module: str, docx: str, unit, r, stage: str = "", q=None) 
         "image": _cr(r.image_check), "answer": _cr(r.answer_check),
         "audio": _cr(r.audio_check), "post_error": _cr(r.post_error_check),
     }
+    # ★ 2026-09-17：把 LLM 给出的「建议修改」原样带到错题卡。
+    #   旧实现没带 suggestion，trace_engine 只能拼一句
+    #   "请检查并修正「题干」维度：{原因}" → 卡片上"原因"和"建议"一字不差，
+    #   检查人员看不出"要改什么"（用户反馈"不够直白、太长了"）。
+    def _sug(_c):
+        return ((getattr(_c, "suggestion", "") or "").strip())[:220] if _c is not None else ""
+    _sugg = {
+        "题干": _sug(r.stem_check), "内容": _sug(r.content_check),
+        "图片": _sug(r.image_check), "答案": _sug(r.answer_check),
+        "音频": _sug(r.audio_check), "答错检查": _sug(r.post_error_check),
+    }
     checked = [v for v, _, _ in dims.values() if v is not None]
     passed = [v for v, _, _ in dims.values() if v is True]
     overall = None
@@ -5138,6 +6004,11 @@ def _qreview_to_state(module: str, docx: str, unit, r, stage: str = "", q=None) 
         "stem_reason": dims["stem"][1], "content_reason": dims["content"][1],
         "image_reason": dims["image"][1], "answer_reason": dims["answer"][1],
         "audio_reason": dims["audio"][1], "post_error_reason": dims["post_error"][1],
+        # ★ 2026-09-17：建议字段（trace_engine 直接读，避免"建议=原因"的重复文案）
+        "stem_suggestion": _sugg["题干"], "content_suggestion": _sugg["内容"],
+        "image_suggestion": _sugg["图片"], "answer_suggestion": _sugg["答案"],
+        "audio_suggestion": _sugg["音频"], "post_error_suggestion": _sugg["答错检查"],
+        "_suggestions": _sugg,
         "overall_passed": overall,
         "overall_score": round(len(passed) / max(len(checked), 1), 2) if checked else 0.0,
         # ★ 题干显示实际内容（脚本题 stem；口语训练朗读题为多句子）
@@ -5157,6 +6028,7 @@ def _qreview_to_state(module: str, docx: str, unit, r, stage: str = "", q=None) 
             "image_reason": dims["image"][1], "answer_reason": dims["answer"][1],
             "audio_reason": dims["audio"][1], "post_error_reason": dims["post_error"][1],
             "knowledge": _kb_ok, "knowledge_reason": _kb_sum,
+            "suggestions": dict(_sugg),
             "reason": _reason_summary,
             "overall_passed": overall,
             "overall_score": round(len(passed) / max(len(checked), 1), 2) if checked else 0.0,
@@ -5192,6 +6064,98 @@ def _match_basic_qid(module: str, q, rr, stage: str = "") -> str:
     return ""
 
 
+def _auto_qid_of_script_record(rec: dict) -> str:
+    """★ 2026-09-20 新增：从一条【脚本层记录】反推它在基础层对应的 auto-qid。
+
+    用途：复用历史审查结论时，旧缓存可能只存了 `{模块}-脚本-Qnn` 这种独立记录
+    （上一次运行 App 侧题目没登记进去时就是这样）。若直接回灌，就会出现
+    「同一道题既有 auto-Q.. 又有 -脚本-Q..」的重复条目，而且 auto- 记录拿不到
+    脚本层结论。这里按记录自带的定位信息找回它的基础层身份。
+
+    口语训练记录 progress 形如 "U4·第2大题·第4小题" → auto-Q02-04；
+    其他模块形如 "Q07" → auto-Q007。取不到返回 ""（当作真正的脚本题，独立保留）。
+    """
+    _prog = str((rec or {}).get("progress") or "")
+    m = re.search(r"第0*(\d+)大题[·\-]?第0*(\d+)小题", _prog)
+    if m:
+        return f"auto-Q{int(m.group(1)):02d}-{int(m.group(2)):02d}"
+    m2 = re.search(r"\bQ0*(\d+)\b", _prog)
+    if m2:
+        return f"auto-Q{int(m2.group(1)):03d}"
+    _i = (rec or {}).get("idx")
+    if isinstance(_i, int) and _i > 0:
+        return f"auto-Q{_i:03d}"
+    return ""
+
+
+def _check_passage_grammar(module: str, unit, agent) -> list:
+    """★ 2026-09-20 新增（用户要求）：检查题目篇章（阅读短文等大段英文）的语法错误。
+
+    用户原话："检查题目篇章是否有语法错误，有的话指出就行，没有就不需要输出什么内容"
+      → 没有错误时**零输出**（不写日志、不产生问题条目），有错误才报。
+    只查客观语法/用词错误（时态、主谓一致、冠词、介词、搭配、拼写），
+    不评难度/题材/风格；没把握的不报（避免 LLM 风格化误报刷屏）。
+    同一段短文被同大题多个小题共享 → 按文本去重，只查一次。
+    结果结构故意与 `_script_issues` 条目一致（severity/type/location/issue/suggestion），
+    直接 extend 进 `_script_issues[module]`，复用报告与前端已有的透出链路。
+    """
+    out = []
+    try:
+        llm = getattr(agent, "llm", None)
+        if llm is None:
+            return []
+        _seen = set()
+        for q in getattr(agent, "script_questions", []) or []:
+            p = (getattr(q, "passage", "") or "").strip()
+            if len(p) < 40 or p in _seen:      # 太短的不算篇章
+                continue
+            _seen.add(p)
+            _big = getattr(q, "big", 0) or 0
+            _loc = f"U{unit} 第{_big}大题" if _big else f"U{unit}"
+            prompt = (
+                "下面是中国小学英语题目中的一段短文（呈现给学生的篇章）。"
+                "请只检查其中客观存在的英语语法/用词错误（时态、主谓一致、冠词、介词、"
+                "搭配、拼写等），不要评论难度、题材、风格；没把握的地方不要报。\n"
+                "若没有语法错误，只输出 NONE。\n"
+                "若有错误，只输出 JSON 数组："
+                '[{"orig":"原句片段","fix":"改正后","why":"错误说明(中文,30字内)"}]\n'
+                f"短文：\n{p}"
+            )
+            raw = (llm.ask(prompt) or "").strip()
+            if not raw:
+                continue
+            # "NONE"（大小写/带句号）→ 无错误，零输出
+            if re.match(r"^none\b", raw.splitlines()[0].strip(), re.I):
+                continue
+            _m = re.search(r"\[.*\]", raw, re.DOTALL)
+            if not _m:
+                continue
+            try:
+                data = json.loads(_m.group())
+            except Exception:
+                continue
+            if not isinstance(data, list):
+                continue
+            for it in data:
+                if not isinstance(it, dict):
+                    continue
+                orig = str(it.get("orig") or "").strip()
+                fix = str(it.get("fix") or "").strip()
+                why = str(it.get("why") or "").strip()
+                if not (orig or fix):
+                    continue
+                out.append({
+                    "severity": "高", "type": "篇章语法错误",
+                    "location": _loc,
+                    "issue": (f"「{orig[:60]}」→ 应为「{fix[:60]}」"
+                              + (f"（{why[:60]}）" if why else "")),
+                    "suggestion": fix[:120],
+                })
+    except Exception as e:
+        log_msg(f"⚠ {module} 篇章语法检查失败（不影响其他结论）: {e}", "warning")
+    return out
+
+
 def _run_llm_script_review(module: str, docx: str, version: str, unit, stage: str = ""):
     """用 ReviewAgent 对照脚本做 LLM 知识性审查（文字核对 + 有截图时图片识别），
     结果写入 _inspection_state["questions"]（前端六维面板实时展示）。
@@ -5221,7 +6185,22 @@ def _run_llm_script_review(module: str, docx: str, version: str, unit, stage: st
         }.get(module, (module,))
         if not any(k in docx for k in _mod_kws):
             log_msg(f"ℹ {module}：脚本「{docx}」不是{module}模块的脚本，无匹配脚本 → 仅做基础完整性检查", "info")
+            _set_script_provenance(module, docx, False, f"脚本不是{module}模块的脚本")
             return
+        # ★ 2026-09-20：版本/年级守卫——脚本年级/版本与本次实跑不符时**绝不比对**。
+        #   实测：跑教科六上 U6 却自动匹配到「口语训练新教科五上U4-7」→ LLM 拿
+        #   五上 U4-U7 的题干跟六上 App 逐题硬比 → 大面积"不符"全是假错，
+        #   还把 U4/U7（根本没测的单元）的问题写进日志（用户反馈原话：
+        #   "这个根本就没测试到这个题目，你就乱写在日志里面"）。
+        _mismatch = _script_matches_run(docx,
+                                        _inspection_state.get("version", ""),
+                                        _inspection_state.get("grade", ""))
+        if _mismatch:
+            log_msg(f"⛔ {module}：{_mismatch} → 跳过脚本比对（避免拿错脚本乱报没测过的题）；"
+                    f"请上传本次版本/年级对应的脚本后再测", "warning")
+            _set_script_provenance(module, docx, False, _mismatch)
+            return
+        _set_script_provenance(module, docx, True)
     except Exception:
         pass
     _stage_label = f"·{stage}" if stage else ""
@@ -5233,38 +6212,110 @@ def _run_llm_script_review(module: str, docx: str, version: str, unit, stage: st
     _index = load_script_review_index()
     _docx_hash = _script_file_hash(docx_path)
     _cached = _index.get(_index_key, {})
-    if _cached.get("status") == "done" and _cached.get("script_hash") == _docx_hash:
+    # ★ 2026-09-23：缓存有效性 = 脚本未变 **且** LLM 未换（见 _current_llm_signature）。
+    #   只比 script_hash 时，换模型后旧单元会静默复用旧结论（"换了模型结论却一样"）。
+    _cur_llm_sig = _current_llm_signature()
+    _cached_llm_sig = _cached.get("llm_signature", "")
+    if (_cached.get("status") == "done" and _cached.get("script_hash") == _docx_hash
+            and not _script_cache_reusable(_cached, _docx_hash, _cur_llm_sig)):
+        _why = (f"缓存来自 {_cached_llm_sig}" if _cached_llm_sig else "旧缓存未记录模型")
+        log_msg(f"ℹ {module}（{_unit_key}）{_why}，当前为 {_cur_llm_sig} → "
+                f"本次重新审查（不复用旧结论）", "info")
+    if _script_cache_reusable(_cached, _docx_hash, _cur_llm_sig):
         _reuse_msg = f"{module}（{_unit_key}）已于 {_cached.get('reviewed_at','?')} 审查过，脚本未变，本次复用结论"
         log_msg(f"ℹ {_reuse_msg}", "info")
         _inspection_state["_reuse_info"] = _reuse_msg
         # 从缓存结果文件加载历史审查结论，合并到 _inspection_state["questions"]
         _cache_path = PROJECT_ROOT / "data" / "script_review_cache" / f"{_index_key.replace('/','_').replace(' ','')}.json"
+        # ★ 2026-09-20 修复（索引说"审查过"、缓存文件却不在 → 静默什么都不做）：
+        #   旧结构是 try/except/else，`else: return` 只要"没抛异常"就执行 ——
+        #   而 `if _cache_path.exists():` 为 False 时 try 正常结束、不抛异常，
+        #   于是走进 else 直接 return：既不加载历史结论、也不做 LLM 审查，
+        #   日志还打着"本次复用结论"，脚本层检查**一条结果都没有**（静默失效，
+        #   实测 data/script_review_cache/ 为空但索引里 status=done）。
+        #   根因：索引与缓存文件是两次独立写盘，而写缓存那段是 `except: pass`
+        #   （写了没写成功都不知道）→ 出现"索引有、内容无"的坏状态。
+        #   这里改为显式记录"是否真的加载成功"，没加载到就继续往下做完整审查。
+        _cache_loaded = False
         try:
-            import json
             if _cache_path.exists():
                 _cached_qs = json.loads(_cache_path.read_text(encoding="utf-8"))
-                if isinstance(_cached_qs, dict):
+                if isinstance(_cached_qs, dict) and _cached_qs:
                     # ★ 审查体系改造：合并脚本层进本轮 fresh 基础记录，而非整体覆盖。
                     #   重跑模块后 auto-* 基础记录是新的 UI 证据，脚本层复用缓存结论；
                     #   独立脚本记录直接恢复。
+                    # ★ 2026-09-20 修复（重跑后同一题出现两条）：
+                    #   旧缓存可能只存了 `{模块}-脚本-Qnn`（上一次运行时 App 侧题目
+                    #   根本没登记进去，正是"20 题只剩 4 题"那个 bug 的产物）。
+                    #   原样回灌会让同一道题同时有 auto-Q.. 和 -脚本-Q.. 两条，
+                    #   而且 auto- 记录拿不到脚本层结论（报告里同一题出现两遍、
+                    #   一遍只有脚本结论一遍只有界面结论）。
+                    #   现在先反推缓存记录对应的 auto-qid：命中本轮 fresh 基础记录
+                    #   → 合并脚本层；命中不了才是真正"App 没跑到"的脚本题 → 独立保留。
                     _merged_cache = 0
                     for _k, _v in _cached_qs.items():
-                        _cur = _inspection_state["questions"].get(_k)
-                        if _cur is not None and isinstance(_v, dict) \
-                                and isinstance(_v.get("script"), dict) and _k.startswith("auto-"):
-                            _cur["script"] = _v["script"]
-                            _cur["layer"] = "basic+script"
-                            if _v.get("note"):
-                                _cur["note"] = _v["note"]
-                            _merged_cache += 1
+                        if not isinstance(_v, dict):
+                            continue
+                        _tgt = _k if _k.startswith("auto-") else _auto_qid_of_script_record(_v)
+                        _cur = _inspection_state["questions"].get(_tgt) if _tgt else None
+                        # 模块必须一致（防止把别的模块/单元的同号题合并进来）
+                        if _cur is not None and module and _cur.get("module") \
+                                and _cur.get("module") != module:
+                            _cur = None
+                        if _cur is not None:
+                            if isinstance(_v.get("script"), dict):
+                                _cur["script"] = _v["script"]
+                                _cur["layer"] = "basic+script"
+                                if _v.get("note"):
+                                    _cur["note"] = _v["note"]
+                                # ★ 2026-09-20：复用路径同样要"折算"——
+                                #   否则重跑一次模块，脚本层判出的不通过又全丢了
+                                #   （表现：首跑报告有错题，重跑后错题变"未审"）。
+                                _fold_script_layer(_cur, _v["script"])
+                                _merged_cache += 1
+                            # 目标基础记录已存在但缓存里没有脚本层 → 不必再插重复记录
                         else:
                             _inspection_state["questions"][_k] = _v
                     log_msg(f"✅ 已加载 {len(_cached_qs)} 题历史审查结论"
                             f"（其中 {_merged_cache} 题脚本层合并进基础记录）", "success")
+                    # ★ 2026-09-20：复用时同样恢复篇章语法检查结论（缓存里的模块级 list 键）。
+                    #   不恢复的话：首次审查报了篇章错误、重跑后（脚本没变，走复用）
+                    #   错误条目消失——重蹈"脚本问题日志里有、结果里没有"的覆辙。
+                    _pi_cached = _cached_qs.get("_passage_issues")
+                    if isinstance(_pi_cached, list) and _pi_cached:
+                        _inspection_state.setdefault("_script_issues", {})\
+                            .setdefault(module, []).extend(_pi_cached)
+                        for _pi in _pi_cached:
+                            log_msg(f"❗[{_pi.get('severity', '中')}] {_pi.get('type', '篇章语法错误')}"
+                                    f" · {_pi.get('location', '')}：{_pi.get('issue', '')}", "warning")
+                        log_msg(f"📝 {module} 篇章语法检查（历史结论复用）："
+                                f"{len(_pi_cached)} 处错误", "warning")
+                    _cache_loaded = True
+                else:
+                    log_msg(f"⚠ 缓存审查结论为空或格式异常（{_cache_path.name}）"
+                            f"→ 改为完整审查", "warning")
+            else:
+                log_msg(f"⚠ 索引显示已审查过，但缓存文件缺失（{_cache_path.name}）"
+                        f"→ 改为完整审查（此前会出现'打着复用旗号却零结果'）", "warning")
         except Exception as _e:
             log_msg(f"⚠ 加载缓存审查结论失败: {_e}，将重新审查", "warning")
             # 缓存加载失败 → 回退到完整审查，不 return
-        else:
+        if _cache_loaded:
+            # ★ 2026-09-20 修复（复用路径从不落盘）：
+            #   旧代码只在**跑完 LLM 审查**那条路上调 `_save_inspection_state_merge()`，
+            #   而复用分支直接 return → 本次运行合并进基础记录的脚本层结论、
+            #   以及刚算出的 `_script_issues`（脚本自检发现的问题）**只留在内存里**：
+            #   服务一重启、或报告/接口读的是状态文件，这些结果就全没了
+            #   （实测前端日志打了"脚本自检发现 3 处问题"，而状态文件里一条都没有）。
+            #   复用也是"本次运行产生了结果"，必须同样落盘。
+            try:
+                _save_inspection_state_merge()
+            except Exception as _e_sv:
+                log_msg(f"⚠ 复用结论后保存状态失败: {_e_sv}", "warning")
+            try:
+                _live_regen_error_report()
+            except Exception:
+                pass
             return  # 复用成功，跳过 LLM 审查
     log_msg(f"🧠 {module}{_stage_label} 正在用脚本「{docx}」做 LLM 知识性审查…（逐题核对题干/选项/答案，耗时较长）", "info")
     # ★ 听力专项多子模块：临时切换 set_current_module 上下文，确保 questions 用对的 stage 标记
@@ -5313,6 +6364,8 @@ def _run_llm_script_review(module: str, docx: str, version: str, unit, stage: st
         #   脚本审查结果优先合并进同一条基础层记录（questions[auto-qid]["script"]）；
         #   未在 App 出现过的脚本题 → 保留独立脚本记录（layer=script_only）。
         _merged_cnt = 0
+        _folded_fail = 0     # 脚本层把基础层"未审"判成"不通过"的题数
+        _folded_pass = 0     # 脚本层补全后综合判定变成"通过"的题数
         for q, rr in zip(agent.script_questions, results):
             qid = f"{module}-脚本-Q{rr.idx:02d}"
             _state = _qreview_to_state(
@@ -5324,9 +6377,30 @@ def _run_llm_script_review(module: str, docx: str, version: str, unit, stage: st
                 _basic["layer"] = "basic+script"
                 _basic["note"] = (_basic.get("note") or "") + \
                     f"；脚本核验·{docx}" if _basic.get("note") else f"脚本核验·{docx}"
+                # ★ 2026-09-20 修复：脚本层结论必须折算进六维与综合判定。
+                #   旧代码只挂 `_basic["script"]` 子字典 → 脚本层判"不通过"的题
+                #   在结果区/实时报告里依旧显示"未审"，等于检查白做（用户反馈
+                #   "脚本问题日志里有、结果里没有"的根因就在这里）。
+                _before = _basic.get("overall_passed")
+                _fold_script_layer(_basic, _state.get("script") or {})
+                if _basic.get("overall_passed") is False and _before is not False:
+                    _folded_fail += 1
+                if _basic.get("overall_passed") is True and _before is None:
+                    _folded_pass += 1
                 _merged_cnt += 1
             else:
                 _inspection_state["questions"][qid] = _state
+        # ★ 2026-09-20 新增（用户要求）：篇章语法检查——有错误才输出，没有就零输出。
+        #   结果并入 `_script_issues[module]`（报告「脚本自检」区块 + 前端都能看到）。
+        _passage_issues = _check_passage_grammar(module, _u, agent)
+        if _passage_issues:
+            _inspection_state.setdefault("_script_issues", {})\
+                .setdefault(module, []).extend(_passage_issues)
+            for _pi in _passage_issues:
+                log_msg(f"❗[{_pi['severity']}] {_pi['type']} · {_pi['location']}：{_pi['issue']}",
+                        "warning")
+            log_msg(f"📝 {module} 篇章语法检查：发现 {len(_passage_issues)} 处错误",
+                    "warning")
         _save_inspection_state_merge()
         # ★ 触发实时错题报告（前端「📑 查看报告」）
         try:
@@ -5335,6 +6409,12 @@ def _run_llm_script_review(module: str, docx: str, version: str, unit, stage: st
             pass
         log_msg(f"✅ {module} LLM 知识性审查完成: {len(results)}题"
                 f"（通过{n_pass}，未检维度不计入不通过，其中 {_merged_cnt} 题已合并进对应基础层记录）", "success")
+        if _folded_fail or _folded_pass:
+            # ★ 2026-09-20：把"脚本层折算"的结果显式打出来，检查人员才知道结果区
+            #   里的不通过/通过有多少是脚本层判出来的（否则又是一次静默变更）
+            log_msg(f"📐 {module} 脚本层结论已折算进六维：新增不通过 {_folded_fail} 题、"
+                    f"补判通过 {_folded_pass} 题（基础层看界面、脚本层看脚本内容，互补）",
+                    "info")
         # ★ 审查体系改造：审查完成后写入索引 + 缓存文件
         #   缓存同时包含：独立脚本记录 + 已合并进 auto-* 基础记录（含 script 层），
         #   供重跑同模块时复用脚本层结论（保留本轮 fresh 的 UI 证据）。
@@ -5342,6 +6422,8 @@ def _run_llm_script_review(module: str, docx: str, version: str, unit, stage: st
             _index = load_script_review_index()
             _index[_index_key] = {
                 "script": docx, "script_hash": _docx_hash,
+                # ★ 2026-09-23：记录产出本结论的模型签名，换模型即缓存失效
+                "llm_signature": _current_llm_signature(),
                 "reviewed_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
                 "questions": len(results),
                 "status": "done",
@@ -5359,11 +6441,23 @@ def _run_llm_script_review(module: str, docx: str, version: str, unit, stage: st
                     _cache_payload[_m_s] = _inspection_state["questions"][_m_s]
                 elif _qid_s in _inspection_state["questions"]:
                     _cache_payload[_qid_s] = _inspection_state["questions"][_qid_s]
+            # ★ 2026-09-20：篇章语法检查结果一并入缓存（模块级，非逐题）。
+            #   复用加载循环会跳过非 dict 的值（`if not isinstance(_v, dict): continue`），
+            #   所以这个 list 键不会混进题目记录。
+            if _passage_issues:
+                _cache_payload["_passage_issues"] = _passage_issues
             _cache_path.write_text(
                 json.dumps(_cache_payload, ensure_ascii=False, indent=2),
                 encoding="utf-8")
+            # ★ 2026-09-20：写缓存成功才写明文件，便于下次复用（写失败必须可见）
+            log_msg(f"💾 已缓存 {len(_cache_payload)} 题脚本层结论（{_index_key}）", "info")
         except Exception as _e:
-            pass
+            # ★ 2026-09-20：这里原本是 `pass` —— 缓存写失败被彻底吞掉，
+            #   但索引（_index）已先写了 status=done → 下次运行时
+            #   "索引说审查过、缓存文件不存在" → 复用分支加载不到内容又直接 return
+            #   → 脚本层零结果且日志显示"复用结论"。失败必须可见。
+            log_msg(f"⚠ 脚本层结论缓存写入失败（不影响本次结论，但下次无法复用）: {_e}",
+                    "warning")
     except Exception as e:
         log_msg(f"❌ {module} LLM 知识性审查失败: {e}", "error")
 
@@ -5497,6 +6591,14 @@ def api_modules_run():
             #   模块间 _back_to_home 切主页继续下一模块；LLM 审查经 on_module_done 回调
             global _GLOBAL_DOCX_MAP
             _GLOBAL_DOCX_MAP = docx_map or {}
+            # ★ 2026-09-23：把"模块 → 脚本文件名"下传给模块内部（logger 全局）。
+            #   口语训练图片题据此直接取脚本该小题的题面（句型提示），
+            #   不再靠视觉模型猜图（省一次 LLM 调用，且避免把参考答案当题面）。
+            try:
+                from common.logger import set_module_scripts
+                set_module_scripts(docx_map or {})
+            except Exception:
+                pass
             # ★ 2026-08-30 修复：合并同模块的脚本匹配日志为一条（练习+测试同模块只打一次），
             #   避免用户测听力专项·练习+·测试时看到 2 条相同"有匹配脚本"日志
             _logged_mod = set()
@@ -5511,6 +6613,13 @@ def api_modules_run():
                     return
                 _stage_txt = f"（{_stage}）" if _stage else ""
                 log_msg(f"📖 {_mod}{_stage_txt} 有匹配脚本「{_docx}」→ 自动化后追加 LLM 知识性审查", "info")
+                # ★ 2026-09-20：先跑**确定性**脚本自检（题号连续/字段名统一/
+                #   参考答案缺失/知识点占位/答案↔关键词一致），问题直接进日志。
+                #   放在 LLM 审查之前：便宜、可复现、不截断，专治"有问题没查出来"。
+                try:
+                    _log_script_issues(_mod, _docx)
+                except Exception:
+                    pass
                 # ★ 修复模块间卡顿：LLM 审查改异步线程，不阻塞 run_all 的模块循环
                 #   （原同步调用：听力专项完成后在主页面卡几分钟等逐题 LLM 审查，
                 #     审查完才继续口语训练 → 用户实测"主页卡好久"）
@@ -5644,7 +6753,17 @@ if __name__ == "__main__":
     print("=" * 50)
         # 自动检测屏幕分辨率并缩放坐标
     config = load_config()
-    detect_screen_resolution(config.device.serial)
+    # ★ 2026-09-20 修复（缩放比取错设备）：
+    #   config.device.serial 是「脚本里写死的目标机」，但真正连的可能是 ANDROID_SERIAL
+    #   指定的另一台（如 MuMu 模拟器）。旧实现只按 config.device.serial 查 wm size，
+    #   实测在 MuMu 上跑时日志打印 "检测到分辨率 1080x2400, 缩放比 X=1.000 Y=1.000"
+    #   （那是真机的值），scale_all_coords() 退化成空操作 →
+    #   首页卡片 / 广告关闭 AD_CLOSE / 版本年级栏 / MODULE_COORDS / TABS
+    #   全部按真机 1080x2400 使用，在 900x1600 的模拟器上必然点偏。
+    #   改为优先取「当前实际选中的设备」—— ANDROID_SERIAL 正是 u2.connect() 读的那个变量，
+    #   这样缩放比与实际操作目标始终一致。
+    _selected_serial = os.environ.get("ANDROID_SERIAL", "").strip() or config.device.serial
+    detect_screen_resolution(_selected_serial)
     scale_all_coords()
 
     # ★ 常驻实时截图（前端「手机画面」随时可见，不再只在任务运行时才有）

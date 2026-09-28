@@ -298,6 +298,11 @@ FATAL_LLM_MARKERS = (
     "402", "payment required", "insufficient balance", "no balance",
     "余额", "欠费", "额度", "配额", "超出",
     "401", "unauthorized", "invalid api key", "authentication",
+    # ★ 2026-09-21 补充：百炼免费额度耗尽返回 403（不是 402），
+    #   报文体是 AllocationQuota.FreeTierOnly / "Free quota exhausted"。
+    #   此前 403 不在名单里 → 被判"可重试" → 白等 1.5+3+4.5s 退避 ×3 次，
+    #   整轮 AI 核查以 ~10s/题 的速度空转后静默降级（用户看到的只是"AI 不可用"）。
+    "403", "forbidden", "quota", "free tier", "freetieronly", "exhausted",
 )
 
 
@@ -312,7 +317,19 @@ def is_fatal_llm_error(err) -> bool:
 #   单次耗时 70.8s、content 为空）。DashScope 支持请求体加 `enable_thinking: false` 关闭，
 #   实测同一问题 70.8s → 1.4s 且正文正常。
 #   ⚠ 不能全局无脑加：`enable_thinking` 不是所有模型都认。故用白名单限定作用范围。
-_NO_THINK_FALLBACK = ("deepseek-v4-pro-0813", "deepseek-v4-pro")
+# ★ 2026-09-23：主模型换成 deepseek-v4.1-flash（V4.1 系列同属推理模型）。
+#   实测不关思维链时 200 token 全被 reasoning_content 吃光
+#   （usage: text_tokens=0 / finish_reason=length / content 为空），
+#   加 enable_thinking:false 后 1.43s 正常出文 → 必须列入本白名单。
+#   这里是代码侧兜底：.env 的 LLM_NO_THINK_MODELS 一旦缺失/写错，仍能生效。
+# ★ 2026-09-23：`qwen3.7-flash`（视觉备用1）也是重度推理模型。
+#   它不关思维链时**不会**返回空串（这点和 deepseek-v4-pro-0813 不同），
+#   但单张截图 reasoning_tokens 高达 2200~4600、耗时 18~37s/图（qwen3.8-max 更到 105s）。
+#   关掉后实测 3 张真实截图：1.1s 出结果，且**喇叭图标判定（有/无/无）与关前完全一致**
+#   —— 该模型的任务是"读屏文字 + 看图标"这类感知题，不需要思维链。
+#   ⚠ 该白名单对**视觉调用同样生效**（`_call_api` 按模型名判定，不分文本/视觉）。
+_NO_THINK_FALLBACK = ("deepseek-v4.1-flash", "deepseek-v4-pro-0813", "deepseek-v4-pro",
+                      "qwen3.7-flash")
 
 
 def no_think_models() -> tuple:
@@ -361,10 +378,15 @@ class LLMClient:
                  vision_api_key: str = "", vision_model: str = "",
                  vision_base_url: str = "",
                  vision_model_fallback: str = "",
-                 vision_model_fallback2: str = ""):
+                 vision_model_fallback2: str = "",
+                 vision_model_fallback3: str = "",
+                 model_fallback: str = ""):
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
         self.model = model
         self.base_url = base_url.rstrip("/")
+        # ★ 2026-09-21：文本模型备用（逗号分隔，依次尝试）。
+        #   主模型额度耗尽时（百炼 403 AllocationQuota.FreeTierOnly）自动切。
+        self.model_fallback = model_fallback
         # 视觉模型（处理图片输入）
         self.vision_api_key = vision_api_key or self.api_key
         self.vision_model = vision_model
@@ -372,8 +394,13 @@ class LLMClient:
         # ★ 2026-08-25：视觉模型额度用尽时的备选模型（如 qwen3.7-max-2026-06-08）
         #   调用失败（额度/欠费/429）→ 自动用 fallback 重试，不中断审查
         # ★ 2026-08-30：两级备用 fallback1 → fallback2（如 qwen3.7-plus-2026-05-26 → qwen3.7-max-2026-06-08）
+        # ★ 2026-09-23：扩到三级。fallback1 改为 qwen3.7-flash（用户指定）——
+        #   它与主视觉 qwen3.8-27b **不同系列**，百炼免费额度按模型独立计，
+        #   所以"主模型额度耗尽"这个最典型场景它仍然可用（同系列的 qwen3.8-max/flash 会一起失效）。
+        #   实测该模型带 enable_thinking:false 后 1.1s/图，不关则 18~37s（见 no_think_models）。
         self.vision_model_fallback = vision_model_fallback
         self.vision_model_fallback2 = vision_model_fallback2
+        self.vision_model_fallback3 = vision_model_fallback3
 
     @classmethod
     def from_config(cls, config_path: str = None) -> "LLMClient":
@@ -414,6 +441,12 @@ class LLMClient:
         # ★ 2026-08-30：第二备用（VISION_MODEL_FALLBACK2 / vision_model_fallback2）
         vision_model_fallback2 = (os.environ.get("VISION_MODEL_FALLBACK2")
                                   or config.get("vision_model_fallback2", ""))
+        # ★ 2026-09-23：第三备用（VISION_MODEL_FALLBACK3 / vision_model_fallback3）
+        vision_model_fallback3 = (os.environ.get("VISION_MODEL_FALLBACK3")
+                                  or config.get("vision_model_fallback3", ""))
+        # ★ 2026-09-21：文本模型备用链（LLM_MODEL_FALLBACK / model_fallback）
+        model_fallback = (os.environ.get("LLM_MODEL_FALLBACK")
+                          or config.get("model_fallback", ""))
 
         return cls(
             api_key=api_key,
@@ -424,6 +457,8 @@ class LLMClient:
             vision_base_url=vision_base_url,
             vision_model_fallback=vision_model_fallback,
             vision_model_fallback2=vision_model_fallback2,
+            vision_model_fallback3=vision_model_fallback3,
+            model_fallback=model_fallback,
         )
 
     def ask(self, prompt: str, image_path: str = None, image_paths: list = None,
@@ -481,7 +516,8 @@ class LLMClient:
                                  ("insufficient", "quota", "额度", "欠费", "余额",
                                   "429", "403", "free", "耗尽", "用完", "no balance"))
                 for _fb_name, _fb in (("fallback", self.vision_model_fallback),
-                                      ("fallback2", self.vision_model_fallback2)):
+                                      ("fallback2", self.vision_model_fallback2),
+                                      ("fallback3", self.vision_model_fallback3)):
                     if not _quota_hit:
                         break
                     if _fb:
@@ -518,6 +554,7 @@ class LLMClient:
         #   否则每次调用白等 1.5+3+4.5s 退避（实测 ~10.8s/次）；整单元 101 题 × 每题尝试 2 次
         #   ≈ 半小时纯空转，用户会以为"卡住/没有结果"。
         _last_err = ""
+        _tried_fb = set()
         for _attempt in range(3):
             try:
                 _r = self._call_api(prompt, image_paths=None, temperature=temperature)
@@ -527,10 +564,33 @@ class LLMClient:
             except Exception as e:
                 _last_err = f"[LLM 调用失败] {e}（第{_attempt+1}次尝试）"
                 if is_fatal_llm_error(e):
-                    return _last_err          # 额度/密钥问题 → 快速失败，不重试不退避
+                    # ★ 2026-09-21：主文本模型额度/密钥不可用 → 依次切备用模型。
+                    #   实测：百炼 deepseek-v4-pro-0813 免费额度耗尽 → 403
+                    #   AllocationQuota.FreeTierOnly，而同一 key 下 deepseek-v4-flash /
+                    #   deepseek-v3.2 / qwen3.8-* 全部可用。此前没有文本备用，
+                    #   一次 403 就让**整轮 AI 核查静默降级**（只做界面级检查），
+                    #   用户的"错误原因/修改建议"全部拿不到 —— 静默降级比报错更糟。
+                    for _fb in self.fallback_models():
+                        if not _fb or _fb == self.model or _fb in _tried_fb:
+                            continue
+                        _tried_fb.add(_fb)
+                        print(f"⚠ 文本模型 {self.model} 不可用（{str(e)[:70]}）"
+                              f" → 自动切换备用模型 {_fb}")
+                        try:
+                            _r = self._call_api(prompt, image_paths=None,
+                                                temperature=temperature, model=_fb)
+                            if _r and _r.strip():
+                                return _r
+                        except Exception as e2:
+                            _last_err = f"[LLM 调用失败（备用 {_fb}）] {e2}"
+                    return _last_err          # 主+备用全不可用 → 快速失败
             import time as _t
             _t.sleep(1.5 * (_attempt + 1))   # 递增退避：1.5s / 3s / 4.5s
         return _last_err
+
+    def fallback_models(self) -> list:
+        """文本模型的备用模型列表（主模型额度耗尽/被停用时依次尝试）。"""
+        return [m.strip() for m in (self.model_fallback or "").split(",") if m.strip()]
 
     def _vision_ocr_text(self, paths: list) -> str:
         """用纯 OCR 视觉模型读出截图中的全部屏幕文字（失败/无字返回空串）。

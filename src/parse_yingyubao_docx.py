@@ -177,6 +177,7 @@ class OralStrategy(DocxStrategy):
         kp_mode = False        # 知识点：后的数字行
         subs = []              # 当前大题小题
         questions = []         # 全部小题
+        pattern = ""           # ★ 2026-09-20 大题级「例句：/句型：」（仿照例句说一说）
 
         def _attach_meta():
             for q in subs:
@@ -196,14 +197,19 @@ class OralStrategy(DocxStrategy):
                 q.cognitive_target = meta.get("认知目标", "")
 
         def _flush_big():
-            nonlocal subs, meta, caption, passage_lines, kp_mode
+            nonlocal subs, meta, caption, passage_lines, kp_mode, pattern
             _attach_meta()
             for q in subs:
                 q.caption = caption
                 if passage_lines:
                     q.passage = "\n".join(passage_lines)
+                if pattern:
+                    # 大题级例句（若小题行里已带 sentence_pattern 则不覆盖）
+                    if not getattr(q, "sentence_pattern", ""):
+                        q.sentence_pattern = pattern
                 questions.append(q)
             subs, meta, caption, passage_lines, kp_mode = [], {}, "", [], False
+            pattern = ""
 
         for raw in paragraphs:
             t = raw.strip()
@@ -234,10 +240,34 @@ class OralStrategy(DocxStrategy):
             # ---- 元数据行 ----
             if any(t.startswith(k) for k in _ORAL_META_PREFIX):
                 if t.startswith("关键词："):
-                    meta["关键词列表"] = [k.strip() for k in
-                                          t.replace("关键词：", "").split("#") if k.strip()]
+                    # ★ 2026-09-17 修复（死代码 + 后写覆盖）：
+                    #   元数据行 `关键词：口语训练#新教科五上U4` 用 '#' 分隔单元标签；
+                    #   小题级 `关键词：turn off the lights, bring their raincoats` 用逗号。
+                    #   旧实现把这行无条件吞进 meta 并 continue，导致下面那段
+                    #   "小题级关键词（挂在最后一个小题）"**永远执行不到**（死代码），
+                    #   所有小题的 keywords 最终都被 _attach_meta 兜底成
+                    #   ['口语训练','新教科五上U4'] —— 于是"参考答案用 take、
+                    #   关键词写 bring"这类不一致在整条流水线里根本无从核对
+                    #   （用户实测需求：句子与关键词对应明显错误必须能被查出来）。
+                    if subs and "#" not in t:
+                        for _k in re.split(r"[,，、]", t.replace("关键词：", "")):
+                            _k = _k.strip()
+                            if _k and _k not in subs[-1].keywords:
+                                subs[-1].keywords.append(_k)
+                    else:
+                        meta["关键词列表"] = [k.strip() for k in
+                                              t.replace("关键词：", "").split("#") if k.strip()]
                 elif t.startswith("知识点："):
+                    # ★ 2026-09-20 修复（同行知识点被整段丢弃）：
+                    #   脚本里两种写法并存——
+                    #     ① `知识点：` 独占一行，条目在其后的编号行（kp_mode 逐行收集）；
+                    #     ② `知识点：` 与内容同行，如
+                    #        "知识点：1. sunny 2. shorts   3.  hat   4. cap  5. skirt"
+                    #   旧实现无条件 continue，同行内容被直接丢掉 → U5 大题一 5 条知识点全部丢失。
+                    _kp_inline = t.replace("知识点：", "", 1).strip()
                     meta.setdefault("知识点", [])
+                    if _kp_inline:
+                        meta["知识点"].append(_kp_inline)
                     kp_mode = True
                 elif t.startswith("技能："):
                     meta["技能"] = t.replace("技能：", "").strip()
@@ -258,9 +288,49 @@ class OralStrategy(DocxStrategy):
             if big and ("录音" in t or "作答" in t or "准备时间" in t or "播放问题" in t):
                 caption = t
                 continue
+            # ---- 大题级「例句：」/「句型：」（仿照例句，说一说）----
+            #   ★ 2026-09-20 新增。教科版脚本在「三、仿照例句，说一说。」下写一行
+            #     `例句：I will bring everything inside.`，App 端把它显示出来让学生照着造句。
+            #     旧实现只认「句型提示：/听力材料：」前缀——这行既不是编号小题行
+            #     （`^\d+[.、]` 不匹配），又不属于"阅读"大题（末尾分支不接），
+            #     于是**被静默丢弃**：脚本侧没有例句基准，App 显示的例句就永远无从比对
+            #     （用户反馈"基本题目内容检查不出来"的一条根因）。
+            _pt = re.match(r"^(?:例句|句型)[:：]\s*(.+)$", t)
+            if _pt:
+                _pv = _pt.group(1).strip()
+                if _pv:
+                    pattern = _pv
+                    for _q in subs:
+                        if not getattr(_q, "sentence_pattern", ""):
+                            _q.sentence_pattern = _pv
+                continue
             # ---- 参考答案（挂在最后一个小题，可能多组）----
             if t.startswith("参考答案："):
                 _ans = re.sub(r"[（(]\s*隐藏\s*[）)]", "", t.replace("参考答案：", "").strip()).strip()
+                # ★ 2026-09-20 修复（合并行答案整行错挂到最后一个小题）：
+                #   图片题一大题只写一行合并答案，用序号分段：
+                #     参考答案：1. sunny/sun    2. shorts    3. hat    4. cap    5. skirt
+                #   旧实现无条件挂到 subs[-1] → 5 个小题里只有最后 1 个拿到答案，
+                #   且内容是整行（含全部序号），其余 4 题被判"无答案"。
+                #   改为：识别为「从 1 连续递增的编号列表」时按序号回填到对应小题。
+                _parts = []
+                if _ans:
+                    _c = [(int(_m.group(1)), _m.start(), _m.end())
+                          for _m in re.finditer(r"(\d+)[\.、]", _ans)
+                          if _m.start() == 0 or _ans[_m.start() - 1].isspace()]
+                    _pn = [_x[0] for _x in _c]
+                    if len(_pn) >= 2 and _pn[0] == 1 and \
+                            all(_pn[_i + 1] == _pn[_i] + 1 for _i in range(len(_pn) - 1)):
+                        for _i, (_n, _s, _e) in enumerate(_c):
+                            _end = _c[_i + 1][1] if _i + 1 < len(_c) else len(_ans)
+                            _parts.append((_n, _ans[_e:_end].strip()))
+                if _parts:
+                    _by_num = {q.stage_idx: q for q in subs}
+                    for _n, _seg in _parts:
+                        _q = _by_num.get(_n)
+                        if _q is not None and _seg:
+                            _q.answer = (_q.answer + "\n" + _seg).strip() if _q.answer else _seg
+                    continue
                 if subs:
                     subs[-1].answer = (subs[-1].answer + "\n" + _ans).strip() if subs[-1].answer else _ans
                 continue
@@ -287,18 +357,30 @@ class OralStrategy(DocxStrategy):
             # ---- 小题行："1. try 2. scarf 3. pair..."（朗读单词单行多小题）或 "1. 句型提示：..." ----
             _sm = re.match(r"^(\d+)[\.、]\s*(.*)$", t)
             if _sm:
-                num = int(_sm.group(1))
-                content = _sm.group(2).strip()
-                parts = re.split(r'\s+(?=\d+[\.、]\s)', content) if content else []
-                if len(parts) >= 2:   # 单行多小题
-                    subs.append(self._make_sub(unit, big, big_title, num, parts[0].strip()))
-                    for _p in parts[1:]:
-                        _pm = re.match(r"^(\d+)[\.、]\s*(.*)$", _p.strip())
-                        if _pm:
-                            subs.append(self._make_sub(unit, big, big_title,
-                                                       int(_pm.group(1)), _pm.group(2).strip()))
+                # ★ 2026-09-20 修复（漏题·图片题一行多小题）：
+                #   旧实现用 re.split(r'\s+(?=\d+[\.、]\s)', content) 切"单行多小题"，
+                #   锚点是「空白+序号+空白」。但纯图片题一行形如
+                #       "1. 2. 3. 4. 5. "   （图片无文本，只剩编号；序号前无空白、末项无尾空格）
+                #   → 末项 5. 因缺尾空格切不出来、首项 1. 吃到下一个编号变成 "2."，
+                #     得到 parts=['2.','3.','4. 5.'] → 只出 3 题且题干全错。
+                #   实测：U5 大题一（看图说单词，5 张图）解析成 stage=[1,3,4]。
+                #   新实现直接以「序号[.、]」为锚点（要求序号位于行首或前面是空白，
+                #   避免正文里的 "25." 之类被误判），并校验序号从 1 连续递增，否则退回单题。
+                _cands = [(int(_m.group(1)), _m.start(), _m.end())
+                          for _m in re.finditer(r"(\d+)[\.、]", t)
+                          if _m.start() == 0 or t[_m.start() - 1].isspace()]
+                _nums = [_c[0] for _c in _cands]
+                _multi = (len(_nums) >= 2 and _nums[0] == 1 and
+                          all(_nums[_i + 1] == _nums[_i] + 1
+                              for _i in range(len(_nums) - 1)))
+                if _multi:
+                    for _i, (_n, _s, _e) in enumerate(_cands):
+                        _end = _cands[_i + 1][1] if _i + 1 < len(_cands) else len(t)
+                        subs.append(self._make_sub(unit, big, big_title, _n,
+                                                   t[_e:_end].strip()))
                 else:
-                    subs.append(self._make_sub(unit, big, big_title, num, content))
+                    subs.append(self._make_sub(unit, big, big_title,
+                                               int(_sm.group(1)), _sm.group(2).strip()))
                 continue
             # ---- 阅读短文段落（未归类的长文本，仅阅读题）----
             if big and big_type == "阅读":

@@ -117,3 +117,148 @@ class ScriptReviewer:
             } for iss in issues],
             "lines": section["lines"],
         }
+
+
+# ============================================================
+# 确定性完整性校验（零 LLM 成本 / 100% 召回 / 不截断）
+# ============================================================
+# 为什么必须补这一层：_review_section 是"按大题喂 LLM"的审查，有三个硬伤——
+#   ① 内容被 text[:3000] 截断 → 大题后半部分根本不进模型（阅读大题极易超 3000 字符）；
+#   ② 内容 < 50 字符直接 return PASS，连看都不看；
+#   ③ 规则全是"语言/搭配/语义"这类主观判断，对**结构性缺失**
+#      （少题、缺参考答案、字段名不统一、知识点为空）没有确定性判据，
+#      只能靠模型在长文本里碰运气 → 用户实测反馈"有问题没查出来"。
+# 本层把"能确定的"问题用规则直接判死，放在 LLM 审查之前跑：
+# 便宜、可复现、不截断，且不会因为模型注意力漂移而漏。
+
+_UNIFIED_FIELD_ALIASES = [
+    (("难度", "难度系数"), "难度"),
+    (("技能", "技能要求"), "技能"),
+]
+_NO_ANSWER_TYPES = ("朗读",)          # 朗读类不写参考答案（题干本身即答案）
+
+
+def check_script_completeness(docx_path: str, questions: list) -> list:
+    """对整份脚本做确定性完整性校验。
+
+    返回 issues: [{type, severity, location, quote, detail, suggestion}]
+    """
+    import re as _re
+    issues = []
+
+    # ---- ① 题号连续性：每个 (unit, big) 的小题号必须是 1..N 连续 ----
+    groups = {}
+    for q in questions:
+        groups.setdefault((q.unit, q.big), []).append(q)
+    for (unit, big) in sorted(groups, key=lambda k: (k[0], k[1])):
+        nums = sorted(q.stage_idx for q in groups[(unit, big)])
+        expect = list(range(1, len(nums) + 1))
+        if nums != expect:
+            miss = [n for n in expect if n not in nums]
+            dup = sorted({n for n in nums if nums.count(n) > 1})
+            issues.append({
+                "type": "题号不连续",
+                "severity": "高",
+                "location": "U%s 第%s大题" % (unit, big),
+                "quote": "小题号=%s" % nums,
+                "detail": ("应解析出 1..%d 连续小题号，实际为 %s%s%s" % (
+                    len(nums), nums,
+                    "；缺少 %s" % miss if miss else "",
+                    "；重复 %s" % dup if dup else "")),
+                "suggestion": "核查该大题题干行的编号是否漏写/被截断，以及小题数是否与大题声明一致",
+            })
+
+    # ---- ② 元数据字段名统一 ----
+    try:
+        from docx import Document
+        paras = [p.text.strip() for p in Document(docx_path).paragraphs if p.text.strip()]
+    except Exception:
+        paras = []
+    field_names = set()
+    for t in paras:
+        _fm = _re.match(r"^([\u4e00-\u9fa5]{2,6})[：:]", t)
+        if _fm:
+            field_names.add(_fm.group(1))
+    for aliases, canon in _UNIFIED_FIELD_ALIASES:
+        hit = [a for a in aliases if a in field_names]
+        if len(hit) > 1:
+            issues.append({
+                "type": "字段名不统一",
+                "severity": "中",
+                "location": "全文",
+                "quote": "、".join(hit),
+                "detail": "同一语义出现 %d 种字段名写法：%s" % (len(hit), "、".join(hit)),
+                "suggestion": "统一为「%s：」，避免下游按字段名取值时漏取（如难度分级失真）" % canon,
+            })
+
+    # ---- ③ 参考答案缺失（朗读/跟读类豁免）----
+    for q in questions:
+        ans = (q.answer or "").strip()
+        if ans and ans not in ("/", "-", "无"):
+            continue
+        if any(k in ((q.type_1 or "") + (q.type_2 or "")) for k in _NO_ANSWER_TYPES):
+            continue
+        issues.append({
+            "type": "参考答案缺失",
+            "severity": "中",
+            "location": "U%s 第%s大题 第%s小题" % (q.unit, q.big, q.stage_idx),
+            "quote": (q.stem or "")[:40],
+            "detail": "题型为「%s」但未解析到参考答案" % ((q.type_2 or q.type_1 or "未知")),
+            "suggestion": "补写「参考答案：」行；多组可接受答案用 / 分隔",
+        })
+
+    # ---- ④ 知识点缺失 / 占位符 / 条数与小题数不符 ----
+    for (unit, big) in sorted(groups, key=lambda k: (k[0], k[1])):
+        qs = groups[(unit, big)]
+        kps = qs[0].knowledge_points or []
+        joined = " ".join(kps).strip()
+        loc = "U%s 第%s大题" % (unit, big)
+        if not joined:
+            issues.append({
+                "type": "知识点缺失", "severity": "中", "location": loc,
+                "quote": (qs[0].big_title or "")[:40],
+                "detail": "该大题所有小题的 knowledge_points 为空",
+                "suggestion": "补充「知识点：」行（多条用编号行或分号分隔）",
+            })
+        elif joined in ("/", "-", "无"):
+            issues.append({
+                "type": "知识点为占位符", "severity": "中", "location": loc,
+                "quote": joined,
+                "detail": "知识点写成了占位符「%s」，未给出实际内容" % joined,
+                "suggestion": "替换为真实知识点（如句型结构 / 发音规律）",
+            })
+
+    # ---- ⑤ 参考答案 ↔ 关键词 一致性（确定性，复用已有规则）----
+    try:
+        from review_agent import check_answer_keyword_consistency as _ck
+    except Exception:
+        try:
+            from src.review_agent import check_answer_keyword_consistency as _ck
+        except Exception:
+            _ck = None
+    if _ck:
+        for q in questions:
+            kws = [k for k in (q.keywords or []) if "#" not in k]
+            if not kws or not (q.answer or "").strip():
+                continue
+            try:
+                res = _ck(q.answer, kws, q.passage or "")
+            except Exception:
+                continue
+            # ★ 返回值是三元组 (issues:list, checked:int, detail:dict)，不是字符串。
+            #   第一版直接把它当 truthy 用 → 每题都判"不一致"（实测 45 条全误报）。
+            if isinstance(res, (list, tuple)):
+                bad_items = res[0] if (res and isinstance(res[0], list)) else []
+            else:
+                bad_items = [res] if res else []
+            for _b in bad_items:
+                _msg = _b if isinstance(_b, str) else str(_b)
+                issues.append({
+                    "type": "答案与关键词不一致",
+                    "severity": "高",
+                    "location": "U%s 第%s大题 第%s小题" % (q.unit, q.big, q.stage_idx),
+                    "quote": _msg[:60],
+                    "detail": _msg[:160],
+                    "suggestion": "核对参考答案用词与关键词是否指向同一表达（如 take / bring 这类动词替换最易错）",
+                })
+    return issues

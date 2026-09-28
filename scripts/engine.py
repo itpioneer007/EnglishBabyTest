@@ -268,19 +268,14 @@ def dismiss_global_popups(d):
     return False
 
 def scroll_and_find(d, text, max_swipes=8) -> bool:
-    """查找文字：先直接找，然后向上滑（内容下移）找下方，再向下滑（内容上移）找上方"""
-    if d(text=text).exists(timeout=2): return True
-    # 第一轮：向上滑（内容下移）
-    for _ in range(max_swipes):
-        S_swipe(d, 500, 1400, 500, 400, 0.3)
-        time.sleep(0.35)
-        if d(text=text).exists(timeout=1.5): return True
-    # 第二轮：向下滑（内容上移，返回顶部区域）
-    for _ in range(max_swipes):
-        S_swipe(d, 500, 400, 500, 1400, 0.3)
-        time.sleep(0.35)
-        if d(text=text).exists(timeout=1.5): return True
-    return False
+    """查找文字：先直接找，然后向上滑（内容下移）找下方，再向下滑（内容上移）找上方。
+
+    ★ 2026-09-21：改为委托 common.tools 的加固版 —— 它会在滑动前确认英语宝在前台，
+      否则在桌面上滑动会把安卓通知栏拉下来，报出完全错误的"入口缺失"
+      （本文件旧实现是重复代码，已消除，避免两处行为不一致）。
+    """
+    from common.tools import scroll_and_find as _shared
+    return _shared(d, text, max_swipes=max_swipes)
 
 # ==================== ⑥ 年级切换 ====================
 def ensure_grade(d, grade_level, book_version=""):

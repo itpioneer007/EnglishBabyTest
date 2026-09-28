@@ -1,6 +1,6 @@
 """共享工具函数：广告关闭、弹窗处理、年级切换、滚动查找、通用动作执行"""
 import time
-from config import GLOBAL_POPUPS
+from config import GLOBAL_POPUPS, APP_PACKAGE
 
 # 基准分辨率（当前手机实测 1080x2400）
 BASE_W, BASE_H = 1080, 2400
@@ -447,8 +447,86 @@ def applock_blocked(d):
         pass
     return False
 
+def _is_system_panel(d) -> bool:
+    """当前页面是不是系统的通知栏 / 快捷设置面板（**不是任何 App 页面**）。
+
+    ★ 2026-09-21：口语训练入口找不到那次，诊断 dump 出来的是
+      ['无通知','飞行模式','深色主题','CHINA MOBILE','91%'] 且 resource-id 全空 ——
+      根本不是在 App 里。用它把"其实不在 App"和"App 里真没这个入口"区分开，
+      避免给出"可能该年级无此模块/主页改版"这种误导性结论。
+    """
+    try:
+        xml = d.dump_hierarchy()
+    except Exception:
+        return False
+    # ★ 关键：只要 dump 里还有英语宝自己的节点，就**不是**系统面板。
+    #   `com.android.systemui` 是状态栏/导航栏的包名，正常 App 页面的 dump 里
+    #   必然出现它 —— 早期版本直接按它判"不在 App"，导致在正常主页上被误判，
+    #   ensure_app_foreground 反复 back + 冷启动，反而把主页状态搞坏、
+    #   再报"找不到口语训练入口"（自己制造的问题）。
+    if 'package="com.dinoenglish.yyb"' in xml:
+        return False
+    hits = sum(1 for k in ("飞行模式", "深色主题", "无通知", "快捷设置",
+                           "自动旋转", "手电筒", "勿扰") if k in xml)
+    return hits >= 2 or ("com.android.systemui" in xml
+                         or "com.android.settings" in xml)
+
+
+def ensure_app_foreground(d, app_package: str = "", tries: int = 3) -> bool:
+    """确保英语宝在前台；不在就先关掉系统面板 / 重新拉起 App。返回是否成功。
+
+    ★ 2026-09-21：实测根因链——版本号全/半角括号不一致 → 误判"版本不对" →
+    触发一次本不需要的版本切换 → 切换失败后 App 已不在前台 →
+    模块继续执行 scroll_and_find → 在桌面上下滑**把安卓通知栏拉了下来** →
+    报"当前页无'口语训练'卡片"。加了这道前置检查，操作对象永远是 App 本身。
+    """
+    pkg = app_package or APP_PACKAGE
+    for _ in range(max(1, tries)):
+        try:
+            cur = (d.app_current() or {}).get("package", "")
+        except Exception:
+            cur = ""
+        if cur == pkg and not _is_system_panel(d):
+            return True
+        # ① 系统面板 → back 收起；收不起再向上滑
+        try:
+            d.press("back")
+        except Exception:
+            pass
+        time.sleep(0.5)
+        if _is_system_panel(d):
+            try:
+                w, h = d.window_size()
+                d.swipe(w * 0.5, h * 0.25, w * 0.5, h * 0.85, duration=0.25)
+            except Exception:
+                pass
+            time.sleep(0.6)
+        # ② 还不在 App → 冷启动
+        try:
+            cur = (d.app_current() or {}).get("package", "")
+        except Exception:
+            cur = ""
+        if cur != pkg:
+            try:
+                d.app_start(pkg)
+                time.sleep(2.5)
+            except Exception:
+                pass
+    try:
+        return ((d.app_current() or {}).get("package", "") == pkg
+                and not _is_system_panel(d))
+    except Exception:
+        return False
+
+
 def scroll_and_find(d, text, max_swipes=5) -> bool:
-    """查找文字：先直接找，然后向上滑（内容下移）找下方，再向下滑（内容上移）找上方"""
+    """查找文字：先直接找，然后向上滑（内容下移）找下方，再向下滑（内容上移）找上方。
+
+    ★ 2026-09-21：每轮滑动前先确认 App 在前台（见 ensure_app_foreground 注释），
+      否则"在桌面上滑动"会把通知栏拉下来，报出完全错误的"入口缺失"结论。
+    """
+    if not ensure_app_foreground(d):
+        return False
     if d(text=text).exists(timeout=2): return True
     # 第一轮：向上滑（内容下移）
     for _ in range(max_swipes):

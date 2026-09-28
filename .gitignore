@@ -45,12 +45,15 @@ uploads/
 .DS_Store
 Thumbs.db
 
-# ★ 临时测试脚本（不入库，正式逻辑已合入模块）
-test_knowledge_module.py
-run_ai_loop.py
-run_ai_test.py
-_ai_*.py
-test_*.py
+# ★ 临时测试脚本（根目录随手写的，不入库；正式逻辑已合入模块）
+#   ⚠ 规则必须限定根目录（前导 /）：scripts/tests/ 是**正式回归测试套件，必须入库**。
+#     旧写法 `test_*.py`（无前导斜杠）会匹配任意层级，把整个 scripts/tests/ 一并忽略，
+#     导致历次写的 24 个回归测试从未进入版本库（已修正）。
+/test_knowledge_module.py
+/run_ai_loop.py
+/run_ai_test.py
+/_ai_*.py
+/test_*.py
 
 # 临时调试截图（根目录）
 _q*.png
@@ -83,3 +86,33 @@ _state.json
 # 临时调试产物 / 成本测试输出（不入库）
 tmp_gen/
 outputs/cost_test/
+
+# ─────────────────────────────────────────────
+# ★ 2026-09-28 补充：清理工作区噪音（运行/调试产物，不入库）
+# ─────────────────────────────────────────────
+# 根目录临时调试脚本与输出（_probe_* / _audio_* / _append_memo* / _all_tests.out 等）
+# 例外：下列两个是正式工具，必须入库
+/_*.py
+!/_run_all_tests.py
+!/_mock_test.py
+/_*.out
+/_*.txt
+/_*.json
+/_*.png
+/_*.wav
+/_asr_pull/
+
+# 脚本审查缓存与索引（运行时生成；脚本或模型变更即失效重算，不应入库）
+data/script_review_cache/
+data/script_review_index.json*
+data/*.bak*
+
+# 运行时状态文件（记录当前目标设备序列号，各机器不同）
+server_target.txt
+
+# 生成的报告产物
+outputs/reports/教科版*/
+outputs/reports/未知版本/*stale_*/
+outputs/reports/card_preview.html
+outputs/web/crop_*.png
+outputs/错题报告_*.docx

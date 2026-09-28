@@ -7,8 +7,15 @@
    Win32_Process.Create 创建的进程挂在 WmiPrvSE 下，不属于该 Job，因此能长期存活。
 
 用法：
-    python tools/restart_server.py          # 杀旧进程 + WMI 启新进程 + 等健康
-    python tools/restart_server.py --check  # 只看当前是否在监听
+    python tools/restart_server.py                      # 杀旧进程 + WMI 启新进程 + 等健康
+    python tools/restart_server.py --check              # 只看当前是否在监听
+    python tools/restart_server.py --device 127.0.0.1:16384   # 指定目标设备（MuMu）
+    python tools/restart_server.py --device real              # 用 config.yaml 里的真机 serial
+    python tools/restart_server.py --switch             # 真机 ↔ MuMu 来回切
+
+⚠ 为什么要 --device：WMI 创建的进程不继承环境变量，而 web_server 的分辨率探测
+   （坐标缩放）与 u2.connect() 都读 ANDROID_SERIAL。不指定就会回到 config.yaml 的
+   真机 serial；真机与 MuMu 同时在线时还会直接报 more than one device/emulator。
 """
 import os
 import subprocess
@@ -19,6 +26,22 @@ import urllib.request
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PY = r"C:\Users\19507\AppData\Local\Programs\Python\Python312\python.exe"
 PORT = 5000
+TARGET_FILE = os.path.join(ROOT, "server_target.txt")
+MUMU_SERIAL = "127.0.0.1:16384"
+
+
+def read_target():
+    if os.path.exists(TARGET_FILE):
+        with open(TARGET_FILE, encoding="utf-8") as fh:
+            return fh.read().strip()
+    return ""
+
+
+def write_target(serial):
+    """serial 为空字符串 = 回到 config.yaml 的 serial（真机）。"""
+    with open(TARGET_FILE, "w", encoding="utf-8") as fh:
+        fh.write(serial or "")
+    print(f"[device] 目标设备 = {serial or '(config.yaml 默认/真机)'}")
 
 
 def listen_pids(port=PORT):
@@ -59,8 +82,19 @@ def spawn_via_wmi():
 def main():
     if "--check" in sys.argv:
         up, msg = port_up()
-        print(f"listening_pids={listen_pids()} http_ok={up} {msg[:120]}")
+        print(f"target={read_target() or '(config.yaml 默认/真机)'} "
+              f"listening_pids={listen_pids()} http_ok={up} {msg[:120]}")
         return 0
+
+    # 0) 设备选择（写盘 → _serve_logged.py 读回注入 ANDROID_SERIAL）
+    if "--switch" in sys.argv:
+        write_target("" if read_target() else MUMU_SERIAL)
+    elif "--device" in sys.argv:
+        _i = sys.argv.index("--device")
+        _val = sys.argv[_i + 1].strip() if _i + 1 < len(sys.argv) else ""
+        if _val.lower() in ("real", "phone", "真机"):
+            _val = ""
+        write_target(_val)
 
     # 1) 杀掉旧进程
     for pid in listen_pids():

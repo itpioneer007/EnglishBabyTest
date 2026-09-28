@@ -1,6 +1,6 @@
 {
   "_架构": "统一走阿里云百炼 API（2026-09-10 晚回归；此前曾临时切 DeepSeek 官方）",
-  "_策略": "文本用 deepseek-v4-pro-0813；视觉用 qwen3.8-27b 真看图（能看见图标）；额度用尽自动切备用",
+  "_策略": "文本用 deepseek-v4.1-flash；视觉用 qwen3.8-27b 真看图（能看见图标）；额度用尽自动切三级备用",
   "_安全": "密钥在 .env 文件，请勿在此文件中存放敏感信息",
   "_变更_20260910": {
     "原因": "qwen3.7-plus / qwen3.7-max 免费额度耗尽（403 AllocationQuota.FreeTierOnly），AI 六维核查静默降级",
@@ -8,13 +8,30 @@
     "视觉": "qwen3.8-27b（百炼；真看图。曾试 qwen3.5-ocr 两段式，但 OCR 看不到图标会从题面文字脑补 → 漏报「要求听音却无喇叭图标」类缺陷，故改回真看图）",
     "注意": "百炼的模型必须用百炼 key；DeepSeek 官方 key 在百炼上无效"
   },
-  "model": "deepseek-v4-pro-0813",
+  "model": "deepseek-v4.1-flash",
   "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-  "no_think_models": "deepseek-v4-pro-0813,deepseek-v4-pro",
+  "no_think_models": "deepseek-v4.1-flash,deepseek-v4-pro-0813,deepseek-v4-pro,qwen3.7-flash",
   "vision_model": "qwen3.8-27b",
   "vision_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
   "max_tokens": 4000,
   "temperature": 0.1,
-  "vision_model_fallback": "qwen3.8-max",
-  "vision_model_fallback2": "qwen3.8-flash"
+  "vision_model_fallback": "qwen3.7-flash",
+  "vision_model_fallback2": "qwen3.8-max",
+  "vision_model_fallback3": "qwen3.8-flash",
+  "model_fallback": "deepseek-v4-flash,deepseek-v3.2",
+  "_变更_20260921": "deepseek-v4-pro-0813 免费额度耗尽(403 FreeTierOnly) → 增文本备用链 deepseek-v4-flash → deepseek-v3.2；同时把 403/quota/exhausted 纳入不可重试标记",
+  "_变更_20260923": {
+    "原因": "deepseek-v4-pro-0813 免费额度持续耗尽（稳定 403 FreeTierOnly），每次调用先失败一次再回落 flash，多一次往返且拖慢脚本审查",
+    "文本": "deepseek-v4-pro-0813 → deepseek-v4.1-flash（用户指定）。实测 1.29~1.43s，可用",
+    "⚠ 必须同步": "deepseek-v4.1-flash 也是推理模型：不关思维链时 200 token 全被 reasoning_content 吃光（text_tokens=0 / finish_reason=length / content 空），已加入 no_think_models 与 .env 的 LLM_NO_THINK_MODELS，代码侧 _NO_THINK_FALLBACK 同步兜底",
+    "勿填": "deepseek-v4.1-pro 实测 404 model_not_found（不存在）",
+    "备用链": "保持 deepseek-v4-flash → deepseek-v3.2（本日实测均可用）"
+  },
+  "_变更_20260923b": {
+    "原因": "视觉模型额度用尽时的备用需要与主模型**不同系列**，否则（同系列）会跟着一起失效；且原 fallback1 qwen3.8-max 实测 105s/图，作为自动备用偏慢",
+    "视觉备用链": "qwen3.7-flash ★（用户指定，放最前，跨系列独立额度）→ qwen3.8-max → qwen3.8-flash（原两级保留，代码由两级扩为三级 vision_model_fallback3 / VISION_MODEL_FALLBACK3）",
+    "实测": "qwen3.7-flash 识图正常：同一张 U7 截图读出 six fox / box ox，喇叭图标判定与 qwen3.8-27b 一致",
+    "⚠ 必须同步": "qwen3.7-flash 是推理模型（reasoning_tokens 2200~4600、18~37s/图）。加入 no_think_models / LLM_NO_THINK_MODELS / _NO_THINK_FALLBACK 三处 → 1.1s/图，且 3 张真实截图喇叭判定（有/无/无）与关前完全一致",
+    "待观察": "qwen3.8-max 未关思维链，105s/图；如需提速可同样列入 no-think 白名单（未改动）"
+  }
 }

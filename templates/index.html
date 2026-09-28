@@ -714,6 +714,19 @@
         font-size: 12.5px;
         color: #92400e;
       }
+      /* 脚本比对来源（溯源横幅） */
+      .review-prov {
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 10px;
+        padding: 8px 14px;
+        margin-bottom: 8px;
+        font-size: 12px;
+        line-height: 1.75;
+      }
+      .review-prov-line.ok { color: #2d6a4f; }
+      .review-prov-line.bad { color: #9a3325; }
+      .review-prov-line.unk { color: #8a6100; }
       /* 不通过题清单 */
       .review-fail-list {
         background: #fef2f2;
@@ -2149,6 +2162,13 @@
               >AI不通过
               <b class="text-[15px] text-[#bc4742]" id="sFailed">0</b></span
             >
+            <!-- ★ 2026-09-23（用户反馈）：三态口径里"未判定"此前只在下方总览条出现，
+                 头部只有通过/不通过 → 检查人员以为 20 题里只有 6 题有结论。
+                 这里补上"AI未审"，并去掉下方重复的三态行（口径统一在头部）。 -->
+            <span
+              >AI未审
+              <b class="text-[15px] text-[#b0873a]" id="sUnrev">0</b></span
+            >
             <span class="ml-auto"
               >已人工标注
               <b class="text-[15px] text-[#2d6a4f]" id="sLabeled">0</b></span
@@ -2632,8 +2652,13 @@
           });
           html += `</div></div>`;
         }
+        // ★ 2026-09-20 修复（用户反馈：界面一直刷新自动拉到底部，没法上下滑动看历史）：
+        //   只有当用户本来就停留在底部附近（<60px）时才跟随滚动到最新日志；
+        //   用户往上翻了 → 保持当前位置不动，绝不强行拽回底部。
+        const _nearBottom =
+          el.scrollHeight - el.scrollTop - el.clientHeight < 60;
         el.innerHTML += html;
-        el.scrollTop = el.scrollHeight;
+        if (_nearBottom) el.scrollTop = el.scrollHeight;
       }
       function clearLog() {
         $("logWrap").innerHTML =
@@ -3416,7 +3441,8 @@
               ).length +
               ids.filter(
                 (id) =>
-                  qs[id].human_label === "不通过" && !qs[id].overall_passed,
+                  qs[id].human_label === "不通过" &&
+                  qs[id].overall_passed === false,
               ).length;
             $("fbAccuracy").textContent = ((corr / lb) * 100).toFixed(0) + "%";
           } else {
@@ -3508,13 +3534,84 @@
         return meaningful.some((k) => detail.includes(k)) ? detail : "";
       }
 
+      /* ★ 2026-09-23（用户反馈②：审查结果左侧栏老是刷新、展开后位置总在跳、
+         一直闪烁，根本查看不了）：pollInspect 每 2s 拉一次状态，旧实现每次都把
+         #questionList 整块 innerHTML 重写 → 展开态/滚动位置反复被重建。
+         现在改为三层防护：
+           ① 顶部区块与每张卡片都做「HTML 未变则不动 DOM」；
+           ② 卡片按 qid 做 keyed diff，只更新真的变了的那张；
+           ③ 用户正在滚动/展开题卡时（1.5s 内）直接跳过列表重渲染。
+      */
+      let _qlLockUntil = 0;
+      let _qlLockBound = false;
+      function _qlBindLock() {
+        if (_qlLockBound) return;
+        const el = document.getElementById("questionList");
+        if (!el) return;
+        _qlLockBound = true;
+        const hold = () => {
+          _qlLockUntil = Date.now() + 1500;
+        };
+        el.addEventListener("scroll", hold, { passive: true });
+        el.addEventListener("toggle", hold, true); // toggle 不冒泡 → 捕获阶段
+      }
+      function _qlZone(el, html) {
+        if (!el) return;
+        if (el.__h === html) return; // 数据没变 → 一个字节都不动 DOM（不闪）
+        el.__h = html;
+        el.innerHTML = html;
+      }
+      // 卡片区 keyed diff：items = [{key, tag, cls, html}]
+      function _qlRenderCards(zone, items) {
+        if (!zone) return;
+        const alive = new Map();
+        Array.from(zone.children).forEach((c) => {
+          if (c.dataset && c.dataset.k) alive.set(c.dataset.k, c);
+          else c.remove(); // 清掉旧结构（切换模块/清空后残留）
+        });
+        let prev = null;
+        items.forEach((it) => {
+          let el = alive.get(it.key);
+          if (el) alive.delete(it.key);
+          else {
+            el = document.createElement(it.tag || "div");
+            el.dataset.k = it.key;
+          }
+          if (it.cls && el.className !== it.cls) el.className = it.cls;
+          if (it.id && el.id !== it.id) el.id = it.id;
+          // open 是元素属性 → 单独同步（用户手动的展开/收起不会被渲染覆盖）
+          if (it.open !== undefined && el.open !== it.open) el.open = it.open;
+          if (el.__h !== it.html) {
+            el.innerHTML = it.html;
+            el.__h = it.html;
+          }
+          const want = prev ? prev.nextSibling : zone.firstChild;
+          if (el !== want) zone.insertBefore(el, want);
+          prev = el;
+        });
+        alive.forEach((el) => el.remove());
+      }
+
       function updQ(f) {
         const qs = f.questions || {},
           ids = Object.keys(qs).sort(),
           t = ids.length;
         const lb = ids.filter((id) => qs[id].human_label).length;
-        const aipa = ids.filter((id) => qs[id].overall_passed).length;
-        const aifa = t - aipa;
+        const aipa = ids.filter((id) => qs[id].overall_passed === true).length;
+        // ★ 2026-09-23 修复：aifa 原为 `t - aipa`，把 None(未判定) 也算成"不通过"
+        //   → 总览显示"不通过 6"，而实际 overall_passed===false 是 0；
+        //   下面的不通过题清单（failIds）与错题日志（updWrong）都用 `=== false` 过滤
+        //   → 数字说有 6 道错题、列表却一条都不展示（用户实测踩中）。
+        //   三态必须分开统计：通过=true ／ 不通过=false ／ 未判定=null|undefined。
+        const aifa = ids.filter((id) => qs[id].overall_passed === false).length;
+        // ★ 2026-09-23（用户反馈①）：三态口径的"未判定"必须与头部统计条一同展示。
+        //   此前头部只有"AI通过/AI不通过"，未判定只在下方总览条出现 → 数字对不上
+        //   （用户原话："应该要再加一个未审的题数上去，而不是…重复了"）。
+        const nOpt = ids.filter(
+          (id) =>
+            qs[id].overall_passed === null ||
+            qs[id].overall_passed === undefined,
+        ).length;
         $("qBadge").textContent = t ? t + "题" : "待启动";
         const sb = $("qStatsBar");
         if (t) {
@@ -3522,27 +3619,28 @@
           $("sTotal").textContent = t;
           $("sPassed").textContent = aipa;
           $("sFailed").textContent = aifa;
+          if ($("sUnrev")) $("sUnrev").textContent = nOpt;
           $("sLabeled").textContent = lb;
         } else sb.classList.add("hidden");
+        // ★ 用户正在查看题卡（滚动/刚展开）→ 只刷统计数字，绝不重建列表
+        if (t && Date.now() < _qlLockUntil) return;
         if (!t) {
-          $("questionList").innerHTML =
+          _qlLockUntil = 0;
+          const _ql0 = $("questionList");
+          _ql0.innerHTML =
             `<div class="text-center py-8 text-[#9aa5a0]">
       <div class="text-[13.5px] font-medium text-[#6b7280] mb-1">尚未开始审查</div>
       <div class="text-[11px]">点「快速检查」从手机当前页开查，或随自动化检测同步展示</div></div>`;
           return;
         }
+        _qlBindLock();
         // ★ 审查体系改造：总览区 + 结论式卡片 + 折叠 + 复用标记
         // 1) 复用标记
         let reuseHtml = "";
         if (f._reuse_info) {
           reuseHtml = `<div class="review-reuse-banner">🔄 ${escHtml(f._reuse_info)}</div>`;
         }
-        // 2) 总览统计
-        const nOpt = ids.filter(
-          (id) =>
-            qs[id].overall_passed === null ||
-            qs[id].overall_passed === undefined,
-        ).length;
+        // 2) 总览统计（nOpt 已在函数开头随三态口径一起算出）
         // ★ 2026-08-30 修复：按 (模块·stage) 分组展示各自动态题数
         //   （用户要求：测了听力专项·练习+测试，总览要分开展示，不能只显示单一总数字）
         const modsTotal = f._modules_total || {};
@@ -3552,10 +3650,17 @@
               `<span class="mod-row"><b>${escHtml(k)}</b> ${modsTotal[k]} 题</span>`,
           )
           .join("  ");
-        const overviewHtml = `<div class="review-overview">
-    <div class="review-overview-title">本次审查 <b>${t}</b> 题：通过 <b class="pass">${aipa}</b> ／ 不通过 <b class="fail">${aifa}</b> ／ 未审 <b class="skip">${nOpt}</b></div>
-    <div class="review-overview-sub">${modRows ? "分模块：" + modRows : ""}　人工标注 <b>${lb}</b> 题 · 反馈准确率 <b>${$("fbAccuracy") ? $("fbAccuracy").textContent : "—"}</b></div>
-  </div>`;
+        // ★ 2026-09-23（用户反馈①）：这里原来又写了一遍「通过／不通过／未审」，
+        //   与顶部统计条完全重复（用户原话："这不是重复了吗"）。
+        //   三态口径统一由顶部 qStatsBar 承担；此条只留顶部没有的信息：
+        //   分模块题数 + 反馈准确率（人工标注条数顶部已有，也不再重复）。
+        const _fbTxt = $("fbAccuracy") ? $("fbAccuracy").textContent : "—";
+        const overviewHtml =
+          modRows || _fbTxt !== "—"
+            ? `<div class="review-overview">
+    <div class="review-overview-sub">${modRows ? "分模块：" + modRows + "　" : ""}反馈准确率 <b>${_fbTxt}</b></div>
+  </div>`
+            : "";
         // 3) 不通过题清单（折叠区，默认展开）
         const failIds = ids.filter((id) => qs[id].overall_passed === false);
         let failListHtml = "";
@@ -3593,6 +3698,111 @@
         })
         .join("")}</div>
     </details>`;
+        }
+        // 3.4) ★ 2026-09-23 未判定题清单（新增）
+        //   为什么需要：总览此前只给"未审 N"一个数字，检查人员看不到是哪几题、
+        //   为什么没判定，只能翻下方几十张卡片逐张找。这里直接列出来。
+        //   口径：未判定 = overall_passed 既非 true 也非 false（null/undefined），
+        //   与"不通过"（严格 === false）是两回事，绝不能混算（这正是总览
+        //   "不通过 6"却一条都点不开的根因）。
+        const unrevIds = ids.filter(
+          (id) =>
+            qs[id].overall_passed === null ||
+            qs[id].overall_passed === undefined,
+        );
+        let unrevListHtml = "";
+        if (unrevIds.length) {
+          unrevListHtml = `<details class="review-fail-list">
+      <summary class="review-fail-summary">⏳ 未判定题（${unrevIds.length} 题）—— 证据不足，未判通过/不通过<span class="toggle-icon">▾</span></summary>
+      <div class="review-fail-items">${unrevIds
+        .map((uid) => {
+          const q = qs[uid];
+          const dimVals = [
+            q.ai_stem,
+            q.ai_content,
+            q.ai_image,
+            q.ai_answer,
+            q.ai_audio,
+            q.ai_post_error,
+          ];
+          const checked = dimVals.filter(
+            (v) => v === true || v === false,
+          ).length;
+          const scr = q.script && typeof q.script === "object" ? q.script : null;
+          const scrTxt =
+            scr && scr.matched && scr.status === "done"
+              ? scr.overall_passed === true
+                ? "；脚本层已通过（界面层取证不足）"
+                : scr.overall_passed === false
+                  ? "；脚本层不通过（见题卡）"
+                  : ""
+              : "";
+          const qnum = String(q.idx ?? uid).padStart(2, "0");
+          return `<div class="review-fail-item" onclick="scrollToQ('${escHtml(uid)}')">
+          <span class="rf-qnum">Q${qnum}</span>
+          <span class="rf-type">${escHtml(q.question_type || "?")}</span>
+          <span class="rf-reason">仅 ${checked} 维可查${scrTxt}（点开看题卡详情）</span>
+        </div>`;
+        })
+        .join("")}</div>
+    </details>`;
+        }
+        // 3.5) ★ 2026-09-20 脚本自检问题清单
+        //   `check_script_completeness` 命中的问题（答案↔关键词不一致 / 知识点占位 /
+        //   字段名不统一）此前**只进前端日志**，审查结果区一条都看不到 → 检查人员
+        //   会以为"脚本没问题"（用户反馈原话："脚本有问题你没检查出来"）。
+        //   这里汇总成可展开清单，高严重度在前；位置里的单元号不属于本次实跑单元时
+        //   也照实显示（U7 的问题在一次 U4 的实跑里不会归位到题卡）。
+        // ★ 2026-09-21：脚本溯源横幅 —— 本次结论到底拿哪份脚本比出来的、配不配得上。
+        //   没有它，检查人员看到"脚本层不通过"无法判断是真错还是拿错脚本比出来的假错
+        //   （用户连续两轮反馈"没测过的题也乱报"）。
+        let provHtml = "";
+        const provMap = f._script_provenance || {};
+        const provKeys = Object.keys(provMap);
+        if (provKeys.length) {
+          provHtml = `<div class="review-prov">${provKeys
+            .map((m) => {
+              const p = provMap[m] || {};
+              const ok = p.matched === true;
+              const file = String(p.file || "");
+              const reason = String(p.reason || "未挂载对应脚本");
+              return `<div class="review-prov-line ${ok ? "ok" : "bad"}">${
+                ok
+                  ? `📄 ${escHtml(m)}：比对脚本「${escHtml(file || "已挂载")}」（版本/年级匹配 ✓）`
+                  : `⚠ ${escHtml(m)}：未做脚本层比对 —— ${escHtml(reason)}。脚本相关结论不作为判定依据`
+              }</div>`;
+            })
+            .join("")}</div>`;
+        } else {
+          provHtml =
+            '<div class="review-prov"><div class="review-prov-line unk">⚠ 本次运行的比对脚本来源未记录（旧版本产物）→ 脚本相关结论请人工复核</div></div>';
+        }
+
+        let scHtml = "";
+        const scMap = f._script_issues || {};
+        const scItems = [];
+        Object.keys(scMap).forEach((m) =>
+          (scMap[m] || []).forEach((i) =>
+            scItems.push(Object.assign({ mod: m }, i)),
+          ),
+        );
+        if (scItems.length) {
+          const scRank = { 高: 0, 中: 1, 低: 2 };
+          const scRankOf = (s) => (scRank[s] === undefined ? 3 : scRank[s]);
+          scItems.sort((a, b) => scRankOf(a.severity) - scRankOf(b.severity));
+          const hi = scItems.filter((i) => i.severity === "高").length;
+          scHtml = `<details class="review-fail-list" open>
+    <summary class="review-fail-summary">⚠ 脚本自检问题（${scItems.length} 处${hi ? " · 高 " + hi + " 处" : ""}）—— 答案↔关键词 / 知识点 / 字段名<span class="toggle-icon">▾</span></summary>
+    <div class="review-fail-items">${scItems
+      .map(
+        (i) => `<div class="review-fail-item" style="display:block">
+        <span class="rf-type">${escHtml(String(i.severity || "") + " · " + String(i.type || "脚本问题") + " · " + String(i.location || "全文"))}</span>
+        <div class="text-[11.5px] text-[#6b7280] mt-1">${escHtml(String(i.detail || ""))}</div>
+        ${i.suggestion ? `<div class="text-[11px] text-[#2e7d32] mt-1">怎么改：${escHtml(String(i.suggestion))}</div>` : ""}
+      </div>`,
+      )
+      .join("")}</div>
+  </details>`;
         }
         // 4) 按模块/阶段分组渲染
         // ★ 2026-08-26 修复卡片自动收回：pollInspect 每2s重渲染 questionList，
@@ -3637,12 +3847,18 @@
           (groups[k] = groups[k] || []).push(qid);
         });
         // 5) 每题卡片渲染（结论式）
-        const cardHtml = Object.keys(groups)
-          .map(
-            (k, gi) =>
-              `<div class="q-group-title${gi ? " mt-3" : ""}">▎${escHtml(k)}<span class="count">${groups[k].length} 题</span></div>` +
-              groups[k]
-                .map((qid) => {
+        // ★ 2026-09-23：改为生成 keyed 列表（qid → DOM 元素），不再拼一整串 HTML。
+        //   这样 pollInspect 刷新时可以按 key 做增量更新：内容没变的卡片
+        //   一个字节都不动 DOM → 展开的题卡不会跳动/闪烁（用户反馈②）。
+        const cardItems = [];
+        Object.keys(groups).forEach((k, gi) => {
+          cardItems.push({
+            key: "grp:" + k,
+            tag: "div",
+            cls: "q-group-title" + (gi ? " mt-3" : ""),
+            html: `▎${escHtml(k)}<span class="count">${groups[k].length} 题</span>`,
+          });
+          groups[k].forEach((qid) => {
                   const q = qs[qid],
                     pa = q.overall_passed,
                     unrev = pa === null || pa === undefined;
@@ -3805,10 +4021,17 @@
                   }
                   // 卡面折叠状态：★ 失败题永远默认展开（用户期望，否者过几秒就刷新被收起）
                   //   + 用户手动展开过的（openSet）保留 → 防止 pollInspect 每2s重渲染把卡片收起
-                  const cardOpen =
-                    pa === false || openSet.has("qc_" + qid) ? "open" : "";
-                  return `<details class="q-card-new" id="qc_${qid}" ${cardOpen}>
-      <summary class="q-head-new ${pa === false ? "fail" : unrev ? "pending" : "pass"}">
+                  // ★ 2026-09-23：open 改为**元素属性**（不再写进 HTML 字符串）。
+                  //   增量渲染时只在该变的时候改 → 用户手动展开的题卡永不被打断
+                  //   （旧写法每次重建 DOM，<details> 的 open 只能靠字符串重新给，
+                  //    正好是"展开后一直闪烁、根本看不了"的直接原因）。
+                  cardItems.push({
+                    key: "qc:" + qid,
+                    id: "qc_" + qid,
+                    tag: "details",
+                    cls: "q-card-new",
+                    open: pa === false || openSet.has("qc_" + qid),
+                    html: `<summary class="q-head-new ${pa === false ? "fail" : unrev ? "pending" : "pass"}">
         <div class="qnum">Q${qnum}</div>
         <span class="qtype">${q.question_type || "?"}</span>
         <span class="q-conclusion">${escHtml(conclusionLine)}</span>
@@ -3823,19 +4046,27 @@
         ${scriptHtml}
         ${shotHtml}
         <div class="q-actions">${actHtml}</div>
-      </div>
-    </details>`;
-                })
-                .join(""),
-          )
-          .join("");
-        $("questionList").innerHTML =
-          reuseHtml + overviewHtml + failListHtml + cardHtml;
+      </div>`,
+                  });
+          });
+        });
+        // 渲染：顶部区块 + 卡片区（HTML 未变则一个字节都不动 DOM）
+        const _ql = $("questionList");
+        if (!document.getElementById("qTopZone")) {
+          _ql.innerHTML = '<div id="qTopZone"></div><div id="qCardsZone"></div>';
+        }
+        _qlZone(
+          $("qTopZone"),
+          reuseHtml + provHtml + overviewHtml + scHtml + failListHtml + unrevListHtml,
+        );
+        _qlRenderCards($("qCardsZone"), cardItems);
       }
       function scrollToQ(qid) {
         const el = document.getElementById("qc_" + qid);
         if (el) {
           el.open = true;
+          // ★ 2026-09-23：平滑滚动期间锁住列表重渲染，否则 2s 轮询会把滚动打断
+          _qlLockUntil = Date.now() + 1500;
           el.scrollIntoView({ behavior: "smooth", block: "center" });
         }
       }
@@ -4088,21 +4319,68 @@
                     scoreHtml = `<div class="bg-[#faf8f3] rounded-md px-2.5 py-2 text-[10.5px] text-[#6b7280]">${sc.formula}</div>`;
                   }
 
-                  // 3) 错误维度溯源清单（同学C的 checks：维度/严重度/原因/建议）
+                  // 3) 错误维度溯源清单（维度/层级/原因/建议）
+                  // ★ 2026-09-17 重排（用户反馈"不够直白、文本太长、抓不住重点"）：
+                  //   旧版一段"原因："长句平铺 → 检查人员要读完才知道错在哪。
+                  //   新版结构：① 一句话结论（黑体，取自原因冒号前）
+                  //             ② App实际 ↔ 脚本应为 双栏对照（红色/绿色，一眼看出差异）
+                  //             ③ 完整原因（引号内容折叠为「…」，避免重复长文本）
+                  //             ④ 怎么改（独立建议，不再与原因同一句话）
                   const tr = q._trace;
+                  const qcQuotes = (s) => (String(s || "").match(/「([^」]{1,160})」/g) || [])
+                    .map((x) => x.slice(1, -1));
+                  const qcHead = (s) => {
+                    let t = String(s || "").replace(/^[❌⚠✅✕✓\s]+/, "").trim();
+                    // 先把引号内容压成「…」再取结论，避免"关键词「bring their rainco…"这种切断
+                    t = t.replace(/「[^」]{1,160}」/g, "「…」");
+                    const i = t.search(/[：:]/);
+                    t = i > 0 ? t.slice(0, i) : t;
+                    return t.length > 22 ? t.slice(0, 22) + "…" : t;
+                  };
                   let dimsHtml = "";
                   if (tr && tr.checks && tr.checks.length) {
                     dimsHtml = `<div class="space-y-1.5">${tr.checks
                       .map((c) => {
                         const reason = cleanR(c.reason) || "未提供具体原因";
+                        const qs = qcQuotes(reason);
+                        // 判断对照语义：脚本比对 / 答案·关键词不一致 → 双栏标签不同
+                        const isScriptCmp = /脚本(应|为)|不符/.test(reason);
+                        const labs = isScriptCmp
+                          ? ["App 实际", "脚本应为"]
+                          : ["实际", "应改为"];
+                        const cmpHtml =
+                          qs.length >= 2
+                            ? `<div class="mt-1.5 grid grid-cols-2 gap-1.5">
+            <div class="rounded-md bg-[#fdecec] border border-[#f6c9c9] px-2 py-1.5">
+              <div class="text-[9px] font-semibold text-[#b91c1c] mb-0.5">${labs[0]}</div>
+              <div class="text-[11px] text-[#7f1d1d] break-all leading-snug">${escHtml(qs[0])}</div>
+            </div>
+            <div class="rounded-md bg-[#eafaf0] border border-[#bfe9cd] px-2 py-1.5">
+              <div class="text-[9px] font-semibold text-[#2e7d32] mb-0.5">${labs[1]}</div>
+              <div class="text-[11px] text-[#14532d] break-all leading-snug">${escHtml(qs[1])}</div>
+            </div>
+          </div>`
+                            : "";
+                        // 已有双栏对照 → 长原因里把引号内容压缩成「…」，避免同样内容出现两遍
+                        const detail = qs.length >= 2
+                          ? escHtml(String(reason).replace(/「[^」]{1,160}」/g, "「…」"))
+                          : escHtml(reason);
+                        const layerBadge = c.layer
+                          ? `<span class="text-[9px] px-1.5 py-px rounded bg-[#eef2ff] text-[#4338ca] font-semibold">${escHtml(c.layer)}</span>`
+                          : "";
                         return `<div class="border border-[#fecaca] rounded-md px-2 py-1.5 bg-[#fffbfb]">
-          <div class="flex items-center gap-1.5">
-            <span class="text-[11px] font-semibold text-[#7f1d1d]">${escHtml(c.dimension)}</span>
-            <span class="text-[9px] px-1.5 py-px rounded ${sevCls[c.severity] || sevCls.low}">${sevLbl[c.severity] || c.severity}</span>
-            <span class="ml-auto text-[9.5px] text-[#bc4742]">未通过</span>
+          <div class="flex items-center gap-1.5 flex-wrap">
+            <span class="text-[11.5px] font-bold text-[#7f1d1d]">${escHtml(qcHead(reason))}</span>
+            <span class="text-[9px] px-1.5 py-px rounded bg-[#fee2e2] text-[#bc4742] font-semibold">${escHtml(c.dimension)}</span>
+            ${layerBadge}
+            <span class="ml-auto text-[9px] px-1.5 py-px rounded ${sevCls[c.severity] || sevCls.low}">${sevLbl[c.severity] || c.severity}</span>
           </div>
-          <div class="text-[10.5px] text-[#475569] mt-1">原因：${escHtml(reason)}</div>
-          <div class="text-[10.5px] text-[#2d6a4f] mt-0.5">建议：${escHtml(cleanR(c.suggestion) || "核对脚本修正")}</div>
+          ${cmpHtml}
+          <div class="text-[10px] text-[#6b7280] mt-1 leading-relaxed">${detail}</div>
+          <div class="mt-1 rounded-md bg-[#eafaf0] border border-[#bfe9cd] px-2 py-1 flex items-start gap-1">
+            <span class="text-[9px] font-semibold text-[#2e7d32] shrink-0 mt-px">怎么改</span>
+            <span class="text-[10.5px] text-[#14532d] leading-snug">${escHtml(cleanR(c.suggestion) || "对照脚本核对并修正该处")}</span>
+          </div>
         </div>`;
                       })
                       .join("")}</div>`;
@@ -4132,10 +4410,14 @@
                       : '<div class="text-[10.5px] text-[#6b7280]">综合判定不通过</div>';
                   }
 
-                  // 4) 题目溯源截图（红框标注图优先，其次原图）
-                  const shot = q._marked || q.screenshot;
+                  // 4) 证据截图：出错区域特写优先（"截图精准截到问题那几行"）→ 红框标注 → 整屏原图
+                  const shot = q._crop || q._marked || q.screenshot;
+                  const shotIsCrop = !!q._crop && shot === q._crop;
                   const shotHtml = shot
-                    ? `<img src="/api/screenshot/${shot}" class="w-full max-h-[150px] object-contain bg-[#faf8f3] rounded-md border border-[#e6dfd4] cursor-pointer" onclick="openShotLightbox('/api/screenshot/${shot}')" onerror="this.style.display='none'">`
+                    ? `<div>
+        <div class="text-[9px] text-[#9aa5a0] mb-0.5">${shotIsCrop ? "证据截图 · 已定位到出错区域" : "证据截图 · 整屏（该题未采集到控件坐标）"}</div>
+        <img src="/api/screenshot/${shot}" class="w-full max-h-[170px] object-contain bg-[#faf8f3] rounded-md border border-[#e6dfd4] cursor-pointer" onclick="openShotLightbox('/api/screenshot/${shot}')" onerror="this.style.display='none'">
+      </div>`
                     : "";
 
                   // 5) 题干 / 标准答案（script_context）

@@ -170,6 +170,52 @@ def _find_control(xml: str, keywords: tuple, rid_pattern: str = None) -> tuple:
     return False, False
 
 
+def _box_of_text(xml: str, text: str):
+    """在 XML 里找 text 对应的节点 bounds → {"x","y","w","h"}；找不到返回 None。
+
+    ★ 2026-09-17 新增：红框必须画在"出问题的那一行"上。
+      旧版拿不到坐标就用固定占位框 (40, 60+i*120, 420x90)，在 1080×2400 的
+      截图里正好落在手机状态栏 → 检查人员看到红框框着信号/电量图标，
+      和问题描述毫无关系。坐标必须来自真实控件。
+    """
+    if not xml or not text:
+        return None
+    _t = (text or "").strip()
+    if not _t:
+        return None
+    for m in re.finditer(r"<node\b[^>]*>", xml):
+        tag = m.group(0)
+        tm = re.search(r'text="([^"]*)"', tag)
+        if not tm or not tm.group(1):
+            continue
+        _nt = tm.group(1).strip()
+        if _nt != _t and _nt not in _t and _t not in _nt:
+            continue
+        bm = re.search(r'bounds="\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]"', tag)
+        if not bm:
+            continue
+        x1, y1, x2, y2 = (int(bm.group(1)), int(bm.group(2)),
+                          int(bm.group(3)), int(bm.group(4)))
+        if x2 <= x1 or y2 <= y1 or x2 <= 0 or y2 <= 0:
+            continue
+        return {"x": max(0, x1), "y": max(0, y1), "w": x2 - x1, "h": y2 - y1}
+    return None
+
+
+def _union_boxes(boxes):
+    """合并多个矩形为一个外接矩形；全空返回 None。"""
+    bs = [b for b in (boxes or []) if b]
+    if not bs:
+        return None
+    x1 = min(b["x"] for b in bs)
+    y1 = min(b["y"] for b in bs)
+    x2 = max(b["x"] + b["w"] for b in bs)
+    y2 = max(b["y"] + b["h"] for b in bs)
+    if x2 <= x1 or y2 <= y1:
+        return None
+    return {"x": x1, "y": y1, "w": x2 - x1, "h": y2 - y1}
+
+
 def collect_ui_evidence(xml: str, qtype: str = "", skip_stem: bool = False) -> list:
     """从页面 XML 提取四维完整性证据。返回 evidence 列表（供 step_log 前端证据卡）
 
@@ -361,9 +407,14 @@ def collect_ui_evidence(xml: str, qtype: str = "", skip_stem: bool = False) -> l
                     stems = _zone_texts
         stem_txt = " / ".join(stems[:2]) if stems else "(无题干文字)"
         if not skip_stem:
-            ev.append({"field": "题干", "type": "text_ok" if stems else "text_mismatch",
-                       "expected": "文字完整可见", "actual": stem_txt,
-                       "diff": f"提取到{len(stems)}条文字" if stems else "未提取到题干文字"})
+            _ev = {"field": "题干", "type": "text_ok" if stems else "text_mismatch",
+                   "expected": "文字完整可见", "actual": stem_txt,
+                   "diff": f"提取到{len(stems)}条文字" if stems else "未提取到题干文字"}
+            # ★ 真实控件坐标 → 红框/特写截图能精准落在题干那几行上
+            _bx = _union_boxes([_box_of_text(xml, s) for s in (stems or [])])
+            if _bx:
+                _ev["box"] = _bx
+            ev.append(_ev)
         # ★ 2026-08-25 skip_stem=True 时题干提取段全部跳过，但"seen"后续不再使用，
         #   且 stems=None 时上面的提取逻辑（question_title_tv/tv_caption/兜底/zone）已在
         #   if stems is not None 保护外——需确认所有 stems.append 都在保护内：见下方 for 循环
@@ -436,6 +487,21 @@ def collect_ui_evidence(xml: str, qtype: str = "", skip_stem: bool = False) -> l
         is_listening = is_listening or any(kw in xml for kw in LISTEN_KWS)
         is_speaking = is_speaking or any(kw in xml for kw in SPEAK_KWS)
 
+        # 播放/扬声器控件检测：找含关键词的节点，并判断是否可点击
+        PLAY_KWS = ("播放", "喇叭", "扬声器", "ic_play", "btn_play",
+                    "play_btn", "audio", "sound", "▶", "原音")
+        # ★ 麦克风检测：口语训练答题页录音控件核心文本是"点击录音/点击结束"
+        #   （实际麦克风图标是图片无文本）。这些文本控件 100% 关联到录音功能，可靠。
+        #   ★ 2026-08-24：不能包含泛词"录音/开始作答/继续作答"——大题说明文字(tv_caption)
+        #   里就有"点击"录音"开始作答"，会被误判为麦克风 → 倒计时中误报"麦克风可点击"。
+        #   只认：record/mic（resource-id 必含）+"点击录音/点击结束/点击完成/麦克风"精确词
+        MIC_KWS = ("record", "mic", "点击录音", "点击结束", "点击完成", "麦克风")
+        # ★ 2026-09-23：控件检测必须**早于**"是不是图片题"的判断，理由见下方 _is_image_q 守卫。
+        play_found, play_clickable = _find_control(
+            xml, PLAY_KWS, rid_pattern=r'resource-id="[^"]*(play|sound|audio|speaker)[^"]*"')
+        mic_found, mic_clickable = _find_control(
+            xml, MIC_KWS, rid_pattern=r'resource-id="[^"]*(record|mic)[^"]*"')
+
         # ★ 图片/大图题（题干带"看图片/图片"或页面主体是大 ImageView）：
         #   听力图片题音频自动播放（无需手动点扬声器），口语图片题直接朗读，
         #   → 音频维度 skip，避免"听单词/看图选词"误报"未检测到播放控件"
@@ -448,30 +514,36 @@ def collect_ui_evidence(xml: str, qtype: str = "", skip_stem: bool = False) -> l
                     _has_big_image = True
                     break
         _is_image_q = _has_big_image or ("图片" in xml and ("看图片" in xml or "看图" in xml or "观察图片" in xml))
+        # ★★ 2026-09-23 修正（用户实测）：「页面有大图」≠「本题是图片题」。
+        #   口语训练教科五上 U6 第4大题是**听录音作答**题：整页只有一张**表格素材**
+        #   （大题级大图，页面还提示"点击图片可查看高清大图"），每个小题里并没有图片，
+        #   只有一个小喇叭（点它播放问题）+ 录音按钮。旧逻辑只看"页面有没有大图"，
+        #   于是音频维度被写成「图片题（音频自动播放/无独立播放控件）｜实际：图片作答」
+        #   —— 题型讲错了（学生看到的就是点喇叭听题、再口语作答）。
+        #   正确判据：**页面存在可点击的播放控件（小喇叭），或题干明确要求学生
+        #   去点小喇叭听题 → 音频必须手动触发**，属听录音作答，绝不能按
+        #   "图片题音频自动播放"跳过音频检查。
+        #   ⚠ 判据必须从严，否则会误伤真正的自动播放图片题：
+        #     - `play_found` 单独用不行——大题说明(tv_caption)里就有"点击'小喇叭'
+        #       播放问题"这几个字，_find_control 第二轮会把它当成"播放控件存在"；
+        #       若只认 play_found，听力图片题会被改判成"扬声器存在但不可点击"（假错）。
+        #     - 因此要求「控件真的可点」(`play_clickable`) 或「题干出现点播话术」
+        #       (小喇叭/播放问题/点小喇叭…)，二者任一成立才推翻"图片题"判定。
+        _MANUAL_PLAY_HINT_KWS = ("小喇叭", "播放问题", "点击播放", "点小喇叭", "先听",
+                                 "听一听再", "播放录音", "听音跟读", "听录音跟读", "原音")
+        _play_hint = any(k in xml for k in _MANUAL_PLAY_HINT_KWS)
+        if _is_image_q and (play_clickable or _play_hint):
+            _is_image_q = False
         if _is_image_q:
             # 图片题：题干/图片可见即可，音频（自动播放/无独立播放控件）不单独检查
             ev.append({"field": "音频", "type": "skip",
                        "expected": "图片题（音频自动播放/无独立播放控件）",
-                       "actual": "图片作答",
+                       "actual": "图片答题（音频自动播放）",
                        "diff": "图片/大图题，听力音频通常自动播放，无需手动点扬声器"})
             # ★ 注意：直接结束④，不再走下方听力/口语的音频检查
             _audio_skipped = True
         else:
             _audio_skipped = False
-
-        # 播放/扬声器控件检测：找含关键词的节点，并判断是否可点击
-        PLAY_KWS = ("播放", "喇叭", "扬声器", "ic_play", "btn_play",
-                    "play_btn", "audio", "sound", "▶", "原音")
-        # ★ 麦克风检测：口语训练答题页录音控件核心文本是"点击录音/点击结束"
-        #   （实际麦克风图标是图片无文本）。这些文本控件 100% 关联到录音功能，可靠。
-        #   ★ 2026-08-24：不能包含泛词"录音/开始作答/继续作答"——大题说明文字(tv_caption)
-        #   里就有"点击"录音"开始作答"，会被误判为麦克风 → 倒计时中误报"麦克风可点击"。
-        #   只认：record/mic（resource-id 必含）+"点击录音/点击结束/点击完成/麦克风"精确词
-        MIC_KWS = ("record", "mic", "点击录音", "点击结束", "点击完成", "麦克风")
-        play_found, play_clickable = _find_control(
-            xml, PLAY_KWS, rid_pattern=r'resource-id="[^"]*(play|sound|audio|speaker)[^"]*"')
-        mic_found, mic_clickable = _find_control(
-            xml, MIC_KWS, rid_pattern=r'resource-id="[^"]*(record|mic)[^"]*"')
 
         if _audio_skipped:
             pass  # 图片题已发 skip，不再走听力/口语音频检查
@@ -489,9 +561,9 @@ def collect_ui_evidence(xml: str, qtype: str = "", skip_stem: bool = False) -> l
                               "原音"))  # ★ 语音评测"原音"按钮 = 播放控件，须可点
             if _need_play:
                 ev.append({"field": "音频", "type": "text_ok" if play_clickable else "text_mismatch",
-                           "expected": "口语题须有可点击的播放控件(小喇叭/导读音频)",
+                           "expected": "听录音作答题须有可点击的播放控件(小喇叭/导读音频)",
                            "actual": "播放控件" + ("(可点击)" if play_clickable else "(存在但不可点击)") if play_found else "未检测到播放控件",
-                           "diff": ("小喇叭/播放标识可见且可点击（题干要求点击小喇叭）" if play_clickable
+                           "diff": ("小喇叭/播放标识可见且可点击（本题为听录音作答：点小喇叭听题 → 点录音作答）" if play_clickable
                                     else ("⚠ 小喇叭存在但不可点击（无法播放音频）" if play_found
                                           else "⚠ 题干要求点击小喇叭但未检测到播放控件"))})
             else:

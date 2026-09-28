@@ -211,6 +211,46 @@ def get_grades_from_app(d, max_pages=5):
     return grades
 
 
+def _norm_cmp_text(s: str) -> str:
+    """★ 2026-09-21：版本/年级"是否一致"比较前的归一化。
+
+    实测根因：App 主页顶部栏显示「教科版（2024审定）」（**全角**括号），
+    而前端下拉框/CLI 传过来的目标是「教科版(2024审定)」（**半角**括号）——
+    直接做 `version in cur_ver` 永远为 False → 每次运行都误判"版本不对" →
+    触发一次**本不需要的版本切换**；切换失败后 App 停在半途（版本弹层/被误触的
+    通知栏），紧接着模块就报"当前页无'口语训练'卡片"（诊断 dump 出来的全是
+    安卓通知栏文本：无通知 / 飞行模式 / 深色主题）。
+
+    归一化：全角 ASCII → 半角、去掉所有空白、统一小写。
+    """
+    if not s:
+        return ""
+    out = []
+    for ch in str(s):
+        o = ord(ch)
+        if 0xFF01 <= o <= 0xFF5E:        # 全角 ！..～ → 半角
+            out.append(chr(o - 0xFEE0))
+        elif o == 0x3000:                # 全角空格
+            out.append(" ")
+        else:
+            out.append(ch)
+    return "".join(out).replace(" ", "").lower()
+
+
+def _version_match(cur_ver: str, version: str) -> bool:
+    """当前版本是否等于目标版本（容忍全/半角括号差异；仍支持前缀/包含匹配）。"""
+    a, b = _norm_cmp_text(cur_ver), _norm_cmp_text(version)
+    if not a or not b:
+        return False
+    return a.startswith(b) or b in a
+
+
+def _grade_match(cur_grade: str, grade: str) -> bool:
+    """当前年级是否等于目标年级（同样容错全/半角）。"""
+    a, b = _norm_cmp_text(cur_grade), _norm_cmp_text(grade)
+    return bool(a and b and a == b)
+
+
 def _current_texts(d):
     """读取主页顶部栏当前版本+年级文字，返回 (version_text, grade_text) 或 (None, None)
     主页顶部栏节点 resource-id=switch_textbook_tv，text 形如「湘少版（2024审定）   五年级上册」
@@ -232,17 +272,15 @@ def _current_texts(d):
 
 
 def check_version_ok(d, version):
-    """只检查当前版本是否匹配目标版本（前缀匹配，兼容"湘少版"→"湘少版（2024审定）"）"""
+    """只检查当前版本是否匹配目标版本（前缀匹配 + 全/半角容错）"""
     cur_ver, _ = _current_texts(d)
-    if not cur_ver:
-        return False
-    return cur_ver.startswith(version) or version in cur_ver
+    return _version_match(cur_ver, version)
 
 
 def check_grade_ok(d, grade):
-    """只检查当前年级是否匹配目标年级"""
+    """只检查当前年级是否匹配目标年级（全/半角容错）"""
     _, cur_gra = _current_texts(d)
-    return bool(cur_gra and cur_gra == grade)
+    return _grade_match(cur_gra, grade)
 
 
 def switch_version_grade(d, version, grade, skip_if_ok=True):
@@ -266,8 +304,8 @@ def switch_version_grade(d, version, grade, skip_if_ok=True):
 
     # 2. 读当前版本+年级
     cur_ver, cur_gra = _current_texts(d)
-    ver_ok = bool(cur_ver and (cur_ver.startswith(version) or version in cur_ver))
-    gra_ok = bool(cur_gra and cur_gra == grade)
+    ver_ok = _version_match(cur_ver, version)
+    gra_ok = _grade_match(cur_gra, grade)
     if ver_ok and gra_ok:
         print(f"    ✔ 已是 {version} {grade}，无需切换")
         return True
@@ -282,7 +320,7 @@ def switch_version_grade(d, version, grade, skip_if_ok=True):
 
     # 4. 年级不对 → 切年级（版本切换后年级会重置，即使刚才对也需确认）
     cur_ver, cur_gra = _current_texts(d)
-    gra_ok = bool(cur_gra and cur_gra == grade)
+    gra_ok = _grade_match(cur_gra, grade)
     if not gra_ok:
         print(f"    → 切年级: {cur_gra or '未知'} → {grade}")
         if not switch_grade(d, grade):
@@ -292,7 +330,7 @@ def switch_version_grade(d, version, grade, skip_if_ok=True):
 
     # 5. 最终确认
     cur_ver, cur_gra = _current_texts(d)
-    ver_ok = bool(cur_ver and (cur_ver.startswith(version) or version in cur_ver))
-    gra_ok = bool(cur_gra and cur_gra == grade)
+    ver_ok = _version_match(cur_ver, version)
+    gra_ok = _grade_match(cur_gra, grade)
     print(f"    最终: {'✔' if ver_ok and gra_ok else '✘'} {cur_ver} {cur_gra}")
     return ver_ok and gra_ok

@@ -22,7 +22,10 @@ import html
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import uiautomator2 as u2
-from common.logger import step_log, should_stop
+from common.logger import (
+    step_log, should_stop,
+    set_current_unit, get_current_unit, get_module_script,
+)
 from common.tools import (
     S, S_swipe, S_h, S_w,
     close_ad, dismiss_global_popups, ensure_grade,
@@ -186,8 +189,10 @@ def _wait_ready_for_record(d, timeout=20):
 _LAST_STEM_SRC = ""
 
 
-def _find_active_sub_question(d, xml=None):
+def _find_active_sub_question(d, xml=None, big=None):
     """定位当前正在作答的小题（含 record_btn 的 ll_container）。
+
+    big: 当前大题号（图片题取脚本题面时用于定位脚本小题；None 则跳过脚本优先）。
 
     口语训练真机结构（2026-08-24 实测 oral_q3 / cur_home dump）：
       - option_flexbox 内多个 ll_container，每个 = 一个小题：
@@ -259,12 +264,14 @@ def _find_active_sub_question(d, xml=None):
             _pic_box = (px1, py1, px2, py2)
             break
     _pattern = ""          # 句型模板（仅"结合句型 + 配图"场景非空）
+    _seq = []              # ★ 2026-09-21 容器内文本节点（文档顺序）→ 拼回被拆散的「例句：」
 
     for m in re.finditer(r'<node[^>]*text="([^"]+)"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml):
         t = m.group(1).strip()
         x1, y1, x2, y2 = int(m.group(2)), int(m.group(3)), int(m.group(4)), int(m.group(5))
         if x1 < ax1 or y1 < ay1 or x2 > ax2 or y2 > ay2:
             continue
+        _seq.append((x1, y1, t))
         # tv_sort: "1/5" / "2/5"（n/本大题小题总数） 或 "1." / "2."
         mm = re.match(r"^(\d+)\s*/\s*(\d+)$", t)
         if mm:
@@ -277,7 +284,7 @@ def _find_active_sub_question(d, xml=None):
         # ★ 2026-09-14 句型模板："1.例句：I travelled to ...&#10;(2分)"
         #   ① 本小题有配图 → 只记下句型，题干交给视觉模型按句型补全
         #   ② 无配图（图片加载失败 / 纯句型提示题）→ 句型本身即题干，
-        #      必须保留；否则会因含"(2分)"被下方 '分' in t 丢弃 → 退化成"听音频跟读"
+        #      必须保留；否则会因含"(2分)"被下方 '分' in t 丢弃 → 退化成"听录音作答"
         _pt = _extract_sentence_pattern(t)
         if _pt:
             _pattern = _pt
@@ -303,21 +310,64 @@ def _find_active_sub_question(d, xml=None):
         if not t or len(t) < 1:
             continue
         stems.append(t)
+    # ★ 2026-09-21：例句被 App 拆成多个 TextView 时，单节点提取拿不到正文 →
+    #   按文档顺序把「例句：」标签后的英文节点拼回完整例句；并把用掉的碎词
+    #   从 stems 剔除（否则 stem 会变成 "例句： / I / will" 这类噪音）。
+    if not _pattern:
+        _jp, _jused = _join_split_pattern(_seq)
+        if _jp:
+            _pattern = _jp
+            if _jused:
+                stems = [s for s in stems if s not in _jused]
     global _LAST_STEM_SRC
     if _pic_box and (_pattern or not stems):
-        # ★ 2026-08-30 图片题：截图交给视觉模型识别
-        #   ① 无句型（普通看图说句）→ 用简短英文句子描述图片大意
-        #   ② 有句型（"结合句型"变种，2026-09-14 新增）→ 严格沿用给定句型，
-        #      把省略号处按图片内容补全成完整句子
-        #        'I travelled to ...' + 图片(北京) → 'I travelled to Beijing.'
-        stem = _oral_vision_stem(d, _pic_box, sub_no, pattern=_pattern)
-        _LAST_STEM_SRC = "vision" if stem else ""
-    elif stems:
-        stem = " / ".join(stems[:2])
+        # ★ 2026-09-23 图片题「脚本优先」（用户要求：脚本有内容就用脚本，不让 LLM 猜）
+        #   为什么必须改：视觉模型对"结合句型"图片题的补全结果**往往就是参考答案**
+        #   —— 实测教科五上 U5 第3大题第3小题：句型提示 "Hello, this is ..."，
+        #   视觉把它补成 "Hello, this is Lucas."，而 Lucas 正是脚本里的参考答案。
+        #   把参考答案当成 App 题面展示，既违反用户明确的"App 里不能出现参考答案"，
+        #   又会被后端拿去跟脚本 stem（句型模板）比对 → 判"内容不符"的假错。
+        _ref = _script_ref_stem(big, sub_no)
+        if _ref:
+            if _pattern:
+                # App 页面上确实渲染了句型提示（DOM 文字，确定）→ 属于真实界面文字，
+                # 后续照常与脚本逐字比对（这才是真检查）。
+                stem = f"句型提示：{_pattern}"
+                _LAST_STEM_SRC = "text"
+            else:
+                # App 该小题是纯图、无任何文字题面 → 以脚本内容为准展示，
+                # 标 src=script：后端只登记"应显示内容"，不做一致性判定。
+                stem = f"句型提示：{_ref}"
+                _LAST_STEM_SRC = "script"
+        else:
+            # 脚本未挂载 / 找不到该小题 → 保留原视觉识别兜底
+            #   ① 无句型（普通看图说句）→ 用简短英文句子描述图片大意
+            #   ② 有句型（"结合句型"变种，2026-09-14 新增）→ 严格沿用给定句型，
+            #      把省略号处按图片内容补全成完整句子
+            stem = _oral_vision_stem(d, _pic_box, sub_no, pattern=_pattern)
+            _LAST_STEM_SRC = "vision" if stem else ""
+            # ★ 2026-09-21：例句是学生实际看到的作答指引，必须出现在 App 侧文本里，
+            #   供后端与脚本 sentence_pattern 逐字比对。不带例句 → 报告只会写
+            #   "App 只有「例句：」标签"，其实 App 显示了、只是被拆成多个节点。
+            if _pattern:
+                if not stem:
+                    stem = f"例句：{_pattern}"
+                elif _pattern not in stem:
+                    stem = f"例句：{_pattern} / {stem}"
+    elif stems or _pattern:
+        _parts = list(stems[:2])
+        if _pattern and not any(_pattern in p for p in _parts):
+            _parts.insert(0, f"例句：{_pattern}")
+        stem = " / ".join(_parts[:2])
         _LAST_STEM_SRC = "text"
     else:
-        # 容器内既无配图也无文字 → 听音口语题（点喇叭听音跟读），不误标"图片题"
-        stem = "听音频跟读"
+        # 容器内既无配图也无文字 → 听录音作答（点小喇叭听题目内容 → 点录音口语作答），
+        #   不误标"图片题"。
+        # ★ 2026-09-23 用户实测：口语训练五上 U6 第4大题就是这一类——整页只有
+        #   一张**表格素材**，每个小题里并没有图片，只有小喇叭 + 录音按钮。
+        #   旧标签"听音频跟读"把题型说成了"跟读"，也不准确（学生是听问题后作答，
+        #   不是复述）。改为"听录音作答"，与 App 的真实作答方式一致。
+        stem = "听录音作答"
         _LAST_STEM_SRC = "audio"
     return sub_no, total_sub, stem, active
 
@@ -362,6 +412,103 @@ def _extract_sentence_pattern(t):
     if len(s) > 120:
         return ""
     return s
+
+
+_PT_TAG_ONLY = re.compile(r"^[\s\d\.、]*(?:例句|句型提示|参考句型|句型)[:：]?\s*$")
+_PT_EN_WORD = re.compile(r"^[A-Za-z0-9'’\-\.\,\!\?…]+$")
+
+
+def _join_split_pattern(seq):
+    """把 App **拆成多个 TextView** 的「例句：…」拼回完整例句。
+
+    ★ 2026-09-21 新增。真机（教科五上 U4 第3大题）实测节点序列为：
+        '例句：' │ 'I' │ 'will' │ 'bring' │ 'everything' │ 'inside' │ '.'
+    —— 每个词是**独立节点**，而 `_extract_sentence_pattern()` 只吃单个节点的
+    text：拿到 '例句：' 时标签后的正文为空 → 返回 "" → **整句例句丢失**，
+    stem 退化成 "例句： / I / will"。后果：
+      ① App 侧没有例句正文，脚本侧 `sentence_pattern` 比对必然失败，
+         报告写"App 只有「例句：」标签"（其实 App 显示了，只是被拆开）；
+      ② 视觉补全拿不到句型模板，只能按图片自由描述。
+
+    seq: [(x, y, text), ...]，按 XML **文档顺序**（= 阅读顺序）。
+    返回 (例句正文, 已消费的节点文本集合)；拼不出返回 ("", set())。
+    """
+    if not seq:
+        return "", set()
+    for i, (_x, _y, t) in enumerate(seq):
+        if not _PT_TAG_ONLY.match(t or ""):
+            continue
+        buf, used = [], set()
+        for _x2, _y2, t2 in seq[i + 1:]:
+            t2 = (t2 or "").strip()
+            if not t2:
+                continue
+            if _PT_EN_WORD.match(t2):
+                buf.append(t2)
+                used.add(t2)
+                if len(buf) >= 16:          # 正常例句 ≤ 10 词，16 足够且防越界
+                    break
+                continue
+            break                            # 中文/分值/下一个标签 → 例句结束
+        if not buf:
+            return "", set()
+        s = " ".join(buf)
+        s = re.sub(r"\s+([\.\,\!\?…])", r"\1", s)   # 标点前不留空格
+        return s.strip(), used
+    return "", set()
+
+
+# ★ 2026-09-23 图片题「脚本优先」缓存：{docx 文件名: script_questions}
+#   用户要求（原话）:"展示图片对应的题目内容时，如果脚本里面有对应题目的内容，
+#   就把那个当做题目展示，就不用让 LLM 自己去猜是什么了"。
+#   同时强调:"在 App 里面不能出现参考答案" —— 图片题学生在 App 上只看到
+#   「句型提示」（脚本例：句型提示：Hello, this is ... ／ 参考答案：Hello, this is Lucas.），
+#   所以这里**只允许**返回 stem（句型模板）或 sentence_pattern，
+#   **绝不返回 answer（参考答案）/ keywords（关键词）**。
+_ORAL_SCRIPT_CACHE = {}
+
+
+def _script_ref_stem(big, sub_no):
+    """取脚本该小题在 App 上**应显示的题面**（句型提示 / 题目内容）。
+
+    返回 "" 表示脚本没挂载 / 找不到该小题 / 该小题无文字题面 → 调用方回退视觉识别。
+    """
+    if not big or not sub_no:
+        return ""
+    try:
+        _fn = get_module_script("口语训练")
+        if not _fn:
+            return ""
+        _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        _p = os.path.join(_root, "uploads", _fn)
+        if not os.path.exists(_p):
+            return ""
+        _u = int(get_current_unit() or 0)
+        if _fn not in _ORAL_SCRIPT_CACHE:
+            from src.review_agent import ReviewAgent, ReviewConfig
+            _ag = ReviewAgent(ReviewConfig(docx_path=_p, unit=0,
+                                           screenshot_dir="", verbose=False))
+            _ORAL_SCRIPT_CACHE[_fn] = _ag.script_questions
+        for _q in _ORAL_SCRIPT_CACHE[_fn]:
+            try:
+                if _u and int(getattr(_q, "unit", 0) or 0) != _u:
+                    continue
+                if int(getattr(_q, "big", 0) or 0) != int(big):
+                    continue
+                if int(getattr(_q, "stage_idx", 0) or 0) != int(sub_no):
+                    continue
+            except Exception:
+                continue
+            _s = (getattr(_q, "stem", "") or "").strip()
+            if _s and not _s.startswith("[") and _s.lower() not in ("none", "-", "/"):
+                return _s
+            _sp = (getattr(_q, "sentence_pattern", "") or "").strip()
+            if _sp:
+                return _sp
+            return ""
+    except Exception as _e:
+        print(f"      ⚠ 脚本题面读取失败（回退视觉识别）: {_e}")
+    return ""
 
 
 def _oral_vision_stem(d, pic_box, sub_no, pattern=""):
@@ -417,20 +564,41 @@ def _oral_vision_stem(d, pic_box, sub_no, pattern=""):
         llm = LLMClient.from_config()
         # 实际年级优先读环境变量（web_server 调度时设置 YYB_GRADE）
         _grade = os.environ.get("YYB_GRADE", "") or GRADE_LEVEL
+        # ★ 2026-09-20 词汇难度约束（用户反馈：视觉生成的句子出现超纲词 cereal）：
+        #   只允许小学本年级及以下教材词汇，且生成的句子必须语法正确。
+        _vocab_rule = (
+            f"词汇难度：只使用中国小学{_grade}及以下教材范围内的常见单词，"
+            "禁止超纲词（如 cereal、champion、survey 这类明显超出小学范围的词）；"
+            "句子必须语法正确、简短自然"
+        )
+        # ★ 2026-09-20 优先级规则（用户反馈：教科六上U6"大声说出你看到的单词"，
+        #   图里本来就印着 home-stone / boat-coat 这样的词卡，视觉却去"描述图片大意"
+        #   编了一句别的话）：
+        #   ① 图上有英文文字 → 题干就是那些文字本身，必须**原样照抄**；
+        #   ② 图上没有英文 → 才允许按图片内容生成/补全句子。
         if pattern:
             prompt = (
                 f"这是中国小学{_grade}英语口语题的配图。"
                 f"题目要求「结合句型和图片说句子」，给出的句型是：{pattern}\n"
-                "请仔细观察图片内容，把句型中省略的部分（... / …）补全，"
-                "组成一句完整、正确、符合图片内容的英文句子。"
-                "要求：严格沿用给定句型结构，只补齐省略部分；"
+                "请按以下优先级输出题干：\n"
+                "① 若图片中印有英文单词/短语/句子（词卡、标签），必须原样照抄图中英文"
+                "（多个词用空格分隔），不要翻译、不要改写、不要补充图中没有的内容；\n"
+                "② 若图中没有英文文字，才把句型中省略的部分（... / …）按图片内容补全，"
+                "组成一句完整英文句子：严格沿用给定句型结构，只补齐省略部分；"
+                f"补入的单词同样受约束（{_vocab_rule}）。\n"
                 "单词之间用空格分隔；句首字母大写；句末加英文句号。"
-                "只输出这一句英文，不要引号、不要中文、不要任何解释。"
+                "只输出最终题干本身，不要引号、不要中文、不要任何解释。"
             )
         else:
-            prompt = (f"这是中国小学{_grade}英语口语题的配图。"
-                      "请用符合该年级学生水平的简短英文句子（不超过8个单词）描述图片大意，"
-                      "只输出这个英文句子本身，不要引号、不要任何其他内容。")
+            prompt = (
+                f"这是中国小学{_grade}英语口语题的配图。请按以下优先级输出题干：\n"
+                "① 若图片中印有英文单词/短语/句子（词卡、标签），题干就是这些文字本身——"
+                "必须原样照抄图中全部英文（多个词用空格分隔），不要翻译、不要改写、"
+                "不要补充图中没有的内容（这类题考察的就是「说出你看到的单词/短语」）；\n"
+                "② 若图中没有任何英文文字，才根据图片大意生成一句英文："
+                f"不超过8个单词；{_vocab_rule}。\n"
+                "只输出最终题干本身，不要引号、不要中文、不要任何解释。"
+            )
         ans = (llm.ask(prompt, image_path=_p, temperature=0) or "").strip()
         if ans and "LLM 调用失败" not in ans and len(ans) <= 80:
             # 清理常见的格式残留：引号 / 多行 / "答案：" 前缀 / 中文尾注
@@ -528,19 +696,67 @@ def _wait_countdown(d, timeout=20):
     return _wait_ready_for_record(d, timeout)
 
 
+# ★ 2026-09-21：App 云端语音评分不可用时置位，用于终止本单元（避免死循环空转）
+_SCORING_DOWN = False
+# 点"结束"之后等待评测收敛的上限（秒）。实测正常 5~6s，给足余量。
+_EVAL_SETTLE_TIMEOUT = 15.0
+
+
+def _wait_eval_settle(d, timeout=_EVAL_SETTLE_TIMEOUT):
+    """等一次"结束录音"之后的**评测收敛**：按钮回到可录音态，或页面翻页。
+
+    ⚠ 期间**绝不点击**。这是死循环的根因修复：
+      实测（2026-09-21 MuMu 900x1600）点"结束"后 record_btn 仍保持"点击结束"
+      **约 5~6 秒**（上传 16k 单声道 WAV + 等驰声服务端返回评分），之后
+      - 成功：翻页（record_btn 消失 / 切到下一小题 / 出现练习报告），或
+      - 失败：回到"点击录音"（允许重录，但页面不翻页）。
+      旧实现这里只等 3.0s，而一次 dump_hierarchy 就要 ~1.5s，
+      于是**评测还没结束就返回**，外层循环立刻重新 dump 到同一个 record_btn
+      → 再点录音 → **打断上一次评测** → 评分永远拿不到 → 整单元空转
+      （实测 U4：20:44:25~20:48:14 连点 30 次，然后重开第1大题）。
+    返回 True 表示已回到稳定态。
+    """
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        try:
+            xml = d.dump_hierarchy()
+        except Exception:
+            time.sleep(0.3)
+            continue
+        if _is_transition_state(xml):        # "请阅读题目 Ns"/上传中
+            time.sleep(0.3)
+            continue
+        if not _find_record_btn(d, xml):     # 翻页 / 报告页 → 收敛
+            return True
+        if "点击结束" in xml or "点击完成" in xml:
+            time.sleep(0.3)                  # 仍在录音/评测中 → 继续等，不点
+            continue
+        return True                          # 已回到"点击录音"（评测结束）
+    return False
+
+
 def _speak_one_sub(d):
-    """作答当前可见的录音小题：点录音 → 等状态变 → 点结束。
-    返回是否成功。
+    """作答当前可见的录音小题：点录音 → 等状态变 → 点结束 → **等评测收敛**。
+    返回是否成功（True = 完成了一次"录音+结束"动作）。
     """
     pos = _find_record_btn(d)
     if not pos:
         return False
+    # 0) 兜底：若正处于"请阅读题目 Ns"准备倒计时，点击会被 App 吞掉（按钮可见但禁用），
+    #    先等它结束再点（_answer_big_question 入口已等过一次，这里防"切小题后重入倒计时"）
+    try:
+        if _is_transition_state(d.dump_hierarchy()):
+            if not _wait_ready_for_record(d, timeout=15):
+                return False
+            pos = _find_record_btn(d) or pos
+    except Exception:
+        pass
     d.click(*pos)
     print(f"    🎤 点录音 ({pos[0]},{pos[1]})")
     step_log("🎤 点录音", "info")
     # 等 App 切换到"点击结束"/"点击完成"状态
     t0 = time.time()
-    while time.time() - t0 < 3.0:
+    while time.time() - t0 < 4.0:
         xml = d.dump_hierarchy()
         if _is_transition_state(xml):
             time.sleep(0.15)
@@ -553,20 +769,8 @@ def _speak_one_sub(d):
     d.click(*pos)
     print(f"    ⏹ 点结束 ({pos[0]},{pos[1]})")
     step_log("⏹ 点结束", "info")
-    # 等录音结束状态消失（上传/切换下一题）
-    t1 = time.time()
-    while time.time() - t1 < 3.0:
-        xml = d.dump_hierarchy()
-        if _is_transition_state(xml):
-            time.sleep(0.15)
-            continue
-        if not _find_record_btn(d, xml):
-            # 当前 record_btn 消失/切换了 → 大概率已完成
-            break
-        if "点击结束" in xml or "点击完成" in xml:
-            time.sleep(0.2)
-            continue
-        break
+    # ★ 关键：等评测收敛后再交还控制权（旧实现只等 3s → 打断评测 → 死循环）
+    _wait_eval_settle(d)
     return True
 
 
@@ -596,6 +800,9 @@ def _answer_big_question(d, big_idx=0):
     _score_checked = False
     _horn_clicked = False  # 每大题只需点一次顶部说明喇叭
     _last_ev_big = -1       # 上次发证据卡时的大题号（变化时=新大题首小题，发"大题题干"）
+    _seen_subs = set()      # ★ 2026-09-20：本大题已计过分的 sub_no（去重，防题数虚高）
+    _dup_streak = 0         # ★ 2026-09-21：连续"同一小题重复录音"次数（识别 App 评分未返回）
+    global _SCORING_DOWN
 
     # 1. 等大题首题 ready
     if not _wait_ready_for_record(d, timeout=22):
@@ -607,6 +814,9 @@ def _answer_big_question(d, big_idx=0):
         if should_stop():
             step_log("⏹ 收到停止请求，中断当前模块", "warning")
             return q
+        if _SCORING_DOWN:
+            # 本单元判定为"App 云端评分不可用" → 不再继续下一大题
+            return 0
 
         xml = d.dump_hierarchy()
 
@@ -685,11 +895,20 @@ def _answer_big_question(d, big_idx=0):
                 return q
 
         # 确定当前小题编号/题干
-        sub_no, total_sub, stem, _ = _find_active_sub_question(d, xml)
+        # ★ 2026-09-23：把大题号传下去，图片题才能按 (单元, 大题, 小题) 取脚本题面
+        sub_no, total_sub, stem, _ = _find_active_sub_question(d, xml, big=big_idx)
         sub_label = sub_no if sub_no is not None else q + 1
+        # ★ 2026-09-20 修复（题数虚高）：App 偶发"录音成功但页面不翻页"——
+        #   `_speak_one_sub` 返回 True 已让 q+1，下一轮 dump 到的仍是同一个 sub_no，
+        #   于是同一小题被再记一次（实测第2大题第4小题出现 2 行日志、
+        #   5 小题的大题被统计成 6 题）。按 sub_no 去重：重复的那轮照旧重录，
+        #   但不再计数、不再刷证据卡日志。
+        _dup_sub = (sub_no is not None and sub_no in _seen_subs)
+        if sub_no is not None:
+            _seen_subs.add(sub_no)
 
-        # 每小题只发一次证据卡（避免重复）
-        if q != _ev_q:
+        # 每小题只发一次证据卡（避免重复；重复小题 _dup_sub 也不重复发卡）
+        if q != _ev_q and not _dup_sub:
             try:
                 from common.evidence import collect_ui_evidence
                 # ★ 2026-08-25：每大题只在第一小题下显示大题题干（来自 tv_caption），
@@ -700,9 +919,13 @@ def _answer_big_question(d, big_idx=0):
                 # ★ 小题题干：每小题都加（口语训练学生看的就是"句型提示：xxx"/"听力材料：xxx"/"单词"等）
                 if stem:
                     _sub_label = f"小题{sub_label}" + (f"/{total_sub}" if total_sub else "")
+                    # ★ 2026-09-20：带上来路 src（dom=界面文字 / vision=视觉识别）。
+                    #   web_server 侧只有 dom 文字才允许与脚本 stem 做一致性判定——
+                    #   视觉识别的画面描述是**概率性**结论，拿去判"内容不符"会整片误报。
                     _ev.insert(1, {"field": "小题题干", "type": "info",
                                    "expected": "当前作答小题的题干",
                                    "actual": stem,
+                                   "src": _LAST_STEM_SRC,
                                    "diff": f"{_sub_label}题干：{stem}"})
                 # ★ 2026-08-25 修复"日志刷屏"：同大题第2-N小题 skip_stem=True 时，
                 #   evidence 只剩固定的 题型/选项/音频/作答，每题一模一样 → 前端日志
@@ -715,9 +938,32 @@ def _answer_big_question(d, big_idx=0):
                     _ev = [e for e in _ev if e.get("field") == "小题题干"
                            or e.get("type") in ("text_mismatch", "error", "warning")
                            or not any(k in (e.get("diff") or "") for k in _ok_diff_kw)]
-                    # 后续小题仅剩小题题干 → 只发一行日志不附证据卡（题干已含在消息里）
-                    if len(_ev) == 1 and _ev[0].get("field") == "小题题干":
-                        _ev = []
+                    # ★★ 2026-09-20 根因修复（口语训练 20 题只剩 4 题）：
+                    #   这里原本还有一句 `if len(_ev)==1 and 是小题题干: _ev = []`
+                    #   ——"后续小题只剩小题题干 → 不附证据卡，只发一行日志"。
+                    #   但 step_log 的 evidence 是**唯一**能把这道题登记进审查结果的
+                    #   通道（web_server.log_msg 靠 "第N大题·第M小题（…）检查" + evidence
+                    #   建 questions["auto-Q…"]）。证据一清空，第 2~5 小题就永远进不了
+                    #   审查结果：实测只剩 Q01-01/Q02-01/Q03-01/Q04-01，即每个大题的
+                    #   第 1 小题（_is_first_of_big=True 那批），且审查条数(4) 与
+                    #   App 实际作答数(20) 对不上。
+                    #   而"小题题干"正是**必须与脚本 stem 逐题比对**的对象
+                    #   （用户要的"题目内容一致性"）。题干逐题不同，
+                    #   保留它不会造成"每题一模一样的证据卡"刷屏。→ 删掉清空逻辑。
+                    # ★ 2026-09-20：显式告知后端"本小题的大题说明是按设计不再重复上报"。
+                    #   否则后端只看到 evidence 里没有"题干"→ 判定"App 未渲染大题说明"
+                    #   → 每张大题第2~5小题的卡片都刷一条
+                    #   "⚠ App 未取到大题说明文字…需连手机人工确认"的**假告警**，
+                    #   并把"题干"维度一直压成"未检"（即使小题内容已比对通过）：
+                    #   20 题里 16 题显示不出结论，检查人员还要为不存在的问题去翻手机。
+                    #   ★ 2026-09-20（用户反馈"实际:1 没有任何意思"）：
+                    #     actual 从占位 "1" 改为可读表达，expected 也补上语义，
+                    #     让检查人员一眼看懂这是设计行为、不是缺陷。
+                    _ev = list(_ev) + [{
+                        "field": "大题说明已省略", "type": "info",
+                        "expected": "按设计本小题不重复上报大题说明",
+                        "actual": "已省略（同大题第2小题起不再重复上报）",
+                        "diff": "设计如此，非缺陷：避免同一大题的证据卡重复相同的大题说明"}]
                 step_log(f"  第{big_idx}大题·第{sub_label}小题（{stem}）完整性检查", "info", _ev)
                 _ev_q = q
                 _last_ev_big = big_idx
@@ -746,6 +992,25 @@ def _answer_big_question(d, big_idx=0):
 
         # 作答
         if _speak_one_sub(d):
+            if _dup_sub:
+                # ★ 2026-09-20：页面没翻页导致的重复作答 → 不计数（防题数虚高）
+                _dup_streak += 1
+                print(f"    ↺ 第{big_idx}大题·第{sub_label}小题重复（页面未翻页），不重复计数")
+                # ★ 2026-09-21 根因诊断：连续 3 次"录了音但页面不翻页"= App 云端语音评分
+                #   没有返回（客户端日志 BaseSingEngine errorCode:16385 "connect to server
+                #   failed" / HttpDns2 httpDNSDataFail）。此时再点多少次都没用，
+                #   旧实现会一直点到 range(30) 上限（实测空转 ~2.5 分钟）→ 现在明确报错并终止本单元。
+                if _dup_streak >= 3:
+                    msg = (f"❌ 第{big_idx}大题·第{sub_label}小题连续 {_dup_streak} 次录音后页面均未翻页："
+                           f"App 云端语音评分未返回（App 侧 BaseSingEngine 报 16385/connect to server failed）"
+                           f"→ 口语训练无法继续，已终止本单元；其余题目**未作答**，不计入通过/不通过结论")
+                    print("    " + msg)
+                    step_log(msg, "error")
+                    _SCORING_DOWN = True
+                    return 0
+                time.sleep(0.3)
+                continue
+            _dup_streak = 0
             q += 1
             # ★ 2026-09-15 口语题尝试进脚本（options/answer 均为空）。
             #   ⚠ 按收紧后的准入规则（只收"有明确答案"的题），这里会被收集器
@@ -786,7 +1051,14 @@ def _run_one_unit(d, unit_num, is_retry):
 
     # 方式1：按 "口语训练湘少五上U{unit_num}" 标题文字匹配，定位该行按钮
     import re as _re
-    title_pat = _re.compile(rf"[Uu]nits?\s*{unit_num}\b|U{unit_num}\b|{unit_num}")
+    # ★ 2026-09-20 修复（选错单元）：原第三分支是**裸数字** `|{unit_num}`，
+    #   再配合下一行 `if "口语训练" in t or "U" in t or "Unit" in t` 这种很宽的准入条件，
+    #   任何「含 U/Unit/口语训练」且「含该数字」的文本都会命中
+    #   （带进度 "3/4" 的行、含年份 "2024" 的行等），于是可能点到别的单元。
+    #   实测：请求 U4，App 实际打开的是「口语训练教科五上U3」。
+    #   改为只按 U{num} / Unit {num} / 第{num}单元 精确匹配，并用 (?!\d) 挡住 U4→U40 这类前缀误配。
+    title_pat = _re.compile(
+        rf"[Uu]nits?\s*0*{unit_num}(?!\d)|U0*{unit_num}(?!\d)|第\s*{unit_num}\s*单元")
     for _ in range(8):
         elements = (d.xpath('//*[@text!=""]').all() or [])
         row = None
@@ -799,18 +1071,42 @@ def _run_one_unit(d, unit_num, is_retry):
                     break
         if row:
             row_y = row.bounds[1]
+            # ★ 2026-09-20 修复（选错单元的**真正根因**）：
+            #   旧实现 `abs(e.bounds[1] - row_y) < 300` 且取 DOM 顺序**第一个**命中的按钮。
+            #   实测「单元」tab 真实布局（tools/probe_oral_unit_tab.py dump，MuMu 900x1600）：
+            #     卡片节距 ≈330px，卡片内「标题 → 答题按钮」偏移 ≈135px
+            #       U1 标题 y= 345 → 开始答题 y= 420
+            #       U2 标题 y= 609 → 开始答题 y= 687
+            #       U3 标题 y= 874 → 重新答题 y=1011
+            #       U4 标题 y=1200 → 重新答题 y=1335   ← 请求 U4 时命中的 row
+            #   对 row_y=1200 来说，U3 的按钮 Δy=189 同样 < 300，且 DOM 顺序在 U4 的按钮之前
+            #   → 每轮都点到**上一张卡片**的按钮 → 请求 U4、实际打开 U3 试卷。
+            #   改为两条约束：① 按钮必须在标题**下方**（同一张卡片，Δy≥0）；
+            #                ② 取 Δy 最小者；上限收到 300（< 卡片节距，不会跨卡）。
+            _best_btn, _best_dy = None, None
             for e in elements:
                 t = (e.text or "").strip()
-                if t in btn_candidates:
-                    if abs(e.bounds[1] - row_y) < 300:
-                        try:
-                            e.click()
-                        except Exception:
-                            d.click((e.bounds[0]+e.bounds[2])//2, (e.bounds[1]+e.bounds[3])//2)
-                        print(f"    ✅ 点击 {t} (U{unit_num})")
-                        time.sleep(1.2)
-                        _after_unit_enter(d)
-                        return _run_unit_questions(d, unit_num)
+                if t not in btn_candidates:
+                    continue
+                _dy = e.bounds[1] - row_y
+                if _dy < 0 or _dy > 300:
+                    continue
+                if _best_dy is None or _dy < _best_dy:
+                    _best_btn, _best_dy = e, _dy
+            if _best_btn is not None:
+                t = (_best_btn.text or "").strip()
+                try:
+                    _best_btn.click()
+                except Exception:
+                    d.click((_best_btn.bounds[0] + _best_btn.bounds[2]) // 2,
+                            (_best_btn.bounds[1] + _best_btn.bounds[3]) // 2)
+                print(f"    ✅ 点击 {t} (U{unit_num}) Δy={_best_dy}")
+                time.sleep(1.2)
+                # ★ 2026-09-20：进单元后必须回验"实际打开的单元号"，
+                #   不一致 → 直接中止（否则拿错单元脚本比对 → 全量误报）
+                if not _after_unit_enter(d, unit_num):
+                    return 0
+                return _run_unit_questions(d, unit_num)
         S_swipe(d, 540, 1800, 540, 600, 0.3); time.sleep(0.4)
 
     # ★ 方式1 失败诊断：滑动 8 次未找到目标 U 入口，dump 当前页可见 U 标题
@@ -838,19 +1134,42 @@ def _run_one_unit(d, unit_num, is_retry):
     except Exception:
         pass
 
-    # 方式2（兜底）：按第 unit_num 个答题按钮（原逻辑）
-    btns = []
-    idx = unit_num - 1
+    # 方式2（兜底）：把「单元标题 → 其正下方答题按钮」配对后取目标单元
+    #   ★ 2026-09-20 修复：旧逻辑是"按 y 排序按钮，取第 unit_num-1 个"，隐含
+    #   「每个单元都出现同名按钮、且顺序与单元号一致」的假设。
+    #   实测「单元」tab：U1/U2/U5 是「开始答题」、U3/U4 是「重新答题」
+    #   → 按钮列表长度与单元号完全不对齐，请求 U4 时 idx=3 直接越界 →
+    #   方式2 也找不到按钮（这解释了兜底路径从来没救回来过）。
+    #   改为按几何配对：卡片标题 y 与其按钮 y 相差 0~300px（下方）。
+    _card_pat = _re.compile(r"[Uu]nits?\s*0*(\d+)(?!\d)|[Uu]0*(\d+)(?!\d)")
     chosen_btn = None
+    _btn_el = None
     for attempt in range(5):
-        for txt in btn_candidates:
-            btns = [e for e in (d.xpath('//*[@text!=""]').all() or [])
-                    if (e.text or "").strip() == txt]
-            btns.sort(key=lambda e: e.bounds[1])
-            if idx < len(btns):
-                chosen_btn = txt
-                break
-        if chosen_btn:
+        _els = d.xpath('//*[@text!=""]').all() or []
+        _cards = []
+        for e in _els:
+            t = (e.text or "").strip()
+            if len(t) > 60:
+                continue
+            _m = _card_pat.search(t)
+            if _m:
+                _n = int(_m.group(1) or _m.group(2))
+                _cards.append((_n, e.bounds[1]))
+        _map = {}
+        for _un, _uy in _cards:
+            _b, _bd = None, None
+            for e in _els:
+                t = (e.text or "").strip()
+                if t not in btn_candidates:
+                    continue
+                _d2 = e.bounds[1] - _uy
+                if 0 <= _d2 <= 300 and (_bd is None or _d2 < _bd):
+                    _b, _bd = e, _d2
+            if _b is not None:
+                _map.setdefault(_un, _b)
+        if unit_num in _map:
+            _btn_el = _map[unit_num]
+            chosen_btn = (_btn_el.text or "").strip()
             break
         S_swipe(d, 540, 1800, 540, 600, 0.3); time.sleep(0.4)
     if not chosen_btn:
@@ -863,10 +1182,15 @@ def _run_one_unit(d, unit_num, is_retry):
         except Exception:
             pass
         return 0
-    btns[idx].click()
-    print(f"    ✅ 点击 {chosen_btn} (U{unit_num})")
+    try:
+        _btn_el.click()
+    except Exception:
+        d.click((_btn_el.bounds[0] + _btn_el.bounds[2]) // 2,
+                (_btn_el.bounds[1] + _btn_el.bounds[3]) // 2)
+    print(f"    ✅ 点击 {chosen_btn} (U{unit_num})[方式2]")
     time.sleep(1.2)
-    _after_unit_enter(d)
+    if not _after_unit_enter(d, unit_num):
+        return 0
     return _run_unit_questions(d, unit_num)
 
 
@@ -925,13 +1249,18 @@ def _switch_tab(d, tab_name, timeout=3):
     return False
 
 
-def _after_unit_enter(d):
+def _after_unit_enter(d, unit_num=None):
     """进入单元后的公共处理：弹窗 + 试卷首页 rule-based 检查 + 开始答题
 
-    ★ 2026-08-25 修复：去掉 LLM 调用 check_paper_header（每次进入单元等10-30秒太慢）
-      按 txt 流程第 2 点"试卷首页检查"用规则匹配即可（标题+总分+时量+按钮），
-      不需要 LLM 语义判断，毫秒级完成。
+    ★ 2026-09-20 新增参数 unit_num：请求的单元号。试卷首页标题里带着实际打开的
+      单元号（"口语训练教科五上U3"），必须与请求单元核对——
+      旧逻辑只判 `bool(_title) and bool(_btn)`（"标题存在就算通过"），
+      实测请求 U4、标题却是 U3，日志照样打「试卷首页检查: 通过」，
+      之后每一道题的「App 内容 ↔ 脚本」比对都拿错单元的脚本，结论全部失真。
     """
+    # ★ 2026-08-25 修复：去掉 LLM 调用 check_paper_header（每次进入单元等10-30秒太慢）
+    #   按 txt 流程第 2 点"试卷首页检查"用规则匹配即可（标题+总分+时量+按钮），
+    #   不需要 LLM 语义判断，毫秒级完成。
     if d(text="好的，我知道啦~").exists(timeout=3):
         d(text="好的，我知道啦~").click()
         print(f"    ✅ 好的，我知道啦~")
@@ -947,11 +1276,32 @@ def _after_unit_enter(d):
         _btn = next((t for t in _texts if t in ("开始答题", "重新答题", "继续答题")), None)
         _ok = bool(_title) and bool(_btn)
         _msg = f"标题={_title or '无'} · 总分={_total or '无'} · 时长={_time or '无'} · 按钮={_btn or '无'}"
+        # ★ 2026-09-20 新增：单元一致性校验（见函数 docstring）
+        _title_unit = None
+        if _title:
+            _m_u = re.search(r"[Uu]nits?\s*0*(\d+)(?!\d)|[Uu]0*(\d+)(?!\d)", _title)
+            if _m_u:
+                _title_unit = int(_m_u.group(1) or _m_u.group(2))
+        _unit_bad = (unit_num is not None and _title_unit is not None
+                     and int(_title_unit) != int(unit_num))
+        if _unit_bad:
+            _ok = False
+            _msg += f" ⚠ 单元不一致：请求 U{unit_num}，实际打开 U{_title_unit}"
+            print(f"    ⚠ 试卷首页单元不一致: 请求 U{unit_num} → 实际 U{_title_unit}")
         print(f"    📋 试卷首页: {'✅' if _ok else '⚠'} {_msg}")
         try:
-            step_log(f"📋 试卷首页检查: {'通过' if _ok else '异常'} | {_msg}", "info" if _ok else "warning")
+            step_log(f"📋 试卷首页检查: {'通过' if _ok else '异常'} | {_msg}",
+                     "info" if _ok else ("error" if _unit_bad else "warning"))
         except Exception:
             pass
+        if _unit_bad:
+            # 拿错单元的脚本去比对 = 全单元结论失真 → 直接中止本单元，交给上层报错
+            try:
+                step_log(f"❌ 口语训练 U{unit_num} 中止：App 打开的试卷是 U{_title_unit}，"
+                         f"脚本与该单元不对应，继续检测会产出全量误报", "error")
+            except Exception:
+                pass
+            return False
     except Exception as e:
         print(f"    📋 试卷首页检查异常: {e}")
     if d(text="开始答题").exists(timeout=3):
@@ -963,6 +1313,15 @@ def _after_unit_enter(d):
 
 def _run_unit_questions(d, unit_num):
     """进入单元后的答题循环（多个大题）"""
+    # ★ 2026-09-23：上报"当前正在作答的单元"，供 web_server 做脚本层比对时定位
+    #   脚本里对应的单元段落。绝不能让后端去猜 state["unit"]（那是本轮**范围**，
+    #   形如 "5-6"）——旧实现取首段 5，导致连跑时第 2 个单元全部拿第 1 个单元的
+    #   脚本比对，整单元假错（用户实测 U5-6 连跑时 U6 的题全被判"内容不符"）。
+    try:
+        set_current_unit(unit_num)
+        print(f"  📍 当前作答单元 = U{unit_num}（已上报，供脚本比对定位）")
+    except Exception:
+        pass
     total = 0
     for big in range(1, 10):
         # ★ 前置检查：交卷后练习报告页渲染有 1-2s 延迟，上一轮可能没检测到。
@@ -1018,6 +1377,11 @@ def run_module(d, units=None):
     _units = _resolve_units(units, UNITS)
     print(f"\n📋 口语训练 · 单元 {_units[0]}-{_units[-1]} · {len(_units)}个单元")
 
+    # ★ 2026-09-21：每次跑模块都复位"评分不可用"标记（模块级变量在 web_server 进程里常驻，
+    #   不复位的话上一次判定过线后，之后每一次跑都会在第一道题就直接终止）
+    global _SCORING_DOWN
+    _SCORING_DOWN = False
+
     # ★ 2026-09-15 口语题解析脚本收集器（单元答完写 docx）
     global _oral_coll, _oral_unit
     _oral_coll = None
@@ -1033,6 +1397,17 @@ def run_module(d, units=None):
     # ① 先确保在主页（口语训练入口在主页专项突破区，直接可见，不需要滑动）
     #   ★ 修复：不能用 back 硬退（练习报告/子页面 back 会退出 App 到桌面）
     #   → 先检查是否 yyb 前台，非 yyb 冷启动；yyb 内 back 循环回主页
+    # ★ 2026-09-21：先确认英语宝在前台（关掉通知栏/快捷设置面板并重新拉起）。
+    #   实测：版本切换失败后 App 已不在前台，模块继续滑动 → 把安卓通知栏拉了下来 →
+    #   报"当前页无'口语训练'卡片（可能该年级无此模块/主页改版）"，结论完全跑偏。
+    _fg_ok = True
+    try:
+        from common.tools import ensure_app_foreground as _ensure_fg
+        _fg_ok = _ensure_fg(d)
+        if not _fg_ok:
+            step_log("⚠ 未能把英语宝切到前台（可能有系统弹窗/通知栏遮挡），仍尝试继续", "warning")
+    except Exception:
+        pass
     try:
         _pkg = (d.app_current() or {}).get("package", "")
         if _pkg != "com.dinoenglish.yyb":

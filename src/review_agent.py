@@ -162,6 +162,130 @@ REVIEW_SUGGEST_SUFFIX = (
     "通过的维度无需写建议修改。"
 )
 
+# ============================================================
+# ★ 2026-09-17 新增：参考答案 ↔ 关键词 一致性（确定性规则，不依赖 LLM）
+# ============================================================
+# 背景（用户实测 教科五上U4 第4大题第3小题）：
+#   参考答案：They should turn off the lights and take their raincoats.
+#   关键词　：turn off the lights, bring their raincoats
+#   → 同一表达一处用 take 一处用 bring，学生按关键词作答会被判错。
+# 这类"字面不一致"用规则判定比 LLM 更快更准（零网络请求、零成本、100% 可复现）。
+_KW_META = ("口语训练", "听力专项", "单元自检", "知识过关", "巧记单词", "语音评测",
+            "全脑记词", "单词听写", "新湘少", "新湘鲁", "湘少", "湘鲁",
+            "教科", "人教", "PEP", "教研", "年级", "上册", "下册",
+            "四上", "四下", "五上", "五下", "六上", "六下", "三上", "三下",
+            "适用年级", "编写年份", "技能", "认知目标", "主题")
+_KW_SEP = re.compile(r"[,，、;；#|/]+")
+_PLACEHOLDER_ANS = ("人工核查", "待人工", "未识别", "未知", "无法确定", "待确认")
+
+
+def _norm_en(s: str) -> str:
+    """英文归一化：小写、统一撇号、展开 (s)/(es) 复数标记、去标点、压空格。"""
+    s = str(s or "").lower().replace("’", "'").replace("‘", "'")
+    s = re.sub(r"\((?:s|es|s\)|es\))\)?", "s", s)   # window(s) / window(es) → windows
+    s = re.sub(r"[^a-z0-9' ]+", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def split_content_keywords(keywords) -> list:
+    """把脚本「关键词」字段拆成英文内容短语，剔除模块名/单元号等元信息。
+
+    脚本里 "关键词：口语训练#新教科五上U4"（元信息）与
+    "关键词：turn off the lights, bring their raincoats"（内容）是同一字段，
+    必须靠"是否含英文实词"区分，否则会把单元号当成待核对短语。
+    """
+    out = []
+    for raw in (keywords or []):
+        for part in _KW_SEP.split(str(raw)):
+            p = part.strip()
+            if len(p) < 2 or not re.search(r"[A-Za-z]", p):
+                continue                                   # 纯中文 → 元信息
+            if any(m in p for m in _KW_META):
+                continue                                   # 含模块名/版本名 → 元信息
+            if re.match(r"^[A-Za-z]\s*\d", p):              # U4 / U10
+                continue
+            out.append(p)
+    seen, uniq = set(), []
+    for p in out:
+        k = _norm_en(p)
+        if k and k not in seen:
+            seen.add(k)
+            uniq.append(p)
+    return uniq
+
+
+def _align_substitute(phrase: str, answer: str):
+    """在答案里找与关键词短语最像的片段，返回 (替换对, 答案片段)。
+
+    SequenceMatcher 的 'replace' 段正好给出"同位置换词"（bring → take），
+    这正是要让 App/脚本方看到的那一处差异。
+    """
+    import difflib as _dl
+    pw = _norm_en(phrase).split()
+    aw = _norm_en(answer).split()
+    if not pw or not aw:
+        return [], ""
+    n = len(pw)
+    best_r, best_pairs, best_seg = 0.0, [], ""
+    for i in range(0, max(1, len(aw) - n + 1)):
+        win = aw[i:i + n] or aw[i:]
+        sm = _dl.SequenceMatcher(None, pw, win)
+        pairs = []
+        for tag, i1, i2, j1, j2 in sm.get_opcodes():
+            if tag == "replace":
+                pairs.append((pw[i1:i2], win[j1:j2]))
+        if sm.ratio() > best_r:
+            best_r, best_pairs, best_seg = sm.ratio(), pairs, " ".join(win)
+    return best_pairs, best_seg
+
+
+def check_answer_keyword_consistency(answer: str, keywords, passage: str = ""):
+    """核对「参考答案」与「关键词」是否指向同一表达。
+
+    返回 (problems, checked_count, sources)
+      problems      : list[str]，每条是一句可直接写进错题卡的结论（空 = 一致）
+      checked_count : 实际比对的关键词短语数；0 表示无可比对内容（调用方应标「未检」，
+                      绝不能不吭声地跳过——用户明确要求"没有检查出来也要有检查"）
+      sources       : {短语: [出现位置, ...]}，供报告展示佐证
+    """
+    _ans = str(answer or "").strip()
+    if not _ans or any(p in _ans for p in _PLACEHOLDER_ANS):
+        return [], 0, {}
+    kws = split_content_keywords(keywords)
+    if not kws:
+        return [], 0, {}
+    ans_n = _norm_en(_ans)
+    psg_n = _norm_en(passage)
+    problems, sources = [], {}
+    for kw in kws:
+        kw_n = _norm_en(kw)
+        if not kw_n:
+            continue
+        where = []
+        if re.search(rf"(?<![a-z]){re.escape(kw_n)}(?![a-z])", ans_n):
+            where.append("参考答案")
+        if psg_n and re.search(rf"(?<![a-z]){re.escape(kw_n)}(?![a-z])", psg_n):
+            where.append("短文/听力材料")
+        sources[kw] = where
+        if "参考答案" in where:
+            continue                                    # 命中 → 一致
+        pairs, seg = _align_substitute(kw, _ans)
+        if pairs:
+            _detail = "；".join(
+                f"{' '.join(a)} → {' '.join(b)}" for a, b in pairs if a and b)
+            problems.append(
+                f"关键词「{kw}」与参考答案不一致：答案里是「{seg}」"
+                + (f"（{_detail}）" if _detail else "")
+                + "，学生按关键词作答会被判错")
+        elif not where:
+            problems.append(
+                f"关键词「{kw}」在参考答案《{_ans}》与短文/听力材料中均未出现 → 疑为关键词写错")
+        else:
+            problems.append(
+                f"关键词「{kw}」只出现在{'/'.join(where)}中，参考答案用的是其它表达 → 前后用词不统一")
+    return problems, len(kws), sources
+
+
 class ReviewAgent:
     """
     英语宝审查智能体
@@ -567,25 +691,101 @@ class ReviewAgent:
                       or "发音" in qtype or "读一读" in qtype
                       or "读单词" in qtype or "读句子" in qtype)  # ★ 2026-08-25：口语训练答案非唯一，App 录音评分
         stem_txt = (q.stem or "").strip()
+        # ★ 2026-09-21：大题级「例句 / 句型」= sentence_pattern，**也是题干的一部分**。
+        #   根因（实测 U4 第3大题）：「仿照例句，说一说」这类题的小题题面印在 **图片** 上，
+        #   脚本不在小题里重复写题面，只在大题下写一行 `例句：I will bring everything inside.`
+        #   作为仿写基准。旧逻辑只看 q.stem → stem 为空 → 落到后面的 else 分支
+        #   `_llm_dim("检查题干是否缺失或过短（脚本题干为空）")` → 误判
+        #   「脚本题干为空、未提供任何例句文字」，并给出**方向相反**的建议
+        #   （"请在题干区域补充仿照的例句文本"——可脚本本来就有例句）。
+        #   用户检查项「错误原因和实际错误原因是否一致」被这一条直接打穿。
+        #   解析侧早已就绪（parse_yingyubao_docx 把例句挂到大题下每个小题），
+        #   只有判定侧漏用了它。
+        _pat_txt = (getattr(q, "sentence_pattern", "") or "").strip()
+        _stem_from_pattern = bool(_pat_txt) and not stem_txt
+        _eff_stem = stem_txt or (f"例句：{_pat_txt}" if _pat_txt else "")
         opt_str = ", ".join(q.options) if q.options else "(脚本未列出选项/图片选项)"
 
-        # (1) 题干：脚本有题干 → LLM 审文字质量；脚本无题干 → 听音/图片题标 skip（题干在音频/图中）
-        if stem_txt:
+        # (1) 题干：脚本有题干（或大题级例句）→ LLM 审文字质量；
+        #     两者都无 → 听音/图片题标 skip（题干在音频/图中），其余才判"缺题干"
+        if _eff_stem:
             if is_judge_q:
                 # ★ 判断题机制：题干是「待判断的陈述句」，与录音不一致是正常出题（学生听录音判断对错）
                 r.stem_check = _llm_dim(
                     "检查判断题题干是否完整可读、有无明显错别字。注意：判断题题干是待判断的陈述句，"
                     "与录音原文不一致属于正常出题机制（学生需听录音判断该陈述对错），"
                     "绝不能因『题干与录音不一致/相矛盾』判不通过；题干存在且可读即判通过。",
-                    f"题干: {stem_txt}\n题型: {qtype}（判断题，答案格式为 T/F）", "stem")
-                r.stem_check.actual = stem_txt[:200]
+                    f"题干: {_eff_stem}\n题型: {qtype}（判断题，答案格式为 T/F）", "stem")
+                r.stem_check.actual = _eff_stem[:200]
             else:
-                r.stem_check = _llm_dim(
+                _stem_task = (
                     "检查题干数据是否完整：是否缺失、是否短到无法理解、是否有明显错别字。"
                     "不要对题干措辞风格/出题设计作价值判断（如'与题型不匹配'这类主观批评不算问题）；"
-                    "题干存在且可读即判通过。",
-                    f"题干: {stem_txt}", "stem")
-                r.stem_check.actual = stem_txt[:200]
+                    "题干存在且可读即判通过。"
+                )
+                # ★ 2026-09-23 新增：朗读单词/音素词对题**不得套用句子级语法规则**。
+                #   现场（教科版五上 U7 第1大题，实跑唯一的新假错）：
+                #     题干 "six fox" 被 LLM 判「数词后名词应用复数 foxes，存在单复数不一致」
+                #     → 题干维度不通过 → 整题不通过。
+                #   但该大题是**发音练习**："six fox"(x音) / "box ox" / "yellow yogurt"(y音) /
+                #   "you yes" / "zebra zero"(z音) —— 成对单词共享同一目标音素，
+                #   是教学设计，不是名词短语，谈不上单复数。
+                #   判据：题干由 ≤4 个纯字母词构成、且不含任何句子级标点（. ? ! , ; :）
+                #   → 属于"词/词组朗读"而非句子 → 只查拼写，不查语法。
+                _nl_tokens = _eff_stem.replace("　", " ").split()
+                _looks_word_drill = (
+                    bool(_nl_tokens) and len(_nl_tokens) <= 4
+                    and not re.search(r"[.?!,;:，。？！；：]", _eff_stem)
+                    and all(re.fullmatch(r"[A-Za-z][A-Za-z'\-]*", t) for t in _nl_tokens)
+                )
+                if _looks_word_drill:
+                    _stem_task += (
+                        "★ 本题为「朗读单词/词组」（题干由若干独立单词构成、无句子结构）："
+                        "**只检查单词拼写是否正确，不得套用句子级语法规则**"
+                        "（如『数词后名词须用复数』『缺少冠词』『主谓一致』『缺少谓语』等一律不算问题）"
+                        "—— 该类题目考的是发音，成对/成组出现的单词是**教学设计**，不是句子。"
+                        "单词拼写正确即判通过。"
+                    )
+                if _stem_from_pattern:
+                    # ★ 关键：明确告诉 LLM「题面在图片上，例句就是作答指引」，
+                    #   否则它会按"没有小题题面"判缺失（这正是误判的机理）。
+                    _stem_task += (
+                        "★ 本题为「仿照例句，说一说」：小题题面（配图）在 App 界面上，"
+                        "脚本以『例句：…』给出仿写基准，**该例句即本题的作答指引**。"
+                        "只要例句非空、可读、无错别字即判通过；"
+                        "**绝不能因『脚本没有单独写小题题面』或『没有别的例句提示』判不通过**。"
+                    )
+                r.stem_check = _llm_dim(_stem_task, f"题干: {_eff_stem}", "stem")
+                r.stem_check.actual = _eff_stem[:200]
+                # ★ 2026-09-23 确定性兜底：提示词是"软约束"，LLM 仍可能忍不住套句子语法。
+                #   实测它给出「six → foxes，单复数不一致」并判不通过 → 整题假错。
+                #   判据（两条同时成立才放行，避免把真错误洗白）：
+                #     ① 该题干是「朗读单词/词组」题（_looks_word_drill）
+                #     ② 不通过理由**只**涉及句子级语法概念，且**完全没提**拼写/错别字/
+                #        乱码/截断/缺失/多写少写这些"真问题"关键词
+                #   放行方式：passed=True + 保留 LLM 原文（检查人员仍能看到它的意见）。
+                if _looks_word_drill and r.stem_check.passed is False \
+                        and r.stem_check.method not in ("skip",):
+                    _sc_txt = " ".join(
+                        [r.stem_check.error or ""]
+                        + [str(d) for d in (r.stem_check.details or [])]
+                        + [r.stem_check.suggestion or ""])
+                    _GRAM_OVERREACH = ("单复数", "复数形式", "冠词", "主谓一致", "谓语",
+                                       "时态", "句子结构", "句子不完整", "不成句", "语法错误",
+                                       "语序")
+                    _REAL_PROBLEM = ("拼写", "错别字", "乱码", "截断", "缺失", "空白",
+                                     "多写", "少写", "拼错")
+                    if any(k in _sc_txt for k in _GRAM_OVERREACH) \
+                            and not any(k in _sc_txt for k in _REAL_PROBLEM):
+                        _orig = " ".join(str(d) for d in (r.stem_check.details or []))[:300]
+                        r.stem_check.passed = True
+                        r.stem_check.error = ""
+                        r.stem_check.details = list(r.stem_check.details or []) + [
+                            "⚠ 已忽略「朗读单词/词组」题上的句子级语法意见"
+                            "（该题型考发音与拼写，成对/成组单词是教学设计、不是句子）："
+                            f"{_orig[:160]}"
+                        ]
+                        r.stem_check.suggestion = ""
         elif is_audio_q or is_image_q:
             r.stem_check = CheckResult(passed=False, score=0.0, method="skip",
                                        error="脚本未提供题干文字（听音/图片题题干在音频或图中）",
@@ -674,6 +874,39 @@ class ReviewAgent:
         else:
             r.answer_check = CheckResult(passed=False, score=0.0, method="text",
                                          error="脚本未给出答案", details=["脚本未提供答案"])
+
+        # ★ 2026-09-17 新增：参考答案 ↔ 关键词 一致性（确定性规则，覆盖 LLM 结论）
+        #   为什么放在这里而不是并进 LLM 调用：
+        #   ① LLM 对"答案有效/格式合理"判通过，会**掩盖**关键词与答案用词不一致
+        #      （用户实测：LLM 判通过，但答案用 take、关键词用 bring）；
+        #   ② 规则判定零成本、可复现，还能给出"bring → take"这种可直接改的结论。
+        #   checked>0 且无问题 → 追加一条"已核对"证据，避免该检查项被静默跳过。
+        try:
+            _kw_problems, _kw_n, _kw_src = check_answer_keyword_consistency(
+                q.answer, q.keywords, getattr(q, "passage", "") or q.recording)
+            if _kw_problems:
+                _sug = "统一「参考答案」与「关键词」的用词（学生按关键词作答会被判错）"
+                for _p in _kw_problems:
+                    _m2 = re.search(r"：答案里是「([^」]+)」（(.+?)）", _p)
+                    if _m2:
+                        _sug += f"；例如把关键词改为与答案一致的表达「{_m2.group(1)}」"
+                        break
+                r.answer_check = CheckResult(
+                    passed=False, score=0.0, method="text",
+                    error="关键词与参考答案不一致",
+                    details=[f"❌ {_p}" for _p in _kw_problems],
+                    suggestion=_sug,
+                )
+            elif _kw_n:
+                r.answer_check.details = list(r.answer_check.details) + [
+                    f"✅ 关键词与参考答案一致（已核对 {_kw_n} 个短语："
+                    f"{'、'.join(list(_kw_src)[:4])}）"
+                ]
+        except Exception as _e:
+            # 该规则异常绝不能影响主流程 → 记一条"未检"痕迹即可
+            r.answer_check.details = list(r.answer_check.details) + [
+                f"⚠ 关键词一致性检查未执行: {_e}"
+            ]
 
         # (4)(5)(6) 配图/音频/答错后：无截图 → skip（未检）
         for cr, name in ((r.image_check, "配图"), (r.audio_check, "音频"),
@@ -916,6 +1149,41 @@ class ReviewAgent:
         # ★ 无法解析 → 返回 None（不默认为通过！）
         return None
 
+    # ★ 2026-09-23 新增："只报取证不足"的判据（详见 _evidence_only_miss）
+    _EVIDENCE_MISS_KW = (
+        "未提供截图", "没提供截图", "没有截图", "无截图", "缺截图",
+        "未提供配图", "未提供图片", "未提供该题配图截图",
+        "无法核实", "无法检查", "无法查看", "无法判断", "看不到图", "未见配图",
+    )
+    _HARD_ISSUE_KW = (
+        "拼写错误", "语法错误", "不符", "不一致", "缺失", "有误", "不正确",
+        "超纲", "应改为", "写错", "拼错", "不匹配", "未显示", "遗漏", "多余",
+    )
+
+    @classmethod
+    def _evidence_only_miss(cls, text: str, sugg: str) -> bool:
+        """LLM 判"不通过"但理由**只是取证不足**（如没给配图截图）→ 不是缺陷。
+
+        现场（教科版五上 U7 第3大题第4小题，脚本层审查输出）：
+            [不通过 | 置信度:70] | 理由：
+              - 题干文字检查：通过。…
+              - 题目内容检查：通过。…
+              - 配图检查：未提供截图，无法核实图片
+              建议修改：补充提供该题配图截图以校验图片与句子是否匹配…
+        三个子项里两个明确通过，唯一"问题"是**没有截图可用** —— 这属于取证手段
+        缺失，不是 App / 脚本的缺陷。判"不通过"就是假错（用户反复要求"只判真正
+        影响学生作答的问题"）。这里只做**单向**放宽：命中判据 → 降级为"未判定"，
+        绝不把真错洗白（有任一实质问题词命中就不降级）。
+        """
+        if not any(k in text for k in cls._EVIDENCE_MISS_KW):
+            return False
+        if any(k in text for k in cls._HARD_ISSUE_KW):
+            return False
+        if sugg and not any(k in sugg for k in ("截图", "人工核对", "人工确认",
+                                                "连手机", "补充提供", "补证")):
+            return False
+        return True
+
     def _apply_verdict(self, check: CheckResult, ai_response: str, reason: str = ""):
         """
         统一应用AI审查判定结果到 CheckResult。
@@ -933,6 +1201,31 @@ class ReviewAgent:
         # ★ 尝试提取置信度: [通过 | 置信度:85] 或 [通过/不通过]
         conf_match = _re.search(r'(?:置信度|confidence)[:\s]*(\d{1,3})', ai_response, _re.IGNORECASE)
         confidence = min(int(conf_match.group(1)), 100) if conf_match else (100 if passed else 50)
+
+        # ★ 2026-09-23：把「建议修改」的抽取提前到判定之前 —— 判"是否只是取证不足"
+        #   需要看 LLM 给的建议是"去补截图/人工核对"还是"去改内容"。
+        _combined = f"{ai_response}\n{reason}"
+        _m_sugg = _re.search(r'建议修改[:：]\s*([^\n]{4,200})', _combined)
+        _sugg_txt = _m_sugg.group(1).strip().rstrip('。.').strip() if _m_sugg else ""
+
+        # ★ 2026-09-23：LLM 把"取证不足"当成"不通过" → 假错，降级为「未判定」。
+        #   标 method="uncertain" 后，_qreview_to_state._cr() 会映射成 None（未检），
+        #   且 overall 计算里 uncertain 与 skip 一样不计入 checked → 不会误判不通过。
+        if passed is False and self._evidence_only_miss(_combined, _sugg_txt):
+            check.passed = False
+            check.score = 0.0
+            check.confidence = confidence
+            check.method = "uncertain"
+            check.error = "取证不足，未判不通过"
+            check.suggestion = _sugg_txt
+            check.details.append(
+                "⏸ 未判定：脚本审查只报了「取证不足」（如缺配图截图 / 无法核实），"
+                "未发现实质内容问题 → 不计不通过，请人工补证")
+            if ai_response:
+                check.details.append(f"  AI判断: {ai_response[:150]}")
+            if reason:
+                check.details.append(f"  AI理由: {reason[:120]}")
+            return
 
         if passed is None:
             check.passed = False
@@ -953,10 +1246,9 @@ class ReviewAgent:
             check.details.append(detail)
 
         # ★ 抽出"建议修改"并嵌入 detail（供实时错题报告展示绿色"修改建议"框）
-        _combined = f"{ai_response}\n{reason}"
-        _m = _re.search(r'建议修改[:：]\s*([^\n]{4,200})', _combined)
-        if _m and not check.passed:
-            check.suggestion = _m.group(1).strip().rstrip('。.').strip()
+        #   （正则抽取已在函数开头做过，这里复用 _sugg_txt）
+        if _sugg_txt and not check.passed:
+            check.suggestion = _sugg_txt
             if not any('建议修改' in d for d in check.details):
                 check.details[-1] = f"{check.details[-1]} 建议修改：{check.suggestion}"
 

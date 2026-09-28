@@ -221,7 +221,10 @@ class TestStemSource(unittest.TestCase):
         xml = self._xml(self._container(
             '<node text="1/5" bounds="[20,120][200,160]"/>'))
         _, _, stem, _ = self.oral._find_active_sub_question(None, xml)
-        self.assertEqual(stem, "听音频跟读")
+        # ★ 2026-09-23：占位题干由「听音频跟读」改为「听录音作答」——
+        #   五上U6第4大题是"点小喇叭听题目内容 → 口语作答"，学生是**作答**而非复述
+        #   （用户实测反馈：不能说成跟读/图片作答）。来源标记仍为 audio。
+        self.assertEqual(stem, "听录音作答")
         self.assertEqual(self.oral._LAST_STEM_SRC, "audio")
 
     def test_vision_source(self):
