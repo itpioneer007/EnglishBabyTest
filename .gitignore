@@ -107,6 +107,10 @@ data/script_review_cache/
 data/script_review_index.json*
 data/*.bak*
 
+# LLM 每日预算台账（按自然日生成/重置，属运行产物；见 llm_budget.py）
+#   含 data/llm_budget.json 与其原子写临时文件 .json.tmp
+data/llm_budget.json*
+
 # 运行时状态文件（记录当前目标设备序列号，各机器不同）
 server_target.txt
 

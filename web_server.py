@@ -1766,6 +1766,43 @@ def api_status():
     })
 
 
+@app.route("/api/budget")
+def api_budget():
+    """每日 LLM 预算阀门状态（见 llm_budget.py）"""
+    from llm_budget import budget_status
+    return jsonify(budget_status())
+
+
+@app.route("/api/budget/limit", methods=["POST"])
+def api_budget_limit():
+    """临时调整今日预算上限（写回 .env 的 LLM_DAILY_BUDGET_YUAN）"""
+    from llm_budget import budget_status
+    body = request.get_json(silent=True) or {}
+    try:
+        val = float(body.get("limit_yuan"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "limit_yuan 必须是数字"}), 400
+    if val <= 0:
+        return jsonify({"ok": False, "error": "limit_yuan 必须大于 0"}), 400
+
+    env_path = Path(__file__).parent / ".env"
+    try:
+        lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+        new_lines, replaced = [], False
+        for line in lines:
+            if line.strip().startswith("LLM_DAILY_BUDGET_YUAN="):
+                new_lines.append(f"LLM_DAILY_BUDGET_YUAN={val}")
+                replaced = True
+            else:
+                new_lines.append(line)
+        if not replaced:
+            new_lines.append(f"LLM_DAILY_BUDGET_YUAN={val}")
+        env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"写入 .env 失败: {e}"}), 500
+    return jsonify({"ok": True, "limit_yuan": val, "status": budget_status()})
+
+
 def _device_list():
     """列出所有已连接设备（供前端下拉选择）"""
     try:
@@ -3387,6 +3424,33 @@ def _fold_script_layer(basic: dict, scr: dict) -> None:
                 _fl["detail"] = "脚本层核验存在不通过项（详见各维度）"
 
 
+def _resolve_question_unit(scope_unit, state_unit):
+    """确定"这道题属于哪个单元"，供题卡 `_unit` / 错题报告定位使用。
+
+    ★ 2026-10-08 新增（抽取自 _record_module_evidence，便于单测）。
+    背景：用户一次勾了 U1、U3（范围串 "1,3"）跑口语训练，未判定清单 20 条全部
+    渲染成「U1,3 · 第1大题 · 第2小题」—— U1 与 U3 的同名小题完全无法区分。
+
+    规则（与 MEMORY §2 一致：当前单元必须由模块上报，不能从范围串推）：
+      ① 优先 `scope_unit` = 模块通过 logger.set_current_unit() 上报的"正在作答单元"；
+      ② 模块没上报时才回退 `state_unit`，**且只有它是单个纯数字**（"5"/"6"）才用；
+      ③ 其余（"1,3" / "5-6" / "全部" / ""）一律返回 ""，交给报告层退回 meta 单元，
+         绝不把范围串当单元号印出来。
+
+    >>> _resolve_question_unit("3", "1,3")
+    '3'
+    >>> _resolve_question_unit("", "5")
+    '5'
+    >>> _resolve_question_unit("", "1,3")
+    ''
+    """
+    _u = str(scope_unit or "").strip()
+    if _u:
+        return _u
+    _su = str(state_unit or "").strip()
+    return _su if re.fullmatch(r"\d+", _su) else ""
+
+
 def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None):
     """把 engine.py 每题收集的 5 维界面证据（题型/题干/选项/音频/作答）
     映射成前端六维卡片字段写入 _inspection_state["questions"]。
@@ -3992,6 +4056,9 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
     else:
         progress_str = f"Q{qidx}"
     _loc = {"big": big} if big else {}
+    # ★ 2026-10-08：这道题所属的单元（见 _new_rec["_unit"] 处的说明与
+    #   _resolve_question_unit 的 docstring）
+    _now_unit = _resolve_question_unit(_scope_unit, _inspection_state.get("unit", ""))
 
     _new_rec = {
         "idx": qidx,
@@ -4005,11 +4072,17 @@ def _record_module_evidence(qidx: int, msg: str, evidence: list, big: int = None
         "module": _current_module_name,
         "stage": _current_stage_name,
         "module_qno": _current_module_qno,
-        # ★ 2026-09-20 新增：这道题属于哪个单元。脚本自检问题里写的是
-        #   "U4 第4大题 第3小题"这种位置，要归位到题卡就必须知道题目自己的单元；
-        #   写入这一刻正是该单元在跑，取 state["unit"] 最可靠（事后猜多个单元的
-        #   运行会张冠李戴）。
-        "_unit": _inspection_state.get("unit", ""),
+        # ★ 2026-10-08 修复「报告把每个单元都标成范围串」：
+        #   原实现取 `_inspection_state["unit"]`，但那是**本轮运行范围**
+        #   （用户勾 U1、U3 跑 → "unit" = "1,3"），不是这道题所属的单元。
+        #   实测（湘少四下 口语训练:1,3）未判定清单 20 条全部渲染成
+        #   「U1,3 · 第1大题 · 第2小题」，U1 与 U3 的同名小题**完全无法区分**，
+        #   审查员定位不到题（用户明确要求报告位置必须可直接定位）。
+        #   正解：优先用模块自己上报的当前单元（`logger.set_current_unit()`，
+        #   口语训练在 _run_unit_questions 里上报）；只有当模块没上报、且
+        #   state["unit"] 本身就是**单个纯数字**时才回退——范围串/“全部”一律留空，
+        #   让报告层退回 meta 单元，绝不把 "1,3" 当单元号印出来。
+        "_unit": _now_unit,
         **_loc,
         # 六维判定（旧格式，兼容已有消费者）
         "ai_stem": dims["stem"], "ai_content": dims["content"],

@@ -17,6 +17,12 @@ import sys, os, time, importlib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import uiautomator2 as u2
+# ★ 2026-10-08：导入即补全 u2 的异常映射缺口（RemoteDisconnected 等 http.client
+#   家族异常原本裸逃逸 → 设备瞬断会掀翻整个模块）。详见 common/u2_resilience.py
+try:
+    from common import u2_resilience as _u2_resilience  # noqa: F401
+except Exception:
+    pass
 from common.setup import switch_version_grade
 from common.tools import close_ad, dismiss_global_popups, settle_ads
 from common.logger import step_log
@@ -37,16 +43,60 @@ DEFAULT_GRADE = "五年级上册"
 DEFAULT_VERSION = "湘少版"
 
 
+def _wait_home_ready(d, timeout=25):
+    """轮询等待英语宝主页就绪（主页特征命中即 True）。
+
+    ★ 2026-10-08 新增。见 run_all 里"重启 App"处的说明：冷启动 + 开屏广告
+      通常超过固定 sleep，必须等主页真正就绪再切版本/年级，否则
+      switch_version_grade 会因 `_is_home()` 为假而直接中止。
+    """
+    try:
+        from common.setup import _is_home as _is_home_fn
+    except Exception:
+        _is_home_fn = None
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            if _is_home_fn and _is_home_fn(d):
+                return True
+        except Exception:
+            pass
+        time.sleep(0.8)
+    return False
+
+
 def _switch_if_needed(d, version, grade):
-    """切换到目标版本+年级；已是目标则跳过
-    ★ 调度器统一在此做一次年级切换，各模块的 run_module 不再各自切换"""
-    if version and grade:
+    """切换到目标版本+年级；已是目标则跳过。返回 True=已确认，False=切换失败。
+
+    返回值语义（★ 2026-10-08 修正）：
+      switch_version_grade 返回 True 有两种含义 —— "本来就对，无需切换" 与
+      "切换成功"。旧实现仅在 `ok is True` 时打一条日志，且文案恒为"无需切换"
+      （切成功了也这么说）；`ok is False`（切换中止/失败）则【完全没有处理】
+      → 静默吞掉，整轮继续跑在上一个版本/年级上，结论全部作废却看不出来。
+
+    现在：失败 → 明确告警 + 回主页后重试一次 → 仍失败则返回 False，
+    由调用方中止本轮（宁可不测，也不能拿错年级的结果冒充）。
+    """
+    if not (version and grade):
+        return True
+    for attempt in (1, 2):
+        ok = False
         try:
             ok = switch_version_grade(d, version, grade, skip_if_ok=True)
-            if ok is True:
-                step_log(f"✔ 版本/年级已是 {version} {grade}，无需切换", "info")
         except Exception as e:
             print(f"  ⚠ 切换版本/年级异常: {e}")
+        if ok:
+            step_log(f"✔ 版本/年级已确认: {version} {grade}", "info")
+            return True
+        if attempt == 1:
+            step_log(f"⚠ 版本/年级切换失败，回主页后重试一次: {version} {grade}", "warning")
+            try:
+                _back_to_home(d)
+            except Exception:
+                pass
+            time.sleep(2)
+    step_log(f"❌ 版本/年级切换失败（{version} {grade} 未生效）→ 本轮结果不可用，已中止", "error")
+    return False
 
 
 def _back_to_home(d):
@@ -173,7 +223,18 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
     try:
         _ensure_screen_on(d)   # ★ 息屏时 dump 为空 → 会跑出"0 题"假成功
         d.app_stop(APP_PACKAGE); time.sleep(0.8)
-        d.app_start(APP_PACKAGE); time.sleep(3)
+        d.app_start(APP_PACKAGE)
+        # ★ 2026-10-08 修复（实测踩坑）：原为固定 `time.sleep(3)` 后立刻切版本/年级。
+        #   但冷启动 + 开屏广告普遍 >3s，彼时 App 还在启动页：
+        #     _is_home() 为假 → _back_home() 的 back 反而把启动中的 App 顶到桌面
+        #     → switch_version_grade 打印"✘ 无法回到主页，切换中止"并返回 False
+        #     → 上一层又静默忽略该 False（见 _switch_if_needed 说明）
+        #     → 整轮跑在【上一个年级】上，结论全部作废却毫无提示。
+        #   实测日志：21:25:05 重启 App → 21:25:10 切年级 → ✘ 无法回到主页（仅隔 5s）。
+        #   改为轮询等待主页特征就绪（最多 25s），就绪后才继续。
+        if not _wait_home_ready(d, timeout=25):
+            step_log("⚠ App 启动 25s 内未回到主页（可能被开屏广告/系统弹窗遮挡），仍尝试继续",
+                     "warning")
     except Exception as e:
         step_log(f"⚠ App 重启异常: {e}", "error")
 
@@ -181,7 +242,11 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
     #   ★ 修复：日志顺序与操作顺序一致——先切版本年级再关广告
     #   （切完版本/年级后页面会重载，可能产生新广告，必须在操作前关掉）
     step_log(f"🔧 切换版本/年级: {version} {grade}", "step")
-    _switch_if_needed(d, version, grade)
+    if not _switch_if_needed(d, version, grade):
+        # ★ 版本/年级没切到位 → 继续跑只会产出"错年级的结论"。
+        #   宁可不测：全部模块标记失败并原样返回，让用户在日志里一眼看到拦停原因。
+        return {name: {"q": 0, "t": 0, "ok": False, "error": "版本/年级切换失败"}
+                for name in module_names}
 
     # 1.5 关广告（与单模块 main() 一致：先清全局弹窗 + 关广告，再操作界面，
     #     否则切完版本/年级后主页新广告/弹窗未关，后续点坐标会点到广告上！）

@@ -181,6 +181,46 @@ def _wait_ready_for_record(d, timeout=20):
     return False
 
 
+def _diag_no_record_ctrl(d, big_idx):
+    """超时未等到录音按钮时，区分「页面还没就绪」和「本大题压根没有可作答控件」。
+
+    ★ 2026-10-08（湘少四下 U1 大题3）：该大题为纯图片题，整页唯一可点击节点是
+      tv_exit（退出训练）——无 record_btn、无喇叭、无「下一题/交卷」。
+      工具只能超时退出 → 单元提前结束（U1 只采到 大题1 + 大题2 共 10 题）。
+      不写这条日志的话，报告里只表现为"题变少了"，原因不可见。
+    """
+    try:
+        xml = d.dump_hierarchy()
+    except Exception:
+        return
+    if _is_transition_state(xml):
+        try:
+            step_log(f"⚠ 第{big_idx}大题等待录音按钮超时（页面仍在倒计时/上传状态）", "warning")
+        except Exception:
+            pass
+        return
+    if _find_record_btn(d, xml):
+        return
+    # 只要还有"下一题/交卷/答题卡"这类过渡控件，就说明只是没等到，不是页面坏
+    if any(b in xml for b in ("下一题", "下一大题", "交卷", "答题卡")):
+        return
+    labels = []
+    for tag in re.findall(r'<node[^>]*clickable="true"[^>]*>', xml):
+        m = re.search(r'text="([^"]*)"', tag)
+        rid = re.search(r'resource-id="([^"]*)"', tag)
+        t = (m.group(1) if m else "").strip()
+        if not t and rid:
+            t = rid.group(1).split("/")[-1]
+        if t and t not in labels:
+            labels.append(t)
+    try:
+        step_log(f"⚠ 第{big_idx}大题无可作答控件：整页无录音按钮/喇叭/「下一题」，"
+                 f"可点击元素仅 {labels[:6] or ['无']} → 本单元在此中断，"
+                 f"该大题及其后大题未检测（App 侧页面问题）", "warning")
+    except Exception:
+        pass
+
+
 # ★ 2026-09-15 最近一次小题题干的来源：
 #   "vision" = 由视觉模型识别配图得到（概率性结论，脚本需标注人工复核）
 #   "text"   = 页面文字直接给出（句型题 / 朗读题，确定）
@@ -807,6 +847,7 @@ def _answer_big_question(d, big_idx=0):
     # 1. 等大题首题 ready
     if not _wait_ready_for_record(d, timeout=22):
         print(f"    ❌ 第{big_idx}大题：等待首题录音按钮超时")
+        _diag_no_record_ctrl(d, big_idx)   # ★ 区分"还没就绪"与"压根没有可作答控件"
         return 0
 
     # 2. 逐小题作答
@@ -1367,6 +1408,180 @@ def _run_unit_questions(d, unit_num):
     return total
 
 
+# ── 口语训练试卷页「退出训练」确认框（真机 dump 2026-10-08，MuMu 900x1600）──
+#   点顶栏 tv_exit（"退出训练"）后弹出：
+#     confirm_title   = "温馨提示"
+#     confirm_context = "你完成了N道题，练习未做完，中途退出别错过练习时间哦~"
+#     confirm_left_btn  = "确定退出"   ← 必须点这个；点完落到 口语训练单元列表
+#     confirm_right_btn = "继续答题"   ← 点了回到试卷继续答，绝不能误点
+_EXIT_CONFIRM_RID = "confirm_left_btn"
+#   ⚠ text= 是**精确匹配**。白名单里只写 "确定" 匹配不到 "确定退出" ——
+#     这正是 2026-10-08 复跑卡死 6 轮的直接原因。长词必须排在前面。
+_EXIT_CONFIRM_TEXTS = ("确定退出", "确认退出", "退出确认", "确认退出练习",
+                       "确定", "确认", "继续退出")
+
+
+def _in_exit_confirm(xml):
+    """当前页是否弹着「确定退出 / 继续答题」确认框。
+
+    ★ 必须单独识别：该弹窗出现时 XML 里【既没有「退出训练」也没有 U+数字】，
+      若沿用"不在试卷页就当已退出"的判据 → 会误判成功，或去按 back（= 取消弹窗）。
+    """
+    if not xml:
+        return False
+    return ("温馨提示" in xml and "继续答题" in xml
+            and ("确定退出" in xml or "退出" in xml))
+
+
+def _click_exit_confirm(d, xml=""):
+    """点确认框左侧的「确定退出」，返回是否点到。
+
+    ⚠ 右侧是「继续答题」，点错就前功尽弃 —— 优先用 resource-id 精确定位，
+      退而用精确文本；白名单里【不含】"继续答题"。
+    """
+    if xml and not _in_exit_confirm(xml):
+        return False
+    try:
+        el = d(resourceId=f"{APP_PACKAGE}:id/{_EXIT_CONFIRM_RID}")
+        if el.exists(timeout=0.8):
+            el.click()
+            print("    ✅ 点『确定退出』(confirm_left_btn)")
+            return True
+    except Exception:
+        pass
+    for _t in _EXIT_CONFIRM_TEXTS:
+        try:
+            if d(text=_t).exists(timeout=0.4):
+                d(text=_t).click()
+                print(f"    ✅ 点『{_t}』(文本兜底)")
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def _is_oral_list_page(xml):
+    """是否已回到「口语训练」单元列表（= 下一个单元可以正常进入）。
+
+    用**正向特征**判定，不看"有没有离开试卷页"（那正是第一版踩的坑）：
+      ① 排除试卷页/确认框（退出训练 / 答题卡 / 确定退出）
+      ② 有单元答题按钮 → 是列表
+      ③ 否则看单元卡片标题行（"口语训练新湘少版四下U3"）—— 单元多到需要滚动时按钮
+         可能不在首屏，但标题行一定在；练习报告页两者都没有。
+    """
+    if not xml or "口语训练" not in xml:
+        return False
+    if "退出训练" in xml or "答题卡" in xml or "确定退出" in xml:
+        return False
+    if any(b in xml for b in ("开始答题", "重新答题", "继续答题")):
+        return True
+    return bool(re.search(r'口语训练[^"<]{0,20}[Uu]\s*0*\d', xml))
+
+
+def _restart_to_oral_module(d):
+    """兜底：重启 App 并重新导航到「口语训练」模块页（返回是否成功）。
+
+    只在所有 UI 退出尝试都失败时调用 —— 宁可慢 ~25s，也不能让"停在试卷页"
+    把下一个单元误报成"App 无此单元"（2026-10-08 实测的误报源头）。
+    """
+    try:
+        d.press("home")
+        time.sleep(0.6)
+        d.app_stop(APP_PACKAGE)
+        time.sleep(1.0)
+        d.app_start(APP_PACKAGE)
+    except Exception:
+        return False
+    for _ in range(20):
+        time.sleep(1)
+        try:
+            xml = d.dump_hierarchy()
+        except Exception:
+            continue
+        if "教材精学" in xml or "专项突破" in xml or "听课文" in xml:
+            break
+        try:
+            d.press("back")
+        except Exception:
+            pass
+    try:
+        if not scroll_and_find(d, "口语训练", max_swipes=4):
+            return False
+        d(text="口语训练").click()
+        time.sleep(1.6)
+        _close_bottom_ad(d)
+        return True
+    except Exception:
+        return False
+
+
+def _exit_paper_to_list(d, tries=6, allow_restart=True):
+    r"""从口语训练「试卷页(SpokeTestActivity)」退回单元列表；已在列表则立即 True。
+
+    ★ 2026-10-08 新增，同日二次修复。原实现（run_module 里）只有：
+          for _ in range(3): ... d.press("back")
+          if d(text="口语训练").exists(): d(text="口语训练").click()
+    第一版按"点『退出训练』+ 点确认框"重写，但三处误判叠加，真机仍然卡死 6 轮：
+
+      ① 确认框按钮实测是 **"确定退出"**，而白名单只有 ("确定","确认",...)；
+         uiautomator2 的 text= 是**精确匹配** → "确定" 匹配不到 "确定退出"
+         → 一个按钮都没点中。
+      ② 确认框弹出时 XML 里【既无「退出训练」也无 U+数字】，
+         旧判据 `"退出训练" not in xml and U\d in xml` 为假 →
+         再落到 else 分支去按 back —— 而 back 语义是**取消弹窗**，
+         于是「弹窗 → back 取消 → 回试卷 → 再点退出训练 → 再弹窗」死循环。
+      ③ 原判据把"不在试卷页"当"已回列表"，缺乏正向证据。
+
+    修法：把"识别确认框"提到判据之前，用 resource-id `confirm_left_btn`
+    精确点左键（绝不含"继续答题"），并用**正向特征** `_is_oral_list_page`
+    判定成功；全部失败则重启 App 重新导航（`_restart_to_oral_module`）。
+
+    真机验证（2026-10-08 探针 probe_oral_exit_dialog.py，湘少四下 U1）：
+      tv_exit → 确认框 → confirm_left_btn → 落到单元列表
+      （可见 U1 继续答题 / U2~U5 开始答题，其中 U3 入口存在）。
+
+    语义：本函数返回 False 只代表"工具没退出去"，**不等于 App 没有下一个单元**，
+    run_module 的告警文案已按此措辞。
+    """
+    for _ in range(tries):
+        try:
+            xml = d.dump_hierarchy()
+        except Exception:
+            xml = ""
+        # ① 退出确认框 → 点左键「确定退出」（必须先于其他判据）
+        if _in_exit_confirm(xml):
+            _click_exit_confirm(d, xml)
+            time.sleep(1.2)
+            continue
+        # ② 正向判定：已回到单元列表
+        if _is_oral_list_page(xml):
+            return True
+        # ③ 还在试卷页 → 点顶栏「退出训练」
+        if "退出训练" in xml:
+            try:
+                el = d(resourceId=f"{APP_PACKAGE}:id/tv_exit")
+                if el.exists(timeout=1):
+                    el.click()
+                elif d(text="退出训练").exists(timeout=1):
+                    d(text="退出训练").click()
+                time.sleep(1.2)
+                continue
+            except Exception:
+                pass
+        # ④ 其他中间页（练习报告等）→ back 一层
+        try:
+            d.press("back")
+        except Exception:
+            pass
+        time.sleep(0.8)
+
+    if allow_restart:
+        print("    ⚠ UI 退出失败 → 兜底重启 App 并重新进入口语训练")
+        if _restart_to_oral_module(d):
+            return True
+    return False
+
+
 def run_module(d, units=None):
     """核心入口：跑完口语训练指定单元，返回题数
 
@@ -1473,12 +1688,13 @@ def run_module(d, units=None):
         except Exception as _e:
             print(f"  ⚠ 生成脚本失败: {_e}")
         # 答完退出到口语训练列表
-        for _ in range(3):
-            if d(text="口语训练").exists(timeout=1) or d(text="开始答题").exists(timeout=1):
-                break
-            d.press("back"); time.sleep(0.6)
-        if d(text="口语训练").exists(timeout=2):
-            d(text="口语训练").click(); time.sleep(1.2)
+        # ★ 2026-10-08 改用 _exit_paper_to_list：原实现最多 back 3 次且只认
+        #   "口语训练/开始答题"两个文本，遇"确定退出?"确认框会卡死在试卷页 →
+        #   下一个单元报"入口缺失"（详见 _exit_paper_to_list 文档字符串）。
+        if not _exit_paper_to_list(d):
+            step_log(f"⚠ 未能退出口语训练试卷页（U{unit_num} 之后）：UI 退出与「重启 App」"
+                     f"兜底均失败，后续单元可能报“入口缺失”——那是【工具侧未退出】，"
+                     f"不是 App 缺单元", "warning")
         _close_bottom_ad(d)
 
     # ★ 模块完成信号（web_server log_msg 靠"完成"关键词触发脚本内容审查）

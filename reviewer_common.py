@@ -384,6 +384,9 @@ class LLMClient:
         """
         paths = image_paths if image_paths else ([image_path] if image_path else None)
 
+        # ★ 预算阀门异常类型需在整个 ask() 内可用（视觉分支 + 纯文本分支都要捕获）
+        from llm_budget import BudgetExceededError
+
         if paths and self.vision_model:
             # 有视觉模型：直接发图
             try:
@@ -391,6 +394,8 @@ class LLMClient:
                     model=self.vision_model,
                     base_url=self.vision_base_url or self.base_url,
                     api_key=self.vision_api_key)
+            except BudgetExceededError as e:
+                return str(e)   # 预算耗尽：不再降级重试（降级同样会被阀门拒绝）
             except Exception as e:
                 return f"[视觉模型失败: {e}] → 降级为纯文本分析\n{self._call_api(prompt, image_paths=None)}"
 
@@ -400,6 +405,7 @@ class LLMClient:
 
         # 纯文本
         # 纯文本（★ 带重试：网络波动/API限流会偶发空响应或异常，重试 2 次）
+        # ★ 预算阀门例外：BudgetExceededError 属确定性拒绝，重试无意义 → 立即返回
         _last_err = ""
         for _attempt in range(3):
             try:
@@ -407,6 +413,8 @@ class LLMClient:
                 if _r and _r.strip():
                     return _r
                 _last_err = f"LLM 返回空内容（第{_attempt+1}次尝试）"
+            except BudgetExceededError as e:
+                return str(e)
             except Exception as e:
                 _last_err = f"[LLM 调用失败] {e}（第{_attempt+1}次尝试）"
             import time as _t
@@ -454,13 +462,23 @@ class LLMClient:
     def _call_api(self, prompt: str, image_paths: list = None,
                   model: str = None, base_url: str = None,
                   api_key: str = None) -> str:
-        """底层 API 调用 (支持多图)"""
+        """底层 API 调用 (支持多图)
+
+        ★ 每日预算阀门：所有 LLM 请求统一在此把关（见 llm_budget.py）。
+          超限抛 BudgetExceededError → ask() 的重试循环会把预算报错原样带回，
+          审查结果中体现为明确的"[预算阀门]"字样，而不是静默烧钱。
+        """
         import base64
         from urllib.request import Request, urlopen
+
+        from llm_budget import check_budget, record_usage
 
         use_model = model or self.model
         use_url = (base_url or self.base_url).rstrip("/")
         use_key = api_key or self.api_key
+
+        # ── 阀门：调用前检查（超限直接抛异常，不发请求）──
+        check_budget(use_model)
 
         messages = [{"role": "user", "content": []}]
         messages[0]["content"].append({"type": "text", "text": prompt})
@@ -504,6 +522,13 @@ class LLMClient:
             )
             resp = urlopen(req, timeout=120)
             result = json.loads(resp.read())
+            # ── 阀门：记账（Anthropic usage: input_tokens / output_tokens）──
+            if isinstance(result, dict) and result.get("usage"):
+                _u = result["usage"]
+                record_usage(use_model, {
+                    "prompt_tokens": _u.get("input_tokens", 0),
+                    "completion_tokens": _u.get("output_tokens", 0),
+                })
             texts = [b.get("text", "") for b in result.get("content", []) if b.get("type") == "text"]
             return "".join(texts)
 
@@ -526,6 +551,9 @@ class LLMClient:
         )
         resp = urlopen(req, timeout=120)
         result = json.loads(resp.read())
+        # ── 阀门：记账（OpenAI 兼容 usage: prompt_tokens / completion_tokens）──
+        if isinstance(result, dict) and result.get("usage"):
+            record_usage(use_model, result["usage"])
         return result["choices"][0]["message"]["content"]
 
 

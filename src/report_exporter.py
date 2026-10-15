@@ -1223,10 +1223,19 @@ class ReportExporter:
         if not items:
             return ""
         _u_meta = str(meta.get("unit") or "").strip()
+        # ★ 2026-10-08：meta["unit"] 是**本轮运行范围**（勾了 U1、U3 → "1,3"），
+        #   不是单元号。只有当它是单个纯数字时才可作兜底单元，否则留空 ——
+        #   否则清单会渲染成「U1,3 · 第1大题 · 第2小题」，U1 与 U3 的同名小题
+        #   完全无法区分，审查员定位不到题（与 _render_position 的 .isdigit() 同口径）。
+        if not re.fullmatch(r"\d+", _u_meta):
+            _u_meta = ""
         rows = []
         for q in items:
             _unit, _big, _sub = self._qkey_of(q)
             _unit = _unit or _u_meta
+            # 双保险：历史记录里若存过范围串（"1,3"），也不当单元号印出来
+            if not re.fullmatch(r"\d+", str(_unit or "")):
+                _unit = ""
             _loc = []
             if _unit:
                 _loc.append(f"U{_unit}")
