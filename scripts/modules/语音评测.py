@@ -61,6 +61,47 @@ RIGHT_BAR_X = 834
 USER_READ_TIMEOUT = 15
 
 
+def _rid_center(d, rid, xml=None, timeout=6.0, poll=0.5):
+    """按 resource-id 取控件中心坐标（设备无关）；找不到返回 None。
+
+    ★ 2026-10-16 新增。原来答题页三处点击直接写死真机像素坐标（裸调，未过任何换算）：
+        BTN_RECORD_LAYOUT  -> (540, 975)     出现 2 次
+        BTN_CONFIRM_REPORT -> (540, 2145)    出现 1 次
+      BTN_CONFIRM_REPORT 的 y=2145 已**超出 MuMu 模拟器屏高 1600** -> 必然点空；
+      BTN_RECORD_LAYOUT 的 x=540 是真机 1080 的中线，在 900 宽的模拟器上偏右 90px。
+      根因：像素坐标是设备相关量，而布局按 dp 排布，两机 dp 尺寸不同（真机
+      360x800dp / MuMu 600x1067dp）-> 控件重排，任何按像素比例的换算都不成立。
+
+      改为解析 dump_hierarchy 里节点自报的 bounds 取中心：坐标由 App 在当前
+      设备上给出，与分辨率/density 无关，真机与模拟器通用。
+
+    注意：uiautomator2 的 resourceId() 需完整包名（com.dinoenglish.yyb:id/xxx），
+    传短名匹配不到，所以这里自己解析 XML（同 tools/speech_ab_test.py 的 find(rid=)）。
+    """
+    deadline = time.time() + (0 if xml is not None else max(timeout, 0))
+    while True:
+        if xml is None:
+            try:
+                _xml = d.dump_hierarchy()
+            except Exception:
+                _xml = ""
+        else:
+            _xml = xml
+        for node in re.finditer(r"<node[^>]*>", _xml):
+            tag = node.group(0)
+            m_rid = re.search(r'resource-id="([^"]*)"', tag)
+            if not m_rid or m_rid.group(1).rsplit("/", 1)[-1] != rid:
+                continue
+            m_b = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+            if not m_b:
+                continue
+            return ((int(m_b.group(1)) + int(m_b.group(3))) // 2,
+                    (int(m_b.group(2)) + int(m_b.group(4))) // 2)
+        if time.time() >= deadline:
+            return None
+        time.sleep(poll)
+
+
 # ============================================================
 # 入口：主页 → 语音评测（继承主页版本，必要时内部切版本/年级）
 # ============================================================
@@ -384,7 +425,13 @@ def _wait_record_done(d, timeout=USER_READ_TIMEOUT):
     超时也强制点完成（避免挂起）
     """
     # 1. 立即点录音（按钮变"点击完成"）
-    d.click(*BTN_RECORD_LAYOUT)
+    #   ★ 2026-10-16：改按 resource-id 动态定位，不再用真机固定坐标
+    #     （旧坐标 (540,975) 在 900 宽的模拟器上偏右 90px -> 可能点空）
+    _pos = _rid_center(d, "record_layout")
+    if not _pos:
+        step_log("⚠ 未找到录音按钮 record_layout，退回比例换算坐标", "warning")
+        _pos = S(d, *BTN_RECORD_LAYOUT)
+    d.click(*_pos)
     time.sleep(0.8)
     # 2. 轮询：等用户读完（按钮文字变"点击完成"或"已完成"）
     t0 = time.time()
@@ -405,7 +452,9 @@ def _wait_record_done(d, timeout=USER_READ_TIMEOUT):
         time.sleep(0.6)
     # 超时兜底：再点一次"点击完成"位置（按钮可能已变回原状）
     print(f"    ⚠ 录音等待超时（{timeout}s），强制点完成")
-    d.click(*BTN_RECORD_LAYOUT)
+    #   ★ 2026-10-16：同上，优先 resource-id，找不到退回比例换算
+    _pos = _rid_center(d, "record_layout", timeout=2.0) or S(d, *BTN_RECORD_LAYOUT)
+    d.click(*_pos)
     time.sleep(2.0)
     return 'timeout'
 
@@ -452,7 +501,13 @@ def _answer_one_part(d, part_text):
     # 全部完成 → 点"完成并获取报告"
     _scroll_to_confirm(d)
     time.sleep(0.5)
-    d.click(*BTN_CONFIRM_REPORT)
+    #   ★ 2026-10-16：同上。真机坐标 (540,2145) 的 y 已超出 MuMu 屏高 1600，
+    #     原先在模拟器上必然点空 -> 改用 resource-id 取真实 bounds
+    _pos = _rid_center(d, "speech_btn_confirm")
+    if not _pos:
+        step_log("⚠ 未找到「完成并获取报告」speech_btn_confirm，退回比例换算坐标", "warning")
+        _pos = S(d, *BTN_CONFIRM_REPORT)
+    d.click(*_pos)
     time.sleep(2.5)
     return _check_in_report(d)
 

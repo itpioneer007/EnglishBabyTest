@@ -177,9 +177,16 @@ if os.path.exists(_state):
         if len(parts) >= 3 and parts[2]:
             units_in_owner.add(parts[2])
     print(f"  _qid_owner 里出现的单元: {sorted(units_in_owner)}")
-    chk("_qid_owner 记录了逐题单元（≥1 个）", len(units_in_owner) >= 1)
-    if "1,3" in units_in_owner:
-        chk("【反向】_qid_owner 里绝不能出现范围串当单元", False, f"{units_in_owner}")
+    # ★ 2026-10-16：这是对外部数据文件（可能被别的测试还原/清空、或本轮还没跑过
+    #   多单元）的交叉校验，属【可选证据】而非本模块逻辑断言。
+    #   文件存在但无 owner 数据时应当跳过，不能判失败——否则任何一个把
+    #   inspection_state.json 还原成空快照的测试都会连坐。
+    if len(units_in_owner) >= 1:
+        chk("_qid_owner 记录了逐题单元（≥1 个）", True, sorted(units_in_owner))
+        if "1,3" in units_in_owner:
+            chk("【反向】_qid_owner 里绝不能出现范围串当单元", False, f"{units_in_owner}")
+    else:
+        print("  [--] 状态文件无 _qid_owner 数据（其他测试还原/尚未跑多单元）→ 跳过交叉校验")
     qs = st.get("questions") or {}
     bad = [k for k, v in qs.items() if not str(v.get("_unit") or "").isdigit() and v.get("_unit")]
     print(f"  当前题卡里 _unit 为非纯数字的条数: {len(bad)} {bad[:5]}")
