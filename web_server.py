@@ -286,6 +286,98 @@ def _intended_serial(serial: str = "") -> str:
     except Exception:
         return ""
 
+
+# ★ 2026-10-16 新增：目标设备「智能对齐」----------------------------------------
+#   背景：_intended_serial() 只做**配置解析**（显式 → ANDROID_SERIAL → server_target.txt
+#   → config.yaml），它并不知道"这台设备现在到底连没连"。于是出现两种不可解释的状态：
+#     ① server_target.txt 残留上一轮的目标（如 127.0.0.1:16384），把 config.yaml 里
+#        正确的真机串号压掉 —— 本次明明插着真机测试，日志却一直显示"目标=MuMu"；
+#     ② 目标离线时坐标缩放按基准算，操作者却以为一切正常。
+#   这里补一层：**目标不可达且另有在线设备时自动改用在线设备**，并把
+#   "改用了谁 / 为什么" 同时透出到服务日志与 /api/status，让状态始终自解释。
+_AUTO_DEV_TTL = 3.0          # adb devices 结果缓存时间（/api/status 每 2s 轮询）
+_auto_dev_cache = {"t": 0.0, "list": []}
+
+
+def _is_real_device(serial: str) -> bool:
+    """真机判定：串号**非空**且不含 host:port（模拟器 / 网络 adb 都是 `127.0.0.1:16384` 形态）。
+
+    ⚠ 空串必须返回 False：`":" not in ""` 为 True，若不显式排空会把"没有设备"也算成
+      一台真机（回归测试 T1 抓到）。
+    """
+    s = (serial or "").strip()
+    return bool(s) and ":" not in s
+
+
+def _pick_online(online) -> str:
+    """从在线设备里挑一台：优先真机（USB），其次第一台。"""
+    real = [s for s in online if _is_real_device(s)]
+    return (real or list(online))[0]
+
+
+def _online_serials(force: bool = False):
+    """当前 adb 在线设备串号（state=device）；默认 3s 内复用缓存。
+
+    只走 adbutils / `adb devices`，**不 import u2** —— /api/status 每 2s 轮询也扛得住。
+    """
+    now = time.time()
+    if not force and (now - _auto_dev_cache["t"]) < _AUTO_DEV_TTL:
+        return list(_auto_dev_cache["list"])
+    out = []
+    try:
+        sys.path.insert(0, str(Path(__file__).parent / "scripts"))
+        from common.device import list_devices
+        out = [d.get("serial") for d in list_devices()
+               if d.get("serial") and d.get("state") == "device"]
+    except Exception:
+        out = []
+    if not out:      # adbutils 不可用时的退化路径：直接问 adb
+        try:
+            r = sp.run([ADBController._find_adb(), "devices"],
+                       capture_output=True, text=True, timeout=5,
+                       encoding="utf-8", errors="replace")
+            for ln in (r.stdout or "").splitlines()[1:]:
+                parts = ln.split()
+                if len(parts) >= 2 and parts[1] == "device":
+                    out.append(parts[0])
+        except Exception:
+            pass
+    _auto_dev_cache["t"] = now
+    _auto_dev_cache["list"] = list(out)
+    return out
+
+
+def resolve_target_serial(preferred: str = ""):
+    """把「配置声明的目标」与「实际在线设备」对齐，返回 (serial, info)。
+
+    规则（**只在目标不可达时才替代**，避免"操作者明明在看 MuMu 却被切到真机"）：
+      1) preferred 在线               → 原样使用，source='configured'
+      2) preferred 离线且另有在线设备 → 改用在线设备（优先真机），source='auto'
+      3) preferred 为空且另有在线设备 → 改用在线设备，source='auto'
+      4) 无任何在线设备               → 仍返回 preferred，source='configured'（交由预检报错）
+    """
+    pref = (preferred or "").strip() or _intended_serial()
+    online = _online_serials()
+    info = {"configured": pref, "serial": pref, "source": "configured",
+            "substituted": False, "online": list(online)}
+    if pref and pref in online:
+        return pref, info
+    if online:
+        pick = _pick_online(online)
+        info.update(serial=pick, source="auto", substituted=True)
+        return pick, info
+    return pref, info
+
+
+def _log_device_choice(info: dict, reason: str = ""):
+    """设备选择结果打一条可读日志（被替代时用 ⚠ 醒目标注）。"""
+    if info.get("substituted"):
+        print(f"  [设备选择] ⚠ 配置目标 {info['configured'] or '(未指定)'} 不在线 "
+              f"→ 已自动改用在线设备 {info['serial']}"
+              f"（在线: {info['online']}；原因: {reason or '目标不可达'}）")
+    return info
+
+
 def detect_screen_resolution(adb_serial: str = ""):
     """通过 ADB 检测手机实际分辨率，更新缩放比。
 
@@ -351,21 +443,32 @@ def refresh_device_scale(serial: str = "", reason: str = "") -> dict:
       __main__ 块），而 /api/device/select 允许运行中换设备、ANDROID_SERIAL 也可能在
       启动之后才有效 —— 一旦"启动时目标设备未就绪"，缩放就永久停在 1:1（或停在旧
       设备的值），所有走 sc() 的坐标全部失准，且前端看不到任何提示。
+
+    ★ 2026-10-16 追加：目标串号先经 resolve_target_serial() 与**实际在线设备**对齐。
+      配置目标离线（如 server_target.txt 残留 MuMu、而本次只插了真机）时自动改用
+      在线设备，避免"日志说控 MuMu、其实根本没连上"的不可解释状态。
     """
-    _s = _intended_serial(serial)
+    _configured = _intended_serial(serial)
+    _s, _dev = resolve_target_serial(_configured)
+    _log_device_choice(_dev, reason=reason or "刷新坐标缩放")
     before = (_detected_res, _scale_x, _scale_y)
     detect_screen_resolution(_s)
     scale_all_coords()
     info = {
         "serial": _s,
+        "configured": _configured,
+        "source": _dev["source"],
+        "substituted": _dev["substituted"],
+        "online": _dev["online"],
         "resolution": list(_detected_res) if _detected_res else None,
         "scale": [_scale_x, _scale_y],
         "ok": _detected_res is not None,
         "before": list(before),
         "reason": reason or "手动",
     }
-    print(f"  [坐标缩放] 刷新（{info['reason']}）: 目标={_s} 分辨率={info['resolution']} "
-          f"缩放=X{_scale_x:.3f}/Y{_scale_y:.3f}")
+    print(f"  [坐标缩放] 刷新（{info['reason']}）: 目标={_s}"
+          + (f"（配置目标 {_configured} 不在线，已自动替代）" if _dev["substituted"] else "")
+          + f" 分辨率={info['resolution']} 缩放=X{_scale_x:.3f}/Y{_scale_y:.3f}")
     return info
 
 def _preflight_target_device():
@@ -382,12 +485,13 @@ def _preflight_target_device():
     if info["ok"]:
         return True, ""
     _s = info["serial"] or "(未指定)"
-    try:
-        online = [d.get("serial") for d in _device_list()]
-    except Exception:
-        online = []
+    _cfg = info.get("configured") or ""
+    online = info.get("online") or []
+    _extra = ""
+    if info.get("substituted"):
+        _extra = f"（配置目标 {_cfg} 不在线，已尝试自动改用在线设备 {_s}）"
     return False, (
-        f"目标设备 {_s} 不可达（adb wm size 无返回，分辨率探测失败）。"
+        f"目标设备 {_s} 不可达（adb wm size 无返回，分辨率探测失败）。{_extra}"
         f"当前在线设备: {online if online else '无'}。"
         f"请先启动目标模拟器/连接真机并确认 ADB 已就绪，或在页面上把设备切换为在线设备。"
     )
@@ -1860,7 +1964,10 @@ def api_status():
     # ★ 2026-10-16：目标设备口径统一走 _intended_serial()
     #   （ANDROID_SERIAL → server_target.txt → config.yaml），不再只认环境变量+配置，
     #   避免"以为在控 MuMu、其实连的是真机"这种不可解释的状态。
-    cur_serial = _intended_serial()
+    # ★ 2026-10-16 追加：再与**实际在线设备**对齐（resolve_target_serial）——
+    #   配置目标离线时 cur_serial 落到在线设备并置 device_substituted=True，
+    #   前端据此显示「已自动改用 X（配置目标 Y 离线）」，状态始终自解释。
+    cur_serial, _dev_info = resolve_target_serial()
     device_ok = False
     try:
         sys.path.insert(0, str(Path(__file__).parent / "scripts"))
@@ -1872,6 +1979,10 @@ def api_status():
     return jsonify({
         "device_connected": device_ok,
         "device_serial": cur_serial,
+        "device_serial_configured": _dev_info["configured"],
+        "device_source": _dev_info["source"],
+        "device_substituted": _dev_info["substituted"],
+        "online_serials": _dev_info["online"],
         "devices": _device_list(),
         # ★ 坐标缩放可观测（原来只在服务端 stdout 打一行，前端完全看不到）
         "target_resolution": list(_detected_res) if _detected_res else None,
@@ -6684,13 +6795,22 @@ def api_modules_run():
     # ★ 2026-10-16：口径统一为 _intended_serial()（ANDROID_SERIAL → server_target.txt
     #   → config.yaml）。原来取 `env or ""`，env 为空时 u2.connect() 会随手连上当前
     #   在线的任意一台（实测：以为在控 MuMu，其实连的是真机），且缩放比仍是启动那一刻的旧值。
+    #   ★ 2026-10-16 追加：目标先与**实际在线设备**对齐（resolve_target_serial）——
+    #     配置目标离线（如 server_target.txt 残留 MuMu）时自动改用在线设备，并把最终
+    #     目标写回 ANDROID_SERIAL，使 u2.connect() 与实际探测到的分辨率指向同一台设备。
     try:
         sys.path.insert(0, str(Path(__file__).parent / "scripts"))
-        from common.device import device_ok as _dev_ok
-        _cur_serial = _intended_serial()
-        _scale_info = refresh_device_scale(_cur_serial, reason="多模块检测开始前")
+        from common.device import device_ok as _dev_ok, set_device as _set_dev
+        _configured = _intended_serial()
+        _cur_serial, _dev_pick = resolve_target_serial(_configured)
+        _scale_info = refresh_device_scale(_configured, reason="多模块检测开始前")
+        if _dev_pick.get("substituted"):
+            log_msg(f"⚠ 配置目标 {_configured or '(未指定)'} 不在线，已自动改用在线设备 "
+                    f"{_cur_serial or '(未指定)'}", "warning")
+        if _cur_serial:
+            _set_dev(_cur_serial)      # u2.connect() 与实际操作目标保持一致
         if not _dev_ok(_cur_serial or None):
-            _online = [d.get("serial") for d in _device_list()]
+            _online = _dev_pick.get("online") or []
             log_msg(f"❌ 目标设备未就绪，无法开始检测（目标: {_cur_serial or '未指定'}；"
                     f"在线: {_online or '无'}）", "error")
             return jsonify({"error": (
@@ -6979,11 +7099,22 @@ if __name__ == "__main__":
     #   全部按真机 1080x2400 使用，在 900x1600 的模拟器上必然点偏。
     #   改为优先取「当前实际选中的设备」—— ANDROID_SERIAL 正是 u2.connect() 读的那个变量，
     #   这样缩放比与实际操作目标始终一致。
-    _selected_serial = _intended_serial()
-    refresh_device_scale(_selected_serial, reason="服务启动")
+    _configured_serial = _intended_serial()
+    _boot_info = refresh_device_scale(_configured_serial, reason="服务启动")
+    _selected_serial = _boot_info["serial"]
+    if _boot_info.get("substituted"):
+        # ★ 2026-10-16：配置目标离线时**自动改用在线设备**，并把原因打出来。
+        #   典型场景：server_target.txt 残留上一轮的 MuMu（127.0.0.1:16384），
+        #   而本次只插了真机 —— 旧行为会一直显示"目标=MuMu"，让人误以为控的是模拟器。
+        print(f"  [设备选择] ⚠ 配置目标 {_configured_serial or '(未指定)'} 不在线 —— "
+              f"已自动改用在线设备 {_selected_serial}（在线: {_boot_info['online']}）。")
+        print(f"             如要固定为某台设备："
+              f"`python tools/restart_server.py --device <串号>` 重启，"
+              f"或在页面上切换设备。")
     if _detected_res is None:
         print(f"  [坐标缩放] ⚠ 目标设备 {_selected_serial or '(未指定)'} 当前不可达 —— "
-              f"坐标暂按基准 {REFERENCE_RES[0]}x{REFERENCE_RES[1]} 使用。"
+              f"坐标暂按基准 {REFERENCE_RES[0]}x{REFERENCE_RES[1]} 使用"
+              f"（当前在线设备: {_boot_info['online'] or '无'}）。"
               f"设备就绪后无需重启：在页面上切换一次设备、或直接开始任务"
               f"（任务开始前会自动重新探测并重算缩放）。")
 

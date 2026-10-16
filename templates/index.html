@@ -2443,11 +2443,14 @@
         try {
           const s = await (await fetch("/api/status")).json();
           const on = s.device_connected;
+          // ★ 2026-10-16：配置目标离线、后端已自动改用在线设备（如 server_target.txt
+          //   残留 MuMu，而本次只插了真机）→ 必须显式说明，否则用户会以为在控模拟器。
+          const sub = !!s.device_substituted;
           $("devDot").className =
             "w-2.5 h-2.5 rounded-full " +
-            (on ? "bg-green-400" : "bg-amber-400");
+            (on ? (sub ? "bg-sky-400" : "bg-green-400") : "bg-amber-400");
           $("devStatus").textContent = on
-            ? s.device_serial || "已连接"
+            ? (s.device_serial || "已连接") + (sub ? "（自动选用）" : "")
             : (s.device_serial ? s.device_serial + "（离线）" : "离线");
           // 目标分辨率 + 坐标缩放比（2026-10-16 新增）
           //   坐标缩放只在进程启动那一刻算过一次；启动时设备没就绪 → 缩放停在 1:1，
@@ -2462,12 +2465,17 @@
           } else if (s.device_serial) {
             meta = "分辨率未探测到，坐标按 1080×2400 基准";
           }
+          if (sub) {
+            meta += (meta ? " · " : "") +
+              "配置目标 " + (s.device_serial_configured || "(未指定)") +
+              " 不在线，已自动改用在线设备";
+          }
           const _selVer = $("setupVersion") ? $("setupVersion").value : "";
           if (_selVer) meta += (meta ? " · " : "") + "目标: " + _selVer;
           $("devMeta").textContent = meta;
           if ($("devMeta")) {
             $("devMeta").className =
-              s.coord_scale_ok === false
+              s.coord_scale_ok === false || sub
                 ? "text-[11px] text-amber-600"
                 : "text-[11px] opacity-60";
           }
