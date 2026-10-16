@@ -38,19 +38,24 @@ def get_device():
 
 
 def device_ok(serial=None):
-    """检查指定（或当前）设备是否在线"""
+    """检查指定（或当前）设备是否在线
+
+    ★ 2026-10-16：改 try/finally 保证**无论成功失败都还原** ANDROID_SERIAL。
+      原来 `old` 只在成功分支写回，探测抛异常时会把进程环境变量永久留在被探测的
+      串号上（而本函数会被前端每 2s 的 /api/status 轮询调用，threaded=True 下有竞态面）。
+    """
+    old = os.environ.get("ANDROID_SERIAL", "")
     try:
         import uiautomator2 as u2
-        old = os.environ.get("ANDROID_SERIAL", "")
         if serial:
             os.environ["ANDROID_SERIAL"] = serial
         d = u2.connect()
-        info = d.info
-        if serial:
-            os.environ["ANDROID_SERIAL"] = old
-        return bool(info)
+        return bool(d.info)
     except Exception:
         return False
+    finally:
+        if serial:
+            os.environ["ANDROID_SERIAL"] = old
 
 
 if __name__ == "__main__":

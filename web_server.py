@@ -235,9 +235,65 @@ _detected_res = None
 _scale_x = 1.0
 _scale_y = 1.0
 
+# ★ 2026-10-16：原始（1080×2400 基准）坐标快照。
+#   根因：scale_all_coords() 会把 MODULE_COORDS 等**就地替换**成缩放后的值。此前它
+#   只在进程启动时调用一次，所以没人发现它**不可重复调用**——第二次调用会在"已缩放"
+#   的值上再乘一次缩放比（MuMu 上 = 再 ×0.833/×0.667，坐标彻底跑飞）。
+#   而修复"运行中换设备后坐标不变"又必须能重复调用 → 故留存一份不可变原始值，
+#   每次都从原始值重算。
+_COORD_REFS = None
+
+def _capture_coord_refs():
+    """首次调用时留存原始坐标（幂等）。"""
+    global _COORD_REFS
+    if _COORD_REFS is None:
+        _COORD_REFS = {
+            "MODULE_COORDS": dict(MODULE_COORDS),
+            "TABS": dict(TABS),
+            "SETTINGS_ICON": tuple(SETTINGS_ICON),
+            "AD_CLOSE": tuple(AD_CLOSE),
+            "MODULE_PATTERNS": dict(MODULE_PATTERNS),
+        }
+    return _COORD_REFS
+
+def _intended_serial(serial: str = "") -> str:
+    """本次要操作的目标设备串号。
+
+    优先级：显式入参 → ANDROID_SERIAL → server_target.txt → config.yaml
+
+    ★ 2026-10-16 新增。原来只有 `ANDROID_SERIAL or config.device.serial`：一旦环境
+      变量没生效（例如重启没走 tools/_serve_logged.py，或启动时设备还没就绪），就会
+      **静默**回落到 config.yaml 里的真机串号——而操作者以为自己控的是 MuMu。
+      这里把 server_target.txt（restart_server.py --device 落盘的目标）纳入优先级，
+      并与 /api/status 口径统一，让"到底在控哪台"始终可解释。
+    """
+    if serial and str(serial).strip():
+        return str(serial).strip()
+    env = os.environ.get("ANDROID_SERIAL", "").strip()
+    if env:
+        return env
+    try:
+        tf = os.path.join(PROJECT_ROOT, "server_target.txt")
+        if os.path.exists(tf):
+            with open(tf, encoding="utf-8") as fh:
+                t = fh.read().strip()
+            if t:
+                return t
+    except Exception:
+        pass
+    try:
+        return load_config().device.serial or ""
+    except Exception:
+        return ""
+
 def detect_screen_resolution(adb_serial: str = ""):
-    """通过 ADB 检测手机实际分辨率，更新缩放比"""
+    """通过 ADB 检测手机实际分辨率，更新缩放比。
+
+    ★ 2026-10-16：每次探测前先把缩放**复位为 1:1**。原来失败时保留上一次的值，
+      更容易掩盖问题；复位后"探测失败"必定表现为 1:1，与日志告警一致、可解释。
+    """
     global _detected_res, _scale_x, _scale_y
+    _detected_res, _scale_x, _scale_y = None, 1.0, 1.0
     try:
         # ★ 跨机器自动定位 adb（复用 ADBController 的探测逻辑，不写死任何用户路径）
         adb_path = ADBController._find_adb()
@@ -255,9 +311,11 @@ def detect_screen_resolution(adb_serial: str = ""):
             _scale_y = h / REFERENCE_RES[1]
             print(f"  [坐标缩放] 检测到分辨率 {w}x{h}, 缩放比 X={_scale_x:.3f} Y={_scale_y:.3f}")
         else:
-            print(f"  [坐标缩放] 无法解析分辨率: {r.stdout}")
+            print(f"  [坐标缩放] ⚠ 无法解析分辨率（设备 {adb_serial or '默认'} 可能未连接）: "
+                  f"{r.stdout.strip()!r} → 坐标按基准 "
+                  f"{REFERENCE_RES[0]}x{REFERENCE_RES[1]} 使用")
     except Exception as e:
-        print(f"  [坐标缩放] 检测失败: {e}, 使用默认1:1")
+        print(f"  [坐标缩放] ⚠ 检测失败: {e}, 使用默认1:1")
 
 def sc(x: int, y: int) -> tuple:
     """缩放单个坐标点"""
@@ -268,18 +326,71 @@ def sc_xy(xy: tuple) -> tuple:
     return sc(xy[0], xy[1])
 
 def scale_all_coords():
-    """原地缩放所有坐标字典，使之适配当前手机分辨率"""
+    """按当前缩放比重算所有坐标字典，使之适配当前手机分辨率。
+
+    ★ 2026-10-16 起**可重复调用**（每次都从 _capture_coord_refs() 的原始快照重算，
+      不会二次缩放）。原来开头有 `if _scale_x == 1.0 and _scale_y == 1.0: return`
+      的早退，重复调用时行为不一致，已移除。
+    """
     global MODULE_COORDS, TABS, SETTINGS_ICON, AD_CLOSE, MODULE_PATTERNS
-    if _scale_x == 1.0 and _scale_y == 1.0:
-        return
-    MODULE_COORDS = {k: sc_xy(v) for k, v in MODULE_COORDS.items()}
-    TABS = {k: sc_xy(v) for k, v in TABS.items()}
-    SETTINGS_ICON = sc_xy(SETTINGS_ICON)
-    AD_CLOSE = sc_xy(AD_CLOSE)
+    ref = _capture_coord_refs()
+    MODULE_COORDS = {k: sc_xy(v) for k, v in ref["MODULE_COORDS"].items()}
+    TABS = {k: sc_xy(v) for k, v in ref["TABS"].items()}
+    SETTINGS_ICON = sc_xy(ref["SETTINGS_ICON"])
+    AD_CLOSE = sc_xy(ref["AD_CLOSE"])
     # ★ 修复：MODULE_PATTERNS 中的坐标也需要缩放
     MODULE_PATTERNS = {k: (v[0], v[1], sc_xy(v[2]) if v[2] else None)
-                       for k, v in MODULE_PATTERNS.items()}
-    print(f"  [坐标缩放] 所有坐标已缩放 ({REFERENCE_RES[0]}x{REFERENCE_RES[1]} -> {_detected_res})")
+                       for k, v in ref["MODULE_PATTERNS"].items()}
+    print(f"  [坐标缩放] 所有坐标已重算 ({REFERENCE_RES[0]}x{REFERENCE_RES[1]} -> "
+          f"{_detected_res or '未探测到，按基准'})")
+
+def refresh_device_scale(serial: str = "", reason: str = "") -> dict:
+    """按当前（或指定）目标设备重新探测分辨率并重算坐标缩放；可随时调用。
+
+    ★ 2026-10-16 新增。根因：坐标缩放原来只在进程启动那一刻算一次（见文件末尾
+      __main__ 块），而 /api/device/select 允许运行中换设备、ANDROID_SERIAL 也可能在
+      启动之后才有效 —— 一旦"启动时目标设备未就绪"，缩放就永久停在 1:1（或停在旧
+      设备的值），所有走 sc() 的坐标全部失准，且前端看不到任何提示。
+    """
+    _s = _intended_serial(serial)
+    before = (_detected_res, _scale_x, _scale_y)
+    detect_screen_resolution(_s)
+    scale_all_coords()
+    info = {
+        "serial": _s,
+        "resolution": list(_detected_res) if _detected_res else None,
+        "scale": [_scale_x, _scale_y],
+        "ok": _detected_res is not None,
+        "before": list(before),
+        "reason": reason or "手动",
+    }
+    print(f"  [坐标缩放] 刷新（{info['reason']}）: 目标={_s} 分辨率={info['resolution']} "
+          f"缩放=X{_scale_x:.3f}/Y{_scale_y:.3f}")
+    return info
+
+def _preflight_target_device():
+    """任务开始前的设备预检：目标设备必须可达，同时刷新坐标缩放。
+
+    返回 (ok, message)。判据用 `adb shell wm size`（毫秒级）；拿不到分辨率即说明
+    目标设备不可达 —— 此时**明确报错拒绝开始**，而不是静默回落到 config.yaml 的真机
+    去操作一台操作者根本没在看设备。
+    """
+    try:
+        info = refresh_device_scale(reason="任务开始前预检")
+    except Exception as e:
+        return False, f"设备预检异常: {e}"
+    if info["ok"]:
+        return True, ""
+    _s = info["serial"] or "(未指定)"
+    try:
+        online = [d.get("serial") for d in _device_list()]
+    except Exception:
+        online = []
+    return False, (
+        f"目标设备 {_s} 不可达（adb wm size 无返回，分辨率探测失败）。"
+        f"当前在线设备: {online if online else '无'}。"
+        f"请先启动目标模拟器/连接真机并确认 ADB 已就绪，或在页面上把设备切换为在线设备。"
+    )
 
 
 def get_adb():
@@ -1746,9 +1857,10 @@ def trace_page():
 @app.route("/api/status")
 def api_status():
     """设备状态 + 任务状态"""
-    config = load_config()
-    # 优先用动态选择的设备序列号，未选择则用配置文件兜底
-    cur_serial = os.environ.get("ANDROID_SERIAL") or config.device.serial
+    # ★ 2026-10-16：目标设备口径统一走 _intended_serial()
+    #   （ANDROID_SERIAL → server_target.txt → config.yaml），不再只认环境变量+配置，
+    #   避免"以为在控 MuMu、其实连的是真机"这种不可解释的状态。
+    cur_serial = _intended_serial()
     device_ok = False
     try:
         sys.path.insert(0, str(Path(__file__).parent / "scripts"))
@@ -1761,6 +1873,10 @@ def api_status():
         "device_connected": device_ok,
         "device_serial": cur_serial,
         "devices": _device_list(),
+        # ★ 坐标缩放可观测（原来只在服务端 stdout 打一行，前端完全看不到）
+        "target_resolution": list(_detected_res) if _detected_res else None,
+        "coord_scale": [_scale_x, _scale_y],
+        "coord_scale_ok": _detected_res is not None,
         "current_version": _get_current_version_from_config(),
         "task_status": task_status,
     })
@@ -1821,15 +1937,24 @@ def api_devices():
 
 @app.route("/api/device/select", methods=["POST"])
 def api_device_select():
-    """选择当前设备序列号（写 ANDROID_SERIAL，全局生效）"""
+    """选择当前设备序列号（写 ANDROID_SERIAL，全局生效）
+
+    ★ 2026-10-16：换设备后**必须重算坐标缩放**。此前只写 ANDROID_SERIAL，缩放比
+      仍停留在启动那一刻（或上一台设备）的值 → 运行中换设备后，所有走 sc() 的坐标
+      继续按旧设备算，表现就是"换了设备就不准/点了没反应"。
+    """
     data = request.get_json() or {}
     serial = (data.get("serial") or "").strip()
     try:
         sys.path.insert(0, str(Path(__file__).parent / "scripts"))
         from common.device import set_device, device_ok
         set_device(serial or None)
+        scale = refresh_device_scale(serial or "", reason="切换设备")
         ok = device_ok()
-        return jsonify({"status": "ok", "serial": serial or "", "connected": ok})
+        if not ok:
+            log_msg(f"⚠ 设备 {serial or '(默认)'} 未就绪，坐标缩放已按探测结果重置", "warning")
+        return jsonify({"status": "ok", "serial": serial or "", "connected": ok,
+                        "resolution": scale["resolution"], "scale": scale["scale"]})
     except SystemExit:
         log_msg("⏹ 任务已被立即停止", "warning")
     except Exception as e:
@@ -2089,6 +2214,13 @@ def api_run_full():
         return jsonify({"error": "请选择版本"}), 400
     if not modules:
         return jsonify({"error": "请选择至少一个模块"}), 400
+
+    # ★ 2026-10-16：启动前预检目标设备并刷新坐标缩放（离线直接拒绝，不再静默回落
+    #   到 config.yaml 的真机去操作一台操作者没在看的设备）
+    _ok, _msg = _preflight_target_device()
+    if not _ok:
+        log_msg(f"❌ 设备预检未通过: {_msg}", "error")
+        return jsonify({"error": _msg}), 400
 
     t = threading.Thread(target=run_full_task, args=(version, grade, modules), daemon=True)
     t.start()
@@ -6547,6 +6679,33 @@ def api_modules_run():
     if task_status["running"]:
         return jsonify({"error": "已有任务在运行"}), 409
 
+    # ★ 设备预检（含重探分辨率 + 重算坐标缩放）放在**清状态之前**：
+    #   注定失败的运行不该把上一轮的检测结果清掉。
+    # ★ 2026-10-16：口径统一为 _intended_serial()（ANDROID_SERIAL → server_target.txt
+    #   → config.yaml）。原来取 `env or ""`，env 为空时 u2.connect() 会随手连上当前
+    #   在线的任意一台（实测：以为在控 MuMu，其实连的是真机），且缩放比仍是启动那一刻的旧值。
+    try:
+        sys.path.insert(0, str(Path(__file__).parent / "scripts"))
+        from common.device import device_ok as _dev_ok
+        _cur_serial = _intended_serial()
+        _scale_info = refresh_device_scale(_cur_serial, reason="多模块检测开始前")
+        if not _dev_ok(_cur_serial or None):
+            _online = [d.get("serial") for d in _device_list()]
+            log_msg(f"❌ 目标设备未就绪，无法开始检测（目标: {_cur_serial or '未指定'}；"
+                    f"在线: {_online or '无'}）", "error")
+            return jsonify({"error": (
+                f"目标设备 {_cur_serial or '(未指定)'} 未就绪。当前在线设备: "
+                f"{_online or '无'}。请在页面上切换到在线设备，或先启动目标模拟器/连接真机。"
+            )}), 400
+        log_msg(f"✅ 设备就绪: {_cur_serial or '(默认)'}"
+                f"（分辨率 {_scale_info['resolution']}，"
+                f"缩放 X{_scale_info['scale'][0]:.3f}/Y{_scale_info['scale'][1]:.3f}）", "success")
+    except SystemExit:
+        log_msg("⏹ 任务已被立即停止", "warning")
+    except Exception as e:
+        log_msg(f"❌ 设备检查失败: {e}", "error")
+        return jsonify({"error": f"设备检查失败: {e}"}), 500
+
     # 清空审查结果区（避免上次任务的题目残留）
     # ★ 2026-08-25 修复：必须同步清空磁盘文件 data/inspection_state.json！
     #   旧逻辑只清内存 _inspection_state["questions"]，磁盘仍保留上次运行的题
@@ -6590,21 +6749,6 @@ def api_modules_run():
     global _STOP_REQUESTED
     with _STOP_LOCK:
         _STOP_REQUESTED = False
-
-    # ★ 设备就绪检查：没连设备直接报错返回，不启动线程（避免 u2.connect 挂起卡住）
-    try:
-        sys.path.insert(0, str(Path(__file__).parent / "scripts"))
-        from common.device import device_ok as _dev_ok
-        cur_serial = os.environ.get("ANDROID_SERIAL") or ""
-        if not _dev_ok(cur_serial or None):
-            log_msg(f"❌ 设备未连接，无法开始检测（当前设备: {cur_serial or '未选择'}）", "error")
-            return jsonify({"error": f"设备未连接（当前设备: {cur_serial or '未选择'}），请先连接设备"}), 400
-        log_msg(f"✅ 设备就绪: {cur_serial or '(默认)'}", "success")
-    except SystemExit:
-        log_msg("⏹ 任务已被立即停止", "warning")
-    except Exception as e:
-        log_msg(f"❌ 设备检查失败: {e}", "error")
-        return jsonify({"error": f"设备检查失败: {e}"}), 500
 
     def _run():
         _register_task_thread()  # 记录线程 id，供"立即停止"注入异常
@@ -6835,9 +6979,13 @@ if __name__ == "__main__":
     #   全部按真机 1080x2400 使用，在 900x1600 的模拟器上必然点偏。
     #   改为优先取「当前实际选中的设备」—— ANDROID_SERIAL 正是 u2.connect() 读的那个变量，
     #   这样缩放比与实际操作目标始终一致。
-    _selected_serial = os.environ.get("ANDROID_SERIAL", "").strip() or config.device.serial
-    detect_screen_resolution(_selected_serial)
-    scale_all_coords()
+    _selected_serial = _intended_serial()
+    refresh_device_scale(_selected_serial, reason="服务启动")
+    if _detected_res is None:
+        print(f"  [坐标缩放] ⚠ 目标设备 {_selected_serial or '(未指定)'} 当前不可达 —— "
+              f"坐标暂按基准 {REFERENCE_RES[0]}x{REFERENCE_RES[1]} 使用。"
+              f"设备就绪后无需重启：在页面上切换一次设备、或直接开始任务"
+              f"（任务开始前会自动重新探测并重算缩放）。")
 
     # ★ 常驻实时截图（前端「手机画面」随时可见，不再只在任务运行时才有）
     _start_live_screenshot_daemon()

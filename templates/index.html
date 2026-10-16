@@ -2448,12 +2448,29 @@
             (on ? "bg-green-400" : "bg-amber-400");
           $("devStatus").textContent = on
             ? s.device_serial || "已连接"
-            : "离线";
-          $("devMeta").textContent = s.model || "";
+            : (s.device_serial ? s.device_serial + "（离线）" : "离线");
+          // 目标分辨率 + 坐标缩放比（2026-10-16 新增）
+          //   坐标缩放只在进程启动那一刻算过一次；启动时设备没就绪 → 缩放停在 1:1，
+          //   之后所有走 sc() 的坐标都按真机 1080x2400 用，在模拟器上必然点偏。
+          //   这种状态以前前端完全看不到，必须显式告警。
+          let meta = "";
+          if (s.target_resolution) {
+            const sc = (s.coord_scale || [1, 1])
+              .map((v) => Number(v).toFixed(3))
+              .join("/");
+            meta = s.target_resolution.join("×") + " · 缩放 " + sc;
+          } else if (s.device_serial) {
+            meta = "分辨率未探测到，坐标按 1080×2400 基准";
+          }
           const _selVer = $("setupVersion") ? $("setupVersion").value : "";
-          if (_selVer)
-            $("devMeta").textContent +=
-              ($("devMeta").textContent ? " · " : "") + "目标: " + _selVer;
+          if (_selVer) meta += (meta ? " · " : "") + "目标: " + _selVer;
+          $("devMeta").textContent = meta;
+          if ($("devMeta")) {
+            $("devMeta").className =
+              s.coord_scale_ok === false
+                ? "text-[11px] text-amber-600"
+                : "text-[11px] opacity-60";
+          }
           const now = Date.now();
           if (now - _devListTs > 8000) {
             _devListTs = now;
