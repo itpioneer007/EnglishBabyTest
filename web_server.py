@@ -436,7 +436,7 @@ def scale_all_coords():
     print(f"  [坐标缩放] 所有坐标已重算 ({REFERENCE_RES[0]}x{REFERENCE_RES[1]} -> "
           f"{_detected_res or '未探测到，按基准'})")
 
-def refresh_device_scale(serial: str = "", reason: str = "") -> dict:
+def refresh_device_scale(serial: str = "", reason: str = "", allow_substitute=None) -> dict:
     """按当前（或指定）目标设备重新探测分辨率并重算坐标缩放；可随时调用。
 
     ★ 2026-10-16 新增。根因：坐标缩放原来只在进程启动那一刻算一次（见文件末尾
@@ -444,13 +444,25 @@ def refresh_device_scale(serial: str = "", reason: str = "") -> dict:
       启动之后才有效 —— 一旦"启动时目标设备未就绪"，缩放就永久停在 1:1（或停在旧
       设备的值），所有走 sc() 的坐标全部失准，且前端看不到任何提示。
 
-    ★ 2026-10-16 追加：目标串号先经 resolve_target_serial() 与**实际在线设备**对齐。
-      配置目标离线（如 server_target.txt 残留 MuMu、而本次只插了真机）时自动改用
-      在线设备，避免"日志说控 MuMu、其实根本没连上"的不可解释状态。
+    ★ 2026-10-16 追加：`allow_substitute` 决定是否允许与**实际在线设备**对齐。
+      - 不传（默认）：**显式传了 serial 就不替代、没传就替代**。
+      - 为什么这样分：`serial` 是非空即代表"调用方已明确选定这台"（如
+        /api/device/select 的用户选择、run 路径已 resolve 过的结果），此时擅自换成
+        别的设备会让"u2 连的"与"缩放算的"错位；而不传 serial 时目标来自配置解析
+        （env / server_target.txt / config.yaml），target 离线就该让位给在线设备。
+      - run 路径显式传 allow_substitute=False：那里已由 resolve_target_serial() 对齐过，
+        再折一次只会把结果搅乱。
     """
     _configured = _intended_serial(serial)
-    _s, _dev = resolve_target_serial(_configured)
-    _log_device_choice(_dev, reason=reason or "刷新坐标缩放")
+    if allow_substitute is None:
+        allow_substitute = not (serial or "").strip()
+    if allow_substitute:
+        _s, _dev = resolve_target_serial(_configured)
+        _log_device_choice(_dev, reason=reason or "刷新坐标缩放")
+    else:
+        _s = _configured
+        _dev = {"configured": _configured, "serial": _s, "source": "explicit",
+                "substituted": False, "online": _online_serials()}
     before = (_detected_res, _scale_x, _scale_y)
     detect_screen_resolution(_s)
     scale_all_coords()
@@ -482,11 +494,27 @@ def _preflight_target_device():
         info = refresh_device_scale(reason="任务开始前预检")
     except Exception as e:
         return False, f"设备预检异常: {e}"
+    # 把最终目标写回 ANDROID_SERIAL：u2.connect() 与刚探测到的分辨率必须指向同一台，
+    # 否则多设备在线时读环境变量为空会直接报 "more than one device/emulator"。
+    if info.get("serial"):
+        try:
+            sys.path.insert(0, str(Path(__file__).parent / "scripts"))
+            from common.device import set_device as _set_dev_pre
+            _set_dev_pre(info["serial"])
+        except Exception:
+            pass
     if info["ok"]:
         return True, ""
     _s = info["serial"] or "(未指定)"
     _cfg = info.get("configured") or ""
-    online = info.get("online") or []
+    online = info.get("online")
+    if not online:
+        # 兼容性兜底：调用方只提供了 serial/ok（老桩或旧调用点）时，现查一次在线设备，
+        # 保证报错信息始终告诉人"该切到哪台"。
+        try:
+            online = [d.get("serial") for d in _device_list() if d.get("serial")]
+        except Exception:
+            online = []
     _extra = ""
     if info.get("substituted"):
         _extra = f"（配置目标 {_cfg} 不在线，已尝试自动改用在线设备 {_s}）"
@@ -6803,7 +6831,9 @@ def api_modules_run():
         from common.device import device_ok as _dev_ok, set_device as _set_dev
         _configured = _intended_serial()
         _cur_serial, _dev_pick = resolve_target_serial(_configured)
-        _scale_info = refresh_device_scale(_configured, reason="多模块检测开始前")
+        # 已由 resolve_target_serial() 对齐过，这里禁止二次替代（allow_substitute=False）
+        _scale_info = refresh_device_scale(_cur_serial, reason="多模块检测开始前",
+                                           allow_substitute=False)
         if _dev_pick.get("substituted"):
             log_msg(f"⚠ 配置目标 {_configured or '(未指定)'} 不在线，已自动改用在线设备 "
                     f"{_cur_serial or '(未指定)'}", "warning")
@@ -7100,7 +7130,8 @@ if __name__ == "__main__":
     #   改为优先取「当前实际选中的设备」—— ANDROID_SERIAL 正是 u2.connect() 读的那个变量，
     #   这样缩放比与实际操作目标始终一致。
     _configured_serial = _intended_serial()
-    _boot_info = refresh_device_scale(_configured_serial, reason="服务启动")
+    # 不传 serial：目标来自配置解析，允许与在线设备对齐（allow_substitute 默认 True）
+    _boot_info = refresh_device_scale(reason="服务启动")
     _selected_serial = _boot_info["serial"]
     if _boot_info.get("substituted"):
         # ★ 2026-10-16：配置目标离线时**自动改用在线设备**，并把原因打出来。

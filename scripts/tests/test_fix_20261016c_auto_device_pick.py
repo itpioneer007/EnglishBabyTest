@@ -197,9 +197,10 @@ ws.detect_screen_resolution = lambda s="": (
     setattr(ws, "_scale_x", 1.0), setattr(ws, "_scale_y", 1.0))
 ws.scale_all_coords = lambda: None
 ws._online_serials = lambda force=False: [PHONE]
-_info, _out = cap(ws.refresh_device_scale, MUMU, "单元测试")
+# 不传 serial（= 目标来自配置解析）才允许替代；传了就代表调用方已明确选定。
+_info, _out = cap(ws.refresh_device_scale, "", "单元测试")
 chk(f"serial = 替代后的 {PHONE}", _info["serial"] == PHONE, _info["serial"])
-chk(f"configured 保留 {MUMU}", _info["configured"] == MUMU, _info["configured"])
+chk(f"configured 保留配置里的 {MUMU}", _info["configured"] == MUMU, _info["configured"])
 chk("source == 'auto'", _info["source"] == "auto", _info["source"])
 chk("substituted is True", _info["substituted"] is True)
 chk("ok is True（替代后成功探到分辨率）", _info["ok"] is True, _info)
@@ -266,6 +267,57 @@ chk("前端展示 device_substituted", "device_substituted" in _ism)
 
 # 还原环境，避免影响同进程后续用例
 cdev.list_devices = _ORIG_LIST
+
+print()
+print("=" * 74)
+print("T13 allow_substitute：**显式**指定设备不得被替代（否则 u2 连的与缩放算的错位）")
+print("=" * 74)
+_orig_d2, _orig_s2, _orig_o3 = (ws.detect_screen_resolution, ws.scale_all_coords,
+                                ws._online_serials)
+ws.detect_screen_resolution = lambda s="": (
+    setattr(ws, "_detected_res", None), setattr(ws, "_scale_x", 1.0),
+    setattr(ws, "_scale_y", 1.0))
+ws.scale_all_coords = lambda: None
+ws._online_serials = lambda force=False: [PHONE]      # 真机在线
+_i, _o = cap(ws.refresh_device_scale, MUMU, "显式指定离线设备")
+chk("显式传 serial → 不替代（仍是 MuMu）", _i["serial"] == MUMU, _i["serial"])
+chk("source == 'explicit'", _i["source"] == "explicit", _i["source"])
+chk("substituted is False", _i["substituted"] is False)
+chk("ok is False（如实告知不可达）", _i["ok"] is False, _i)
+chk("未打印『自动替代』噪音", "自动替代" not in _o, repr(_o[-160:]))
+_i2, _o2 = cap(ws.refresh_device_scale, "", "未传 serial（走配置解析）")
+chk(f"不传 serial → 允许替代为 {PHONE}", _i2["serial"] == PHONE, _i2["serial"])
+chk("source == 'auto'", _i2["source"] == "auto", _i2["source"])
+_i3, _o3 = cap(ws.refresh_device_scale, MUMU, "run 路径已 resolve 过",
+               allow_substitute=False)
+chk("allow_substitute=False 显式禁止 → 不替代", _i3["serial"] == MUMU, _i3["serial"])
+ws.detect_screen_resolution, ws.scale_all_coords = _orig_d2, _orig_s2
+ws._online_serials = _orig_o3
+
+print()
+print("=" * 74)
+print("T14 _preflight_target_device：info 缺 online 时回退 _device_list()（兼容兜底）")
+print("=" * 74)
+_orig_refresh3, _orig_dl = ws.refresh_device_scale, ws._device_list
+try:
+    ws.refresh_device_scale = lambda serial="", reason="", allow_substitute=None: {
+        "serial": MUMU, "configured": MUMU, "source": "explicit",
+        "substituted": False, "resolution": None, "scale": [1.0, 1.0],
+        "ok": False, "before": (None, 1.0, 1.0), "reason": reason}   # 无 online 字段
+    ws._device_list = lambda: [{"serial": PHONE, "state": "device"}]
+    _ok2, _msg2 = ws._preflight_target_device()
+    chk("ok is False", _ok2 is False)
+    chk("回退查到在线设备并写进报错信息", PHONE in _msg2, _msg2)
+    chk("信息含「当前在线设备」", "当前在线设备" in _msg2, _msg2)
+finally:
+    ws.refresh_device_scale, ws._device_list = _orig_refresh3, _orig_dl
+
+print()
+print("=" * 74)
+print("T15 预检通过时会把最终目标写回 ANDROID_SERIAL（多设备在线不报 more than one）")
+print("=" * 74)
+chk("_preflight_target_device 内含 set_device 兜底",
+    "_set_dev_pre(info[\"serial\"])" in _src)
 
 print()
 print("=" * 74)
