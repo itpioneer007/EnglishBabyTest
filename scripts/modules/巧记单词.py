@@ -26,7 +26,7 @@ import sys, os, time, re
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import uiautomator2 as u2
-from common.logger import should_stop, step_log
+from common.logger import should_stop, step_log, module_done
 from common.evidence import collect_ui_evidence
 from common.tools import (
     S, S_swipe, S_h, S_w,
@@ -335,7 +335,7 @@ def _enter_unit_from_map(d, unit_no, max_swipes=8) -> bool:
             cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
             if 0 < cy < _h:  # 卡片中心需在可视区内
                 d.click(cx, cy)
-                step_log(f"🎯 选中 Unit {unit_no}（卡片 rid）@({cx},{cy})", "info")
+                step_log(f"选中 Unit {unit_no}", "info")
                 time.sleep(1.4)
                 return True
         # ② 兜底："Unit N" 文本 → 卡片中心 = 文字上方 74px
@@ -347,7 +347,7 @@ def _enter_unit_from_map(d, unit_no, max_swipes=8) -> bool:
             cx, cy = bx, by - 74
             if 0 < cy < _h:
                 d.click(cx, cy)
-                step_log(f"🎯 选中 Unit {unit_no}（文本兜底）@({cx},{cy})", "info")
+                step_log(f"选中 Unit {unit_no}", "info")
                 time.sleep(1.4)
                 return True
         # ③ 滑动查找：偶数轮上滑（找下方 Unit），奇数轮下滑（找上方 Unit）
@@ -357,7 +357,7 @@ def _enter_unit_from_map(d, unit_no, max_swipes=8) -> bool:
         else:
             S_swipe(d, _mid_x, 800, _mid_x, 1900, 0.35)
         time.sleep(0.5)
-    step_log(f"⚠ 闯关地图未找到 Unit {unit_no}", "warning")
+    step_log(f"闯关地图中未找到 Unit {unit_no}", "warning")
     return False
 
 
@@ -400,7 +400,7 @@ def _switch_unit_by_arrows(d, from_u, to_u, max_steps=12) -> bool:
     _cur = from_u
     for _i in range(_steps):
         if not d(text=_btn).exists(timeout=2):
-            step_log(f"⚠ 巧记单词：「{_btn}」按钮不存在（可能已到边界），当前 Unit {_cur}", "warning")
+            step_log(f"「{_btn}」按钮未出现，可能已到单元边界；当前 Unit {_cur}", "warning")
             return False
         d(text=_btn).click()
         time.sleep(1.3)
@@ -435,30 +435,30 @@ def _ensure_target_unit(d, unit_no, max_try=3) -> bool:
         _cur = _current_map_unit(d, _xml)
         # ① 已在目标 Unit
         if _cur == unit_no:
-            step_log(f"🗺 已在 Unit {unit_no} 关卡地图，直接开始", "info")
+            step_log(f"已处于 Unit {unit_no} 关卡地图，直接开始", "info")
             return True
         # ② 闯关地图（Unit 选择页）→ 点卡片选 Unit
         if _is_unit_map(d, _xml):
-            step_log(f"🗺 检测到闯关地图，定位并进入 Unit {unit_no}", "info")
+            step_log(f"当前为闯关地图，定位并进入 Unit {unit_no}", "info")
             if _enter_unit_from_map(d, unit_no):
                 time.sleep(1.0)
                 if _current_map_unit(d) in (0, unit_no):
-                    step_log(f"✅ 已进入 Unit {unit_no} 关卡地图", "success")
+                    step_log(f"已进入 Unit {unit_no} 关卡地图", "success")
                     return True
-            step_log(f"⚠ 闯关地图选中 Unit {unit_no} 后未进入，重试（{_i + 1}/{max_try}）", "warning")
+            step_log(f"选中 Unit {unit_no} 后未进入关卡地图，第 {_i + 1} 次尝试（共 {max_try} 次）", "warning")
         # ③ 在其他 Unit 的关卡地图 → 逐级切换
         elif _cur:
             _dir = "下一单元" if unit_no > _cur else "上一单元"
             step_log(
-                f"⚠ 当前在 Unit {_cur} 关卡地图（App 记忆上次单元），"
-                f"用「{_dir}」切到 Unit {unit_no}",
+                f"当前处于 Unit {_cur} 关卡地图（App 记忆上次单元），"
+                f"通过「{_dir}」切换到 Unit {unit_no}",
                 "warning",
             )
             if _switch_unit_by_arrows(d, _cur, unit_no):
-                step_log(f"✅ 已切换到 Unit {unit_no} 关卡地图", "success")
+                step_log(f"已切换到 Unit {unit_no} 关卡地图", "success")
                 return True
             _left = _current_map_unit(d)
-            step_log(f"⚠ 逐级切换未成功（当前 Unit {_left or '未知'}），尝试回主页重进", "warning")
+            step_log(f"逐级切换未成功，当前 Unit {_left or '未知'}，改为返回主页重新进入", "warning")
         # 兜底：回退到巧记单词主页后重进「单词同步闯关」
         for _b in range(2):
             try:
@@ -473,7 +473,7 @@ def _ensure_target_unit(d, unit_no, max_try=3) -> bool:
                 pass
         if _enter_sync_challenge(d):
             time.sleep(1.2)
-    step_log(f"⚠ 巧记单词：多次尝试仍未进入 Unit {unit_no}，跳过本单元", "warning")
+    step_log(f"多次尝试后仍未进入 Unit {unit_no}，跳过本单元", "warning")
     return False
 
 
@@ -568,7 +568,7 @@ def _enter_level(d, level_no):
                 _xml_pv = d.dump_hierarchy()
                 if _no_question_in(_xml_pv):
                     step_log(
-                        f"⚠ 关卡 {level_no} 无试题（浏览页气泡），跳过本关进入下一关",
+                        f"关卡 {level_no} 未出现试题，跳过本关并进入下一关",
                         "warning",
                     )
                     return True
@@ -581,7 +581,7 @@ def _enter_level(d, level_no):
                     time.sleep(0.5)
                     # 点开后按钮可能重绘，重新等一次"马上闯关"
                     if not d(text="马上闯关").exists(timeout=1):
-                        step_log(f"⚠ 关卡 {level_no}：点开释义后未出现马上闯关，尝试直接进入答题", "warning")
+                        step_log(f"关卡 {level_no}：点开释义后未出现「马上闯关」，改为直接进入答题", "warning")
                         if d(text="提交").exists(timeout=0.5) or d(text="原音").exists(timeout=0.5):
                             return True
                         continue
@@ -592,7 +592,7 @@ def _enter_level(d, level_no):
                 d(text="马上闯关").click()
                 print(f"    ✅ 点马上闯关")
             except Exception as _e:
-                step_log(f"⚠ 关卡 {level_no}：点「马上闯关」失败（{_e}），尝试坐标兜底", "warning")
+                step_log(f"关卡 {level_no}：点「马上闯关」未成功，改为按位置点击", "warning")
                 try:
                     _xml_btn = d.dump_hierarchy()
                     _m = re.search(r'text="马上闯关"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', _xml_btn)
@@ -820,13 +820,13 @@ def _answer_loop(d, max_q=20):
                     _ev.append({"field": "扬声器", "type": "info",
                                 "expected": "听音题扬声器播放的单词",
                                 "actual": _spk, "diff": f"扬声器播放：{_spk}"})
-                step_log(f"  第{_gq}题 完整性检查", "info", _ev)
+                step_log(f"第 {_gq} 题：完整性检查", "info", _ev)
                 _ev_q = _cur_q
             except Exception:
                 pass
         # ★ 停止检查：web_server 收到停止请求 → 中断
         if should_stop():
-            step_log("⏹ 收到停止请求，中断当前模块", "warning")
+            step_log("收到停止请求，当前模块检测中断", "warning")
             return _done_count()
         # ★ 2026-09-02 用户约定：识别"当前关卡无试题"立即跳到下一关，不要卡住。
         #   原阈值 6 帧~4.8s 太长（无试题关卡视觉上像死循环）；改为：显式气泡立即跳；
@@ -848,7 +848,7 @@ def _answer_loop(d, max_q=20):
             if _no_q_txt:
                 if not _no_question_logged:
                     step_log(
-                        f"⚠ U{_cur_unit} 第{_cur_level}关无试题（页面提示：{_st_txts[:40]}），跳过并进入下一关",
+                        f"U{_cur_unit} 第 {_cur_level} 关未出现试题，跳过并进入下一关",
                         "warning",
                     )
                     _no_question_logged = True
@@ -860,7 +860,7 @@ def _answer_loop(d, max_q=20):
                 _no_answer_frames = getattr(_answer_loop, "_no_answer_frames", 0) + 1
                 _answer_loop._no_answer_frames = _no_answer_frames
                 if _no_answer_frames >= 2:
-                    step_log(f"⚠ 本关进入后未出现答题元素（可能未出好题），跳过本关（当前页：{_st_txts[:40]}）", "warning")
+                    step_log("本关进入后未出现答题元素，跳过本关", "warning")
                     _answer_loop._no_answer_frames = 0
                     return _done_count()
             else:
@@ -983,7 +983,7 @@ def _answer_loop(d, max_q=20):
                         _fb_ev.append({"field": "扬声器", "type": "info",
                                        "expected": "听音题扬声器播放的单词",
                                        "actual": _fb_spk, "diff": f"扬声器播放：{_fb_spk}"})
-                        step_log(f"  第{_gq}题 检查（扬声器内容）", "info", _fb_ev)
+                        step_log(f"第 {_gq} 题：检查扬声器内容", "info", _fb_ev)
                         print(f"    🔊 扬声器内容: {_fb_spk}")
                     except Exception:
                         pass
@@ -1132,12 +1132,12 @@ def _run_one_level(d, level_no):
         set_current_module("巧记单词", _lv_tag)
     except Exception:
         pass
-    step_log(f"🎮 进入{_lv_name}", "info")
+    step_log(f"进入{_lv_name}", "info")
     if not _enter_level(d, level_no):
-        step_log(f"⚠ 巧记单词：{_lv_name} 进入失败，跳过", "warning")
+        step_log(f"{_lv_name} 进入失败，跳过", "warning")
         return 0
     q = _answer_loop(d, max_q=40)  # 关卡15+题，max_q 要够大（含重试轮次）
-    step_log(f"✅ {_lv_name} 完成: {q} 题", "success")
+    module_done(_lv_name, q)
     # 报告页/答题页 → back 回地图（最多 3 次）
     for _ in range(3):
         texts = [e.text for e in (d.xpath('//*[@text!=""]').all() or []) if e.text]
@@ -1181,11 +1181,12 @@ def _run_one_unit(d, unit_no, start_level):
         total += q
     # ★ 兜底：页面读不到任何关卡数字（异常/加载中）→ 退回旧的公式顺序
     if not _done:
-        step_log("⚠ 巧记单词：未读到页面关卡数字，回退公式顺序", "warning")
+        step_log("未读取到页面关卡编号，改为按顺序推算", "warning")
         for i in range(5):
             total += _run_one_level(d, start_level + i)
     step_log(
-        f"📚 Unit {unit_no} 数字关完成: {sorted(_done) if _done else '(公式兜底)'}",
+        f"Unit {unit_no} 数字关处理完毕，已完成关卡："
+        f"{'、'.join(str(x) for x in sorted(_done)) if _done else '按编号顺序推算'}",
         "info",
     )
     # boss 关（level_no=0 表示 boss）
@@ -1229,28 +1230,28 @@ def run_module(d, units=None, expected_grade="", expected_version=""):
 
     # 1. 进入巧记单词
     if not _enter_qiaoji(d, expected_grade, expected_version):
-        step_log("⚠ 巧记单词：未能进入模块页面，跳过本模块", "warning")
+        step_log("未能进入巧记单词页面，跳过本模块", "warning")
         return 0
     # ★ 2026-09-10 无内容检测①：主页即提示「本书籍暂无巧记单词」（如湘少版五下）
     #   用户约定：智能识别 → 日志报告 → 直接结束本模块（多模块则进入下一个）
     _empty = _qiaoji_empty_reason(d)
     if _empty:
         step_log(
-            f"⚠ 巧记单词：{_empty} → 本书籍/年级暂无巧记单词内容，"
-            f"跳过本模块，直接进入下一个模块",
+            f"巧记单词未检测到内容（{_empty}），"
+            f"跳过本模块并进入下一模块",
             "warning",
         )
         print(f"  ⚠ {_empty}，跳过本模块")
         return 0
     # 2. 单词同步闯关
     if not _enter_sync_challenge(d):
-        step_log("⚠ 巧记单词：找不到「单词同步闯关」入口，跳过本模块", "warning")
+        step_log("未找到「单词同步闯关」入口，跳过本模块", "warning")
         return 0
     # ★ 2026-09-10 无内容检测②：部分年级点进闯关后才提示无内容（此处补检一次）
     _empty = _qiaoji_empty_reason(d)
     if _empty:
         step_log(
-            f"⚠ 巧记单词：{_empty} → 跳过本模块，直接进入下一个模块",
+            f"巧记单词未检测到内容（{_empty}），跳过本模块并进入下一模块",
             "warning",
         )
         print(f"  ⚠ {_empty}，跳过本模块")
@@ -1261,9 +1262,9 @@ def run_module(d, units=None, expected_grade="", expected_version=""):
     for unit_no in _units:
         start_level = 1 + (unit_no - 1) * LEVELS_PER_UNIT
         if start_level > 54:
-            step_log(f"⚠ 巧记单词：Unit {unit_no} 超出范围（仅支持1-9），跳过", "warning")
+            step_log(f"Unit {unit_no} 超出支持范围（1-9），跳过", "warning")
             continue
-        step_log(f"🏫 开始 Unit {unit_no} 闯关", "step")
+        step_log(f"开始 Unit {unit_no} 闯关检测", "step")
         # ★ 2026-09-10 新增步骤（用户反馈·六上）：新版流程「单词同步闯关」后可能先到
         #   「闯关地图」（Unit 选择页），需定位到目标 Unit 再进入，才是熟悉的单元闯关界面。
         #   ⚠ 也处理"App 记忆上次 Unit，直接落到别的 Unit 关卡地图"的情况（否则跑错单元）。
@@ -1273,17 +1274,17 @@ def run_module(d, units=None, expected_grade="", expected_version=""):
         _cur_unit = unit_no
         q = _run_one_unit(d, unit_no, start_level)
         total += q
-        step_log(f"🏁 Unit {unit_no} 闯关结束: {q} 题", "success")
+        module_done(f"Unit {unit_no} 闯关", q)
         # ★ 单元答完：有题干的题汇总生成脚本 docx（无题干/纯听音跳过）
         try:
             if _coll is not None:
                 _script_path = _coll.finish_unit(unit=unit_no)
                 if _script_path:
-                    step_log(f"📄 已生成解析脚本: {os.path.basename(_script_path)}（可在「审查脚本」区下载）", "success")
+                    step_log(f"已生成解析脚本 {os.path.basename(_script_path)}，可在「审查脚本」区下载", "success")
         except Exception as _e:
-            step_log(f"⚠ 巧记单词：生成脚本失败: {_e}", "warning")
+            step_log("解析脚本生成失败", "warning")
 
-    step_log(f"✅ 巧记单词完成: {total} 题, 耗时 {time.time()-t0:.0f}s", "success")
+    module_done("巧记单词", total, f"耗时 {time.time()-t0:.0f} 秒")
     # ★ 2026-09-10：关卡标签（"U1 第3关"）只用于题目定位/分组统计，模块结束后必须
     #   恢复模块级 stage —— 否则下游（内容补充检查的子模块过滤、下一个模块）会把
     #   关卡标签误当成"脚本子模块名"，导致脚本层审查范围出错。

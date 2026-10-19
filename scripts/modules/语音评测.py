@@ -429,7 +429,7 @@ def _wait_record_done(d, timeout=USER_READ_TIMEOUT):
     #     （旧坐标 (540,975) 在 900 宽的模拟器上偏右 90px -> 可能点空）
     _pos = _rid_center(d, "record_layout")
     if not _pos:
-        step_log("⚠ 未找到录音按钮 record_layout，退回比例换算坐标", "warning")
+        step_log("未找到录音按钮，改为按屏幕比例定位", "warning")
         _pos = S(d, *BTN_RECORD_LAYOUT)
     d.click(*_pos)
     time.sleep(0.8)
@@ -486,7 +486,7 @@ def _answer_one_part(d, part_text):
         try:
             _xml_ev = d.dump_hierarchy()
             from common.evidence import collect_ui_evidence
-            step_log(f"  第{i}题 完整性检查", "info",
+            step_log(f"第 {i} 题：完整性检查", "info",
                      collect_ui_evidence(_xml_ev, qtype="语音评测"))
         except Exception:
             pass
@@ -505,7 +505,7 @@ def _answer_one_part(d, part_text):
     #     原先在模拟器上必然点空 -> 改用 resource-id 取真实 bounds
     _pos = _rid_center(d, "speech_btn_confirm")
     if not _pos:
-        step_log("⚠ 未找到「完成并获取报告」speech_btn_confirm，退回比例换算坐标", "warning")
+        step_log("未找到「完成并获取报告」按钮，改为按屏幕比例定位", "warning")
         _pos = S(d, *BTN_CONFIRM_REPORT)
     d.click(*_pos)
     time.sleep(2.5)

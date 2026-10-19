@@ -118,7 +118,7 @@ for _lv in (1, 2, 3):
         pass
     _q = Q._answer_loop(MockD(f"第{_lv}关"), max_q=40)
     _nums = [int(m.group(1)) for m in
-             (re.match(r"\s*第(\d+)题", s) for s in _LOGS) if m]
+             (re.match(r"\s*第\s*(\d+)\s*题", s) for s in _LOGS) if m]
     _LEVEL_LOGS[_lv] = _nums
     print(f"  第{_lv}关: 返回 q={_q}, 发卡题号 {_nums[:3]}…{_nums[-3:] if _nums else []} (共{len(_nums)}张)")
 
@@ -270,7 +270,7 @@ _LOGS.clear()
 Q._GQ_NEXT = 0
 _q5 = Q._answer_loop(MockDNoProgress(), max_q=40)
 _nums5 = [int(m.group(1)) for m in
-          (re.match(r"\s*第(\d+)题", s) for s in _LOGS) if m]
+          (re.match(r"\s*第\s*(\d+)\s*题", s) for s in _LOGS) if m]
 print(f"  发卡题号: {_nums5}")
 check("读不到进度也能发卡（不再是 0 题）", len(_nums5) >= 4, f"发卡 {len(_nums5)} 张")
 check("签名字号严格递增（题干变化判定换题）", all(
@@ -289,7 +289,7 @@ _LOGS.clear()
 Q._GQ_NEXT = 0
 Q._answer_loop(MockDLoading(), max_q=40)
 # 注意：_LOGS 里还会有"⚠ 本关进入后未出现答题元素"这类提示，只统计发卡日志
-_ev_load = [s for s in _LOGS if re.match(r"\s*第\d+题", s)]
+_ev_load = [s for s in _LOGS if re.match(r"\s*第\s*\d+\s*题", s)]
 check("loading 页不误发卡（防脏数据）", len(_ev_load) == 0,
       f"发卡 {len(_ev_load)} 张；其它日志 {[s[:24] for s in _LOGS]}")
 
@@ -439,12 +439,12 @@ Q._cur_level = 2
 _LOGS.clear()
 _d = MockDResume()
 _q2 = Q._answer_loop(_d, max_q=40)
-_issued = len([s for s in _LOGS if re.match(r"\s*第\d+题", s)])
+_issued = len([s for s in _LOGS if re.match(r"\s*第\s*\d+\s*题", s)])
 check("本关从进度4开始→返回11题（14-4+1，非旧的13）", _q2 == 11, f"返回 {_q2}")
 check("★返回题数与审查结果发卡条数严格一致", _q2 == _issued,
       f"返回 {_q2} 条 / 发卡 {_issued} 条")
-check("首题全局题号 = 进度跨度起点（非 4 起跳）", int(re.match(r"\s*第(\d+)题", _LOGS[0]).group(1)) == 1,
-      f"首张卡题号 {re.match(r'\s*第(\d+)题', _LOGS[0]).group(1)}")
+check("首题全局题号 = 进度跨度起点（非 4 起跳）", int(re.match(r"\s*第\s*(\d+)\s*题", _LOGS[0]).group(1)) == 1,
+      f"首张卡题号 {re.match(r'\s*第\s*(\d+)\s*题', _LOGS[0]).group(1)}")
 
 # 对照：旧口径 max(_cur_progress, q) 会报成 13（用户当时看到的矛盾数字）
 check("（对照）旧口径会报 13 题 → 与 11 条审查结果矛盾", 14 != 11,

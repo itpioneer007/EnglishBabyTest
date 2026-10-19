@@ -21,7 +21,7 @@ from common.tools import (
     close_ad, dismiss_global_popups, ensure_grade, scroll_and_find,
     smart_find_unit_row,
 )
-from common.logger import step_log
+from common.logger import step_log, module_done
 from common.evidence import collect_ui_evidence
 from common.screenshot import shot_to_file
 from engine import _handle_match_question, _handle_sort_question
@@ -116,7 +116,7 @@ def _handle_reading_multi(d, xml=None):
         return False  # 单小题/无选项 → 走原逻辑
 
     print(f"    📖 阅读理解多小题: {len(groups)} 道小题待选")
-    step_log(f"📖 阅读多小题 {len(groups)} 道，逐题选选项", "step")
+    step_log(f"阅读多小题共 {len(groups)} 道，逐题选择选项", "step")
 
     # 循环：把所有未选中的小题都选上（含下滑发现的新小题），全部选完 → 找检查
     no_new = 0
@@ -141,7 +141,7 @@ def _handle_reading_multi(d, xml=None):
         if d(text="检查").exists(timeout=1.0):
             d(text="检查").click()
             print("    ✅ 多小题全部选完，点击检查")
-            step_log("✅ 阅读多小题全部选完，已检查", "success")
+            step_log("阅读多小题选项已全部填写，进入检查", "success")
             time.sleep(0.8)
             return True
         # 下滑找更多小题 / 检查按钮
@@ -407,7 +407,7 @@ def _answer_loop(d, max_q=200):
         # ── 2. 最后一题 → 点"查看报告" → back 一次回单元列表 ──
         if '查看报告' in xml0:
             print("      → 查看报告出现，点击")
-            step_log(f"📊 单元自检完成，共{q}题", "success")
+            module_done("单元自检", q)
             d(text="查看报告").click()
             time.sleep(3.0)   # 等报告刷新
             d.press("back")   # ★ 一次 back 返回单元列表（用户确认）
@@ -417,7 +417,7 @@ def _answer_loop(d, max_q=200):
         if '下一题' in xml0:
             d(text="下一题").click()
             print("      → 下一题(答错)")
-            step_log(f"  答错 → 下一题", "warning")
+            step_log("作答错误，进入下一题", "warning")
             # 轮询等新题加载完成（题号推进+内容渲染；答对自动跳/答错出下一题均覆盖）
             if not _wait_new_ready(d, q, max_wait=2.5):
                 time.sleep(0.6)   # 超时兜底
@@ -457,7 +457,7 @@ def _answer_loop(d, max_q=200):
             if _handle_word_fill(d, {}):
                 q += 1
                 print(f"      → 第{q}题(选词填空)")
-                step_log(f"  第{q}题 选词填空完成", "info")
+                step_log(f"第 {q} 题：选词填空完成", "info")
                 _collect_q(xml0)   # ★ 选词填空也收集
                 continue
         if _has_edittext or (_fill_hint and not _has_letter):
@@ -465,7 +465,7 @@ def _answer_loop(d, max_q=200):
             if _handle_fill_blank(d, {}):
                 q += 1
                 print(f"      → 第{q}题(填空)")
-                step_log(f"  第{q}题 填空完成", "info")
+                step_log(f"第 {q} 题：填空完成", "info")
                 _collect_q(xml0)   # ★ 填空也收集（有题干时）
                 continue
         # ── 4.4 字母块补全单词（★ 2026-09-15 新增，必须排在选词填空之前！）──
@@ -480,7 +480,7 @@ def _answer_loop(d, max_q=200):
             if _handle_letter_fill(d, {}):
                 q += 1
                 print(f"      → 第{q}题(字母补全单词)")
-                step_log(f"  第{q}题 字母补全单词完成", "info")
+                step_log(f"第 {q} 题：字母补全单词完成", "info")
                 _collect_letter_fill_inner(xml0)   # ★ 字母补全题收集（题干+字母块+答案）
                 continue
         # ── 5. 阅读多小题检测（多组字母选项）──
@@ -488,7 +488,7 @@ def _answer_loop(d, max_q=200):
         if _handle_reading_multi(d, xml0):
             q += 1
             print(f"      → 第{q}题(阅读多小题)")
-            step_log(f"  第{q}题 阅读多小题完成", "info")
+            step_log(f"第 {q} 题：阅读多小题完成", "info")
             _collect_q(xml0)   # ★ 阅读多小题也收集
             continue
         # ── 5.5 自评题（"阅读与写作"等：不支持在线作答，页面有"我答对了/我答错了"）──
@@ -501,7 +501,7 @@ def _answer_loop(d, max_q=200):
                 d(text="我答错了").click()
             q += 1
             print(f"      → 第{q}题(自评题)")
-            step_log(f"  第{q}题 自评完成", "info")
+            step_log(f"第 {q} 题：自评完成", "info")
             _collect_q(xml0, "自评")   # ★ 自评题收集题干（答案标"自评"）
             time.sleep(3.0)   # 等交卷/报告/跳转
             # 交卷后去向处理：有题号→继续循环；有查看报告→点击→back；
@@ -557,10 +557,10 @@ def _answer_loop(d, max_q=200):
                 except Exception:
                     print(f"      → 选 {opt} 点击失败（页面可能加载中），跳过")
             print(f"      → 选 {opt}")
-            step_log(f"  第{q}题: 选 {opt} → 检查", "info")
+            step_log(f"第 {q} 题：选择 {opt}，执行检查", "info")
             # 界面级完整性检查证据 → 前端证据卡（复用已 dump 的 xml0）
             try:
-                step_log(f"  第{q}题 完整性检查", "info", collect_ui_evidence(xml0, qtype="单元自检"))
+                step_log(f"第 {q} 题：完整性检查", "info", collect_ui_evidence(xml0, qtype="单元自检"))
             except Exception:
                 pass
             time.sleep(0.3)
@@ -865,7 +865,7 @@ def run_module(d, units=None):
             if _coll is not None:
                 _script_path = _coll.finish_unit(unit=unit_num)
                 if _script_path:
-                    step_log(f"📄 已生成解析脚本: {os.path.basename(_script_path)}（可在「审查脚本」区下载）", "success")
+                    step_log(f"已生成解析脚本 {os.path.basename(_script_path)}，可在「审查脚本」区下载", "success")
         except Exception as _e:
             print(f"  ⚠ 生成脚本失败: {_e}")
         # ★ 安全回退到单元自检列表（目标"去答题"，保底主页——主页命中即停，

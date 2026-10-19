@@ -2537,7 +2537,7 @@
             return;
           }
           if (typeof addLog === "function")
-            addLog("success", "📤 已上传脚本: " + f.name);
+            addLog("success", "已上传脚本：" + f.name);
           alert("✅ 上传成功: " + f.name);
         } catch (e) {
           alert("上传失败: " + e.message);
@@ -2960,7 +2960,7 @@
               (orderText.length > 200 ? "…" : ""),
           );
         }
-        addLog("step", "开始分析清单 → 准备调用模块: " + modules.join("、"));
+        addLog("step", "开始分析清单，准备调用模块：" + modules.join("、"));
         addLog("info", "版本/年级: " + version + " " + grade);
         // ★ 2026-10-19：单元范围不再打 JSON（旧日志形如 {"听力专项":null}），
         //   改成「听力专项 U2、U4」这种可读写法，口径与后端 human_units 一致。

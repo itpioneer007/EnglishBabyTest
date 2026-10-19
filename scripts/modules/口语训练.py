@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import uiautomator2 as u2
 from common.logger import (
-    step_log, should_stop,
+    step_log, should_stop, module_done,
     set_current_unit, get_current_unit, get_module_script,
 )
 from common.tools import (
@@ -195,7 +195,7 @@ def _diag_no_record_ctrl(d, big_idx):
         return
     if _is_transition_state(xml):
         try:
-            step_log(f"⚠ 第{big_idx}大题等待录音按钮超时（页面仍在倒计时/上传状态）", "warning")
+            step_log(f"第 {big_idx} 大题等待录音按钮超时，页面仍处于倒计时或上传状态", "warning")
         except Exception:
             pass
         return
@@ -214,9 +214,9 @@ def _diag_no_record_ctrl(d, big_idx):
         if t and t not in labels:
             labels.append(t)
     try:
-        step_log(f"⚠ 第{big_idx}大题无可作答控件：整页无录音按钮/喇叭/「下一题」，"
-                 f"可点击元素仅 {labels[:6] or ['无']} → 本单元在此中断，"
-                 f"该大题及其后大题未检测（App 侧页面问题）", "warning")
+        step_log(f"第 {big_idx} 大题无可作答控件：页面没有录音按钮、喇叭与「下一题」，"
+                 f"可点击元素仅有「{'、'.join(labels[:6]) or '无'}」；"
+                 f"本单元检测在此中断，该大题及其后各大题均未检测", "warning")
     except Exception:
         pass
 
@@ -793,7 +793,7 @@ def _speak_one_sub(d):
         pass
     d.click(*pos)
     print(f"    🎤 点录音 ({pos[0]},{pos[1]})")
-    step_log("🎤 点录音", "info")
+    step_log("点击录音按钮", "info")
     # 等 App 切换到"点击结束"/"点击完成"状态
     t0 = time.time()
     while time.time() - t0 < 4.0:
@@ -808,7 +808,7 @@ def _speak_one_sub(d):
     # 再点一次结束录音
     d.click(*pos)
     print(f"    ⏹ 点结束 ({pos[0]},{pos[1]})")
-    step_log("⏹ 点结束", "info")
+    step_log("点击结束录音", "info")
     # ★ 关键：等评测收敛后再交还控制权（旧实现只等 3s → 打断评测 → 死循环）
     _wait_eval_settle(d)
     return True
@@ -853,7 +853,7 @@ def _answer_big_question(d, big_idx=0):
     # 2. 逐小题作答
     for _ in range(30):  # 防护上限
         if should_stop():
-            step_log("⏹ 收到停止请求，中断当前模块", "warning")
+            step_log("收到停止请求，当前模块检测中断", "warning")
             return q
         if _SCORING_DOWN:
             # 本单元判定为"App 云端评分不可用" → 不再继续下一大题
@@ -864,7 +864,7 @@ def _answer_big_question(d, big_idx=0):
         # 整单元结束标记
         if "练习报告" in xml:
             print(f"    ✅ 练习报告页出现，单元结束")
-            step_log("📊 练习报告（单元完成）", "success")
+            step_log("练习报告已出现，本单元检测结束", "success")
             try:
                 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
                 from src.doc_checks import check_report_page
@@ -895,11 +895,11 @@ def _answer_big_question(d, big_idx=0):
                 if d(text="交卷").exists(timeout=0.2):
                     d(text="交卷").click()
                     print(f"    ✅ 大题完成 → 点交卷")
-                    step_log("➡ 交卷", "success")
+                    step_log("点击「交卷」", "success")
                     if d(text="确定交卷").exists(timeout=2):
                         d(text="确定交卷").click()
                         print("    ✅ 点确定交卷")
-                        step_log("➡ 确定交卷", "success")
+                        step_log("已确认交卷", "success")
                         time.sleep(1.0)
                         if not d(text="练习报告").exists(timeout=3):
                             print("    ⚠ 确定交卷后练习报告未出现（可能仍在渲染）")
@@ -919,13 +919,13 @@ def _answer_big_question(d, big_idx=0):
                 if _done_btn:
                     d(text=_done_btn).click()
                     print(f"    ➡ {_done_btn}（大题完成）")
-                    step_log(f"➡ {_done_btn}", "step")
+                    step_log(f"点击「{_done_btn}」", "step")
                     time.sleep(0.8)
                     return q
                 # 3) 下一题按钮（此时 record_btn 已消失 = 本大题答满，点击安全）
                 if _click_next_btn(d):
                     print(f"    ➡ 下一题（大题完成）")
-                    step_log("➡ 进入下一大题", "step")
+                    step_log("进入下一大题", "step")
                     time.sleep(0.8)
                     return q
                 # 4) 无任何过渡按钮 → 大题完成/结束
@@ -1005,7 +1005,7 @@ def _answer_big_question(d, big_idx=0):
                         "expected": "按设计本小题不重复上报大题说明",
                         "actual": "已省略（同大题第2小题起不再重复上报）",
                         "diff": "设计如此，非缺陷：避免同一大题的证据卡重复相同的大题说明"}]
-                step_log(f"  第{big_idx}大题·第{sub_label}小题（{stem}）完整性检查", "info", _ev)
+                step_log(f"第 {big_idx} 大题第 {sub_label} 小题：{stem}，执行完整性检查", "info", _ev)
                 _ev_q = q
                 _last_ev_big = big_idx
                 if not _score_checked:
@@ -1162,7 +1162,7 @@ def _run_one_unit(d, unit_num, is_retry):
         if "正在开发" in _xml_now or "敬请期待" in _xml_now:
             print(f"    ❌ 口语训练 U{unit_num}：模块页为占位页（'正在开发 敬请期待~'）→ 该年级口语训练未上线，跳过")
             try:
-                step_log(f"❌ 口语训练 U{unit_num}：该年级口语训练未上线（App 显示'正在开发 敬请期待~'），无法作答", "error")
+                step_log(f"口语训练 U{unit_num} 未开放：App 提示「正在开发 敬请期待」，该单元无法作答", "error")
             except Exception:
                 pass
             return 0
@@ -1171,7 +1171,7 @@ def _run_one_unit(d, unit_num, is_retry):
     print(f"    ❌ 方式1 失败：滑动 8 次未找到 U{unit_num} 标题")
     print(f"    当前页可见 U 标题: {_visible_u}")
     try:
-        step_log(f"❌ 口语训练 U{unit_num} 入口缺失：当前页无该单元标题行（可见 U: {','.join(_visible_u[:5]) or '无'}，可能该年级无此单元）", "error")
+        step_log(f"口语训练 U{unit_num} 入口未出现：当前页没有该单元的标题，可能该年级不含此单元", "error")
     except Exception:
         pass
 
@@ -1219,7 +1219,7 @@ def _run_one_unit(d, unit_num, is_retry):
         print(f"    ❌ 找不到 U{unit_num} 的答题按钮（已找：{'/'.join(btn_candidates)}）")
         print(f"    当前页可见答题按钮: {_visible_btns}")
         try:
-            step_log(f"❌ 口语训练 U{unit_num} 无答题按钮：当前页答题按钮={_visible_btns or '无'}", "error")
+            step_log(f"口语训练 U{unit_num} 未出现答题按钮，当前页面无法进入答题", "error")
         except Exception:
             pass
         return 0
@@ -1331,15 +1331,15 @@ def _after_unit_enter(d, unit_num=None):
             print(f"    ⚠ 试卷首页单元不一致: 请求 U{unit_num} → 实际 U{_title_unit}")
         print(f"    📋 试卷首页: {'✅' if _ok else '⚠'} {_msg}")
         try:
-            step_log(f"📋 试卷首页检查: {'通过' if _ok else '异常'} | {_msg}",
+            step_log(f"试卷首页检查：{'通过' if _ok else '未通过'}。{_msg}",
                      "info" if _ok else ("error" if _unit_bad else "warning"))
         except Exception:
             pass
         if _unit_bad:
             # 拿错单元的脚本去比对 = 全单元结论失真 → 直接中止本单元，交给上层报错
             try:
-                step_log(f"❌ 口语训练 U{unit_num} 中止：App 打开的试卷是 U{_title_unit}，"
-                         f"脚本与该单元不对应，继续检测会产出全量误报", "error")
+                step_log(f"口语训练 U{unit_num} 检测中止：App 打开的试卷为 U{_title_unit}，"
+                         f"与目标单元不一致，继续检测将得到无效结论", "error")
             except Exception:
                 pass
             return False
@@ -1394,7 +1394,7 @@ def _run_unit_questions(d, unit_num):
             print(f"  📝 第{_log_big}大题（最后一题）")
         else:
             print(f"  📝 第{_log_big}大题")
-            step_log(f"📝 开始第{_log_big}大题", "step")
+            step_log(f"开始第 {_log_big} 大题", "step")
         q = _answer_big_question(d, big_idx=_log_big)
         total += q
         # ★ 若本大题 0 小题（q==0）→ 说明已交卷/结束/页面已到报告页，不再进入下一大题
@@ -1620,7 +1620,7 @@ def run_module(d, units=None):
         from common.tools import ensure_app_foreground as _ensure_fg
         _fg_ok = _ensure_fg(d)
         if not _fg_ok:
-            step_log("⚠ 未能把英语宝切到前台（可能有系统弹窗/通知栏遮挡），仍尝试继续", "warning")
+            step_log("英语宝未能切换到前台，可能有系统弹窗或通知栏遮挡，继续尝试", "warning")
     except Exception:
         pass
     try:
@@ -1662,7 +1662,7 @@ def run_module(d, units=None):
         print(f"  下滑翻找后当前页关键文本: {_diag['texts']}")
         print(f"  当前页 resource-id 前缀: {_diag['rids']}")
         try:
-            step_log(f"❌ 口语训练 入口缺失（设备年级={_grade_label}）：下滑翻找后当前页仍无'口语训练'卡片（可能该年级无此模块，或主页布局变化）", "error")
+            step_log(f"口语训练入口未出现：设备当前年级为 {_grade_label}，翻页后仍未找到该模块卡片，可能该年级不含此模块", "error")
         except Exception:
             pass
         return 0
@@ -1683,7 +1683,7 @@ def run_module(d, units=None):
             if _oral_coll is not None:
                 _p = _oral_coll.finish_unit(unit=unit_num)
                 if _p:
-                    step_log(f"📄 已生成解析脚本: {os.path.basename(_p)}（可在「审查脚本」区下载）",
+                    step_log(f"已生成解析脚本 {os.path.basename(_p)}，可在「审查脚本」区下载",
                              "success")
         except Exception as _e:
             print(f"  ⚠ 生成脚本失败: {_e}")
@@ -1692,14 +1692,13 @@ def run_module(d, units=None):
         #   "口语训练/开始答题"两个文本，遇"确定退出?"确认框会卡死在试卷页 →
         #   下一个单元报"入口缺失"（详见 _exit_paper_to_list 文档字符串）。
         if not _exit_paper_to_list(d):
-            step_log(f"⚠ 未能退出口语训练试卷页（U{unit_num} 之后）：UI 退出与「重启 App」"
-                     f"兜底均失败，后续单元可能报“入口缺失”——那是【工具侧未退出】，"
-                     f"不是 App 缺单元", "warning")
+            step_log("未能退出口语训练试卷页，后续单元可能因此找不到入口；"
+                     "本单元检测结束", "warning")
         _close_bottom_ad(d)
 
     # ★ 模块完成信号（web_server log_msg 靠"完成"关键词触发脚本内容审查）
     #   练习报告页可能因渲染延迟没检测到 → 这里兜底必发
-    step_log(f"✅ 口语训练完成，共{total}题", "success")
+    module_done("口语训练", total)
     print(f"✅ 口语训练完成: {total} 题, 耗时 {time.time()-t0:.0f}s")
     return total
 
@@ -1756,13 +1755,13 @@ def run_paper(d, paper_kw="期末", grade="三年级上册"):
         _diag = _snapshot_page(d, want_kw=(paper_kw, "听说", "统测", "模考"), limit=12)
         print(f"    ❌ 找不到 {grade} 的 {paper_kw} 卷（当前页: {_diag['texts'][:6]}）")
         try:
-            step_log(f"❌ 口语训练 {paper_kw}卷入口缺失：当前页无「{grade}·{paper_kw}听说统测」标题（可见: {_diag['texts'][:4] or '无'}）", "error")
+            step_log(f"口语训练 {paper_kw}卷入口未出现：当前页没有「{grade}·{paper_kw}听说统测」标题", "error")
         except Exception:
             pass
         return 0
     # ③ 答题（统测卷也是多题循环，复用 _run_unit_questions）
     total = _run_unit_questions(d, unit_num=0)
-    step_log(f"✅ 口语训练{paper_kw}卷完成，共{total}题", "success")
+    module_done(f"口语训练{paper_kw}卷", total)
     print(f"✅ 口语训练{paper_kw}卷完成: {total} 题, 耗时 {time.time()-t0:.0f}s")
     return total
 

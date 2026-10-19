@@ -373,7 +373,7 @@ def _handle_sort_question(d, config):
     之后点"检查"，答对自动进下一题 / 答错点"下一题"。
     """
     print(f"    📋 识别到排序题，处理中...")
-    step_log("🔢 检测到排序题，开始处理…", "step")
+    step_log("检测到排序题，开始处理", "step")
 
     # ── 先区分两种子题型 ──
     # ★ 2026-08-30 修复：图片排序定位用 img_sort_btn 节点（App 给图片加的特定 rid），
@@ -397,7 +397,7 @@ def _handle_sort_question(d, config):
     if has_big_image:
         # ── 模式A：图片排序 ── 直接点图片，序号自动填充
         print(f"    🖼 图片排序（模式A）：直接点图片，序号自动填充")
-        step_log("🖼 图片排序：直接点图片，序号自动填", "step")
+        step_log("图片排序：按顺序直接点击图片，序号自动填写", "step")
         clicked_keys = set()
         # ★ 2026-08-30 全局最大轮次保护：防死循环（用户实测 14:19 反复刷同一题
         #   完整性检查/排序题日志）。任何 tab/层级不能再无限循环
@@ -441,7 +441,7 @@ def _handle_sort_question(d, config):
 
     # ── 模式B：人物/句子排序 ── 点方框激活 + 点底部序号
     print(f"    🔢 人物/句子排序（模式B）：点方框激活 → 点序号")
-    step_log("🔢 方框排序：点方框激活 → 点序号", "step")
+    step_log("方框排序：先点方框激活，再点序号", "step")
     # 1. 点第一个方框（y 700-1900、宽度100-300的可点击元素，即句子方框）
     clicked_box = False
     for e in (d.xpath('//*[@clickable="true"]').all() or []):
@@ -638,7 +638,7 @@ def _handle_sentence_sort(d, config):
     """
     import time
     print(f"    📝 句子圆圈排序题：直接按顺序点击句子（序号自动填入）")
-    step_log("📝 圆圈排序题：直接点句子", "step")
+    step_log("圆圈排序题：按顺序直接点句子", "step")
 
     def _find_sentences():
         """找未填的整行句子（宽 > 800，y 700-1900）。
@@ -752,7 +752,7 @@ def _handle_match_question(d, config):
       3. 因此只需把字母选项（A/B/C/D/E）全部依次点击完即可
     """
     print(f"    📋 识别到匹配题，处理中...")
-    step_log("📋 检测到匹配题，开始配对…", "step")
+    step_log("检测到匹配题，开始配对", "step")
 
     # 1. 点第一个可点击方框激活字母选项界面（人物名文字所在区域的方框）
     clicked_box = False
@@ -850,7 +850,7 @@ def _handle_match_connect(d, config):
     """
     import re as _re
     print(f"    🔗 字母连线题：左右点配对连线")
-    step_log("🔗 连线题：左右点配对", "step")
+    step_log("连线题：左右两侧依次点击配对", "step")
 
     def _collect_two_columns():
         """从 dump 提取左右两列可点节点（按 x 中位数分两簇）"""
@@ -973,7 +973,7 @@ def _handle_select_fill(d, config):
     """
     import re as _re
     print(f"    🔤 选词填空，处理中...")
-    step_log("🔤 选词填空：点空格→点词填入", "step")
+    step_log("选词填空：先点空格，再点词填入", "step")
 
     # 1. 解析空格框与词库词
     def _parse():
@@ -1065,7 +1065,7 @@ def _handle_select_fill(d, config):
         except Exception:
             continue
         print(f"      空格({bx},{by}) ← {w[2]}")
-        step_log(f"  🔤 填词: {w[2]}", "info")
+        step_log(f"填词：{w[2]}", "info")
         filled_cnt += 1
         time.sleep(0.6)
 
@@ -1079,7 +1079,7 @@ def _handle_select_fill(d, config):
         if btn:
             d(text=btn).click()
             print(f"    ✅ 选词填空完成，点击{btn}")
-            step_log("✅ 选词填空全部完成", "success")
+            step_log("选词填空已全部完成", "success")
             time.sleep(0.8)
             break
         S_swipe(d, 540, 1800, 540, 600, 0.4)
@@ -1270,7 +1270,7 @@ def _answer_loop(d, config, module_name):
     while q < 50:
         # ★ 停止检查：web_server 收到停止请求 → 立即中断当前模块
         if should_stop():
-            step_log("⏹ 收到停止请求，中断当前模块", "warning")
+            step_log("收到停止请求，当前模块检测中断", "warning")
             return q
         if _need_dump:
             _xml = _dump()
@@ -1288,7 +1288,8 @@ def _answer_loop(d, config, module_name):
         if _has("练习报告"):
             _click_text("练习报告")
             print(f"      → 练习报告（最后一题）")
-            step_log(f"📊 练习报告（子模块完成，共{q}题）", "success")
+            step_log(f"练习报告已出现，本子模块检测结束（共 {q} 道题）",
+                     "success" if int(q or 0) > 0 else "warning")
             time.sleep(0.4); _xml = _dump()
             if not config.get('_is_last_sub', False):
                 # ★ 非最后子模块：点"继续练习"回单元列表页（下一个子模块由
@@ -1366,7 +1367,7 @@ def _answer_loop(d, config, module_name):
             _stuck_same_qno += 1
             if _stuck_same_qno >= 8:
                 # ★ 同一题卡死超 8 轮（约 4-6s）→ 强制退出答这一道题（继续巡检）
-                step_log(f"⚠ 同一题 {_last_qno_at} 已卡 8 轮未推进，强制跳过", "warning")
+                step_log(f"第 {_last_qno_at} 题连续 8 轮未推进，跳过", "warning")
                 _stuck_same_qno = 0
                 _last_qno_at = ""
                 # 兜底：尝试回退一下，避免累积占用主线程
@@ -1381,7 +1382,7 @@ def _answer_loop(d, config, module_name):
         qtype = _detect_question_type_cached(_xml, config)
         if qtype == "sort_questions":
             q += 1  # ★ 排序题计数（之前遗漏，导致总题数少）
-            step_log(f"📸 第{q}题（排序题）", "step")
+            step_log(f"第 {q} 题（排序题）", "step")
             step_log(f"  第{q}题 检查", "info", _collect_ui_evidence("排序题"))
             _has_circle = 0
             for _m in re.finditer(r'<node[^>]*class="android\.widget\.CheckBox"[^>]*/?>', _xml):
@@ -1418,11 +1419,11 @@ def _answer_loop(d, config, module_name):
             except Exception:
                 pass
             if _is_connect:
-                step_log(f"📸 第{q}题（字母连线）", "step")
+                step_log(f"第 {q} 题（字母连线）", "step")
                 step_log(f"  第{q}题 检查", "info", _collect_ui_evidence("字母连线"))
                 _handle_match_connect(d, config)
             else:
-                step_log(f"📸 第{q}题（匹配题）", "step")
+                step_log(f"第 {q} 题（匹配题）", "step")
                 step_log(f"  第{q}题 检查", "info", _collect_ui_evidence("匹配题"))
                 _handle_match_question(d, config)
             _idle = 0
@@ -1430,7 +1431,7 @@ def _answer_loop(d, config, module_name):
         elif qtype == "letter_fill_questions":
             # ★ 字母块补全单词（2026-09-15）：首字母 + select_tv 空位 + 单字母 select_btn
             q += 1
-            step_log(f"📸 第{q}题（字母补全单词）", "step")
+            step_log(f"第 {q} 题（字母补全单词）", "step")
             step_log(f"  第{q}题 检查", "info", _collect_ui_evidence("字母补全单词"))
             _handle_letter_fill(d, config)
             _idle = 0
@@ -1438,7 +1439,7 @@ def _answer_loop(d, config, module_name):
         elif qtype == "select_fill_questions":
             # ★ 选词填空（听力专项）：点空格→点词库词，全部填完→检查
             q += 1
-            step_log(f"📸 第{q}题（选词填空）", "step")
+            step_log(f"第 {q} 题（选词填空）", "step")
             step_log(f"  第{q}题 检查", "info", _collect_ui_evidence("选词填空"))
             _handle_select_fill(d, config)
             _idle = 0
@@ -1446,7 +1447,7 @@ def _answer_loop(d, config, module_name):
         elif qtype == "fill_blank_questions":
             # ★ 表格/短文补全（键盘注入）：复用 _handle_fill_blank
             q += 1
-            step_log(f"📸 第{q}题（表格/短文补全）", "step")
+            step_log(f"第 {q} 题（表格与短文补全）", "step")
             step_log(f"  第{q}题 检查", "info", _collect_ui_evidence("补全题"))
             _handle_fill_blank(d, config)
             _idle = 0
@@ -1454,7 +1455,7 @@ def _answer_loop(d, config, module_name):
         elif qtype == "reading_multi_questions":
             # ★ 阅读多小题：多组字母选项，每题点一个选项，全点完才出检查
             q += 1
-            step_log(f"📸 第{q}题（阅读多小题）", "step")
+            step_log(f"第 {q} 题（阅读多小题）", "step")
             step_log(f"  第{q}题 检查", "info", _collect_ui_evidence("阅读多小题"))
             _handle_reading_multi(d, _xml)
             _idle = 0
@@ -1467,14 +1468,14 @@ def _answer_loop(d, config, module_name):
             # 无选项 → 倒计时/加载中/异常页：不计数，空转保护防死循环
             _idle += 1
             if _idle >= 15:
-                step_log(f"⚠ 连续 {_idle} 轮无有效题目（可能停在非答题页/倒计时异常），退出答题循环", "warning")
+                step_log(f"连续 {_idle} 轮未读取到有效题目，可能已不在答题页，退出答题循环", "warning")
                 return q
             time.sleep(0.3); _need_dump = True
             continue
         _idle = 0
         q += 1
         print(f"    📸 第{q}题")
-        step_log(f"📸 第{q}题", "step")
+        step_log(f"第 {q} 题", "step")
         # ★ 每题界面级检查证据 → 前端证据卡（题型/题干/选项/音频/作答）
         qtype_now = _detect_question_type_cached(_xml, config)
         step_log(f"  第{q}题 检查", "info", _collect_ui_evidence(qtype_now))
@@ -1482,7 +1483,7 @@ def _answer_loop(d, config, module_name):
 
         _click_text(opt)
         print(f"      → 选 {opt}")
-        step_log(f"  第{q}题: 选 {opt} → 检查", "info")
+        step_log(f"第 {q} 题：选择 {opt}，执行检查", "info")
         # ★ 提速+防竞态：轮询等"检查"出现（替代固定 sleep(0.5)），页面快则立即继续
         _t_check = time.time()
         _check_found = False
@@ -1580,7 +1581,7 @@ def run_single_module(d, module_name, config):
         #   于是 App 里没有该入口时前端只看到"0 题"，测试员根本不知道发生了什么
         #   （试用反馈："教科版五上这几个模块显示未找到"）。
         step_log(
-            f"❌ 首页未找到「{entry}」入口，本模块未开始检测。\n"
+            f"首页未找到「{entry}」入口，本模块未开始检测。\n"
             f"　　可能原因：当前版本/年级的 App 内不存在该模块，或首页尚未加载完成。\n"
             f"　　处理建议：确认首页处于「{os.environ.get('YYB_VERSION', '')}"
             f"{os.environ.get('YYB_GRADE', '')}」，将首页下拉刷新后重新检测；"
@@ -1683,7 +1684,7 @@ def run_single_module(d, module_name, config):
         for i, sub in enumerate(sm):
             # ★ 停止检查：前端停止 → 中断子模块循环
             if should_stop():
-                step_log("⏹ 收到停止请求，中断子模块循环", "warning")
+                step_log("收到停止请求，中断子模块循环", "warning")
                 return
             name = f"{module_name}/{sub['name']}"
             print(f"  --- [{i+1}/{len(sm)}] {sub['name']} ---")
@@ -1723,7 +1724,7 @@ def run_single_module(d, module_name, config):
                     swiped += 1
                 cur_texts = _sub_texts()
                 shown = next((t for t in cur_texts if sub["name"] in t), cur_texts[0] if cur_texts else "")
-                step_log(f"📌 当前子模块: {shown or sub['name']}（第{i+1}/{len(sm)}个，左滑{swiped}次）", "step")
+                step_log(f"当前子模块：{shown or sub['name']}（第 {i+1}/{len(sm)} 个，已左滑 {swiped} 次）", "step")
                 print(f"    👈 切到 {sub['name']}（左滑{swiped}次）→ 当前显示: {shown or '?'}")
             else:
                 # 第1个子模块：默认即最左（基础巩固）。
@@ -1733,7 +1734,7 @@ def run_single_module(d, module_name, config):
                 cur_texts = _sub_texts()
                 if not any("基础巩固" in t for t in cur_texts):
                     step_log(
-                        f"⚠ 第1子模块未检测到「基础巩固」（当前显示：{cur_texts}），补滑1次回最左",
+                        f"第 1 子模块未检测到「基础巩固」，当前显示 {cur_texts}，补滑 1 次回到最左",
                         "warning",
                     )
                     d.swipe_ext("right", scale=0.5)
@@ -1741,7 +1742,7 @@ def run_single_module(d, module_name, config):
                 # 读取展示
                 cur_texts = _sub_texts()
                 shown = next((t for t in cur_texts if sub["name"] in t), cur_texts[0] if cur_texts else "")
-                step_log(f"📌 当前子模块: {shown or sub['name']}（第{i+1}/{len(sm)}个，无需滑动）", "step")
+                step_log(f"当前子模块：{shown or sub['name']}（第 {i+1}/{len(sm)} 个，无需滑动）", "step")
             # 答题入口：必须找到"重新答题"或"开始答题"才能开始
             for retry in range(8):
                 if d(text="重新答题").exists(timeout=1) or d(text="开始答题").exists(timeout=1):
@@ -1790,7 +1791,7 @@ def run_single_module(d, module_name, config):
         for ui, unit_num in enumerate(units):
             # ★ 停止检查：前端停止 → 中断单元循环
             if should_stop():
-                step_log("⏹ 收到停止请求，中断单元循环", "warning")
+                step_log("收到停止请求，中断单元循环", "warning")
                 return
             print(f"\n  {'='*40}")
             print(f"  🎯 Unit {unit_num} [{ui+1}/{len(units)}]")
@@ -1823,7 +1824,7 @@ def run_single_module(d, module_name, config):
                 if _SCRIPT_COLL is not None:
                     _p = _SCRIPT_COLL.finish_unit(unit=unit_num)
                     if _p:
-                        step_log(f"📄 已生成解析脚本: {os.path.basename(_p)}（可在「审查脚本」区下载）",
+                        step_log(f"已生成解析脚本 {os.path.basename(_p)}，可在「审查脚本」区下载",
                                  "success")
             except Exception as _e:
                 print(f"  ⚠ 生成脚本失败: {_e}")
@@ -1886,7 +1887,7 @@ def _handle_reading_multi(d, xml=None):
         return False
 
     print(f"    📖 阅读理解多小题: {len(groups)} 道小题待选")
-    step_log(f"📖 阅读多小题 {len(groups)} 道，逐题选选项", "step")
+    step_log(f"阅读多小题共 {len(groups)} 道，逐题选择选项", "step")
 
     no_new = 0
     for _ in range(len(groups) + 12):
@@ -1904,7 +1905,7 @@ def _handle_reading_multi(d, xml=None):
         if d(text="检查").exists(timeout=1.0):
             d(text="检查").click()
             print("    ✅ 多小题全部选完，点击检查")
-            step_log("✅ 阅读多小题全部选完，已检查", "success")
+            step_log("阅读多小题选项已全部填写，进入检查", "success")
             time.sleep(0.8)
             return True
         S_swipe(d, 540, 1800, 540, 800, 0.4)
@@ -2082,7 +2083,7 @@ def _handle_letter_fill(d, config):
     if not slots or not tiles or not prefix:
         print("    ⚠ 结构不完整（缺空位/字母块/首字母），放弃")
         return False
-    step_log(f"🔤 字母补全单词：首字母 {prefix} · {n_slot} 个空位 · 提示「{hint or '（听录音）'}」", "step")
+    step_log(f"字母补全单词：首字母 {prefix}，{n_slot} 个空位，提示「{hint or '需听录音作答'}」", "step")
 
     pool = [t["text"].strip() for t in tiles]
     word, src = _letter_fill_word(prefix, hint, pool, n_slot=n_slot)
@@ -2100,7 +2101,7 @@ def _handle_letter_fill(d, config):
     _LAST_LETTER_FILL.clear()
     _LAST_LETTER_FILL.update({"word": word, "prefix": prefix,
                               "hint": hint, "source": src, "cap": cap})
-    step_log(f"🔤 推断单词 {word}（{src}）→ 依次点字母 {' '.join(need)}", "info")
+    step_log(f"推断单词 {word}，依次点击字母 {' '.join(need)}", "info")
 
     used = set()
     ok_cnt = 0
@@ -2146,7 +2147,7 @@ def _handle_letter_fill(d, config):
             if d(text="检查").exists(timeout=1.2):
                 d(text="检查").click()
                 _checked = True
-                step_log(f"✅ 字母补全单词完成：{word}", "success")
+                step_log(f"字母补全单词完成：{word}", "success")
                 time.sleep(0.8)
                 break
         except Exception:
@@ -2166,7 +2167,7 @@ def _handle_letter_fill(d, config):
     try:
         if d(text="下一题").exists(timeout=2):
             d(text="下一题").click()
-            step_log("➡ 字母补全单词答完，进入下一题", "info")
+            step_log("字母补全单词完成，进入下一题", "info")
             time.sleep(0.8)
     except Exception:
         pass
@@ -2187,7 +2188,7 @@ def _handle_word_fill(d, config):
     """
     import random
     print(f"    选词填空题，处理中...")
-    step_log("📝 选词填空：点击空位→选词→检查", "step")
+    step_log("选词填空：点击空位，选择词语，然后检查", "step")
 
     # ★ 2026-08-26 空位精确识别（重写，实测）：真正的选词空位 = resource-id 含
     #   select_tv 的 CheckBox（text='' = 未填；text=单词 = 已填）。之前误把序号节点
@@ -2437,7 +2438,7 @@ def _handle_word_fill(d, config):
             if d(text="检查").exists(timeout=1.2):
                 d(text="检查").click()
                 print(f"    选词填空完成，点击检查")
-                step_log("✅ 选词填空全部完成", "success")
+                step_log("选词填空已全部完成", "success")
                 time.sleep(0.8)
                 _checked = True
                 break
@@ -2463,7 +2464,7 @@ def _handle_word_fill(d, config):
         if d(text="下一题").exists(timeout=2):
             d(text="下一题").click()
             print(f"    点击下一题")
-            step_log("➡ 选词填空答完，进入下一题", "info")
+            step_log("选词填空完成，进入下一题", "info")
             time.sleep(0.8)
             return True
     except Exception:
@@ -2482,7 +2483,7 @@ def _handle_fill_blank(d, config):
     """
     import random
     print(f"    填空题，处理中...")
-    step_log("📝 补全短文/填空题：开始逐框输入", "step")
+    step_log("补全短文与填空题：开始逐框输入", "step")
 
     # 开场：确保 EditText 可见（首次进入"补全短文"题时 App 会自动激活系统键盘
     #   把方框挡住，dump 里看不到 EditText 节点；先按 back 收起键盘）
@@ -2621,7 +2622,7 @@ def _handle_fill_blank(d, config):
                     print("    ⚠ 连续填框失败（IME可能失效），止损退出填空处理")
                     break
             print(f"    填一空 ({cx},{cy}) 字={word} {'✓' if _filled else '✗'}")
-            step_log(f"  ✏ 输入: {word}", "info")
+            step_log(f"输入：{word}", "info")
             no_new_swipes = 0
             continue
 
@@ -2644,7 +2645,7 @@ def _handle_fill_blank(d, config):
         if btn:
             d(text=btn).click()
             print(f"    填空完成，点击{btn}")
-            step_log("✅ 填空全部完成", "success")
+            step_log("填空已全部完成", "success")
             time.sleep(0.8)
             _checked = True
             break
@@ -2668,7 +2669,7 @@ def _handle_fill_blank(d, config):
     if d(text="下一题").exists(timeout=2):
         d(text="下一题").click()
         print(f"    点击下一题")
-        step_log("➡ 填空答完，进入下一题", "info")
+        step_log("填空完成，进入下一题", "info")
         time.sleep(0.8)
         return True
     # 没点成"检查"或提交后无跳转 → 未成功消费本题

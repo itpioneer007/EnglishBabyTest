@@ -547,7 +547,12 @@ def get_adb():
     #   之前任何消息含"完成"就触发，导致"全部检测完成"也触发了一次重查。改成按
     #   (模块, 阶段) 维度去重 + 严格"模块完成"正则匹配。
 _detect_content_invoked: set = set()
-_DIM_INVOKED_KW = re.compile(r"^[✅⏹❌]*\s*[A-Za-z0-9一-鿿·（）()]+?\s*完成[:：]")  # 形如"巧记单词 完成："
+# ★ 2026-10-19：新文案「巧记单词检测完成，共 3 道题。」也要能触发脚本审查。
+#   同时用 [1-9]\d* 排除 0 题——没题的模块拿脚本比对毫无意义，只会刷日志。
+_DIM_INVOKED_KW = re.compile(
+    r"^(?:[A-Za-z0-9一-鿿·（）()]+\s*完成[:：])"                    # 旧格式「巧记单词 完成：」
+    r"|^(?:[A-Za-z0-9一-鿿·（）()]+\s*检测完成，共\s*[1-9]\d*\s*道题)"  # 新格式 module_done()
+)
 def _detect_content_dimension(module: str = ""):
     """自动补充内容检查（LLM 批量知识性审查）
 
@@ -800,10 +805,34 @@ def _strip_traceback_from_log(msg):
     return head + "（详细技术信息已写入服务端日志）"
 
 
+def _humanize_log(msg):
+    """清掉 emoji / 裸异常 / 调试坐标等只对开发者有意义的内容。
+
+    与 _strip_traceback_from_log 分工：
+      - 那个管「调用栈」这种大块技术片段；
+      - 这个管「一句人话里挂着的技术尾巴」（`巡检失败: KeyError('x')`）。
+    两者都只是把前端那句改干净，原文照旧 print 到 server_output.log。
+    """
+    if not isinstance(msg, str) or not msg:
+        return msg
+    try:
+        from common.user_msg import clean_log_text
+    except Exception:
+        try:
+            from user_msg import clean_log_text
+        except Exception:
+            return msg
+    try:
+        out = clean_log_text(msg)
+    except Exception:
+        return msg
+    return out or msg
+
+
 def log_msg(msg: str, level: str = "info", evidence: list = None):
     """添加日志, 可选附带结构化证据(审查差异高亮展示)"""
     _raw_msg = msg
-    msg = _strip_traceback_from_log(msg)
+    msg = _humanize_log(_strip_traceback_from_log(msg))
     entry = {
         "time": datetime.now().strftime("%H:%M:%S"),
         "msg": msg,
@@ -868,7 +897,9 @@ def log_msg(msg: str, level: str = "info", evidence: list = None):
             #     不可能用"括号结构"去描述它 → 改成契约式匹配：
             #       「行首是第N[大]题·第M小题」+「消息里出现"检查"」
             #     题号提取与题干文本彻底解耦，对任意题干/任意模块都成立。
-            m = re.match(r"\s*(?:第(\d+)大题·)?第(\d+)(?:题|小题)", msg)
+            # ★ 2026-10-19：题号与「题/小题」之间允许空格（新文案统一写成「第 3 题：」），
+            #   否则逐题证据全部定位失败 → 审查结果里凭空少题。
+            m = re.match(r"\s*(?:第\s*(\d+)\s*大题[·\-]?)?第\s*(\d+)\s*(?:题|小题)", msg)
             if m and "检查" in msg:
                 _big = int(m.group(1)) if m.group(1) else None
                 qidx = int(m.group(2))
@@ -876,7 +907,9 @@ def log_msg(msg: str, level: str = "info", evidence: list = None):
             elif "检查" in msg:
                 # 带着证据、又明说"检查"，却定位不到题号 → 必须暴露，
                 # 不能再像旧版那样静默丢弃（用户只会看到"少了几题"）
-                log_msg(f"⚠ 逐题证据未入库（无法从日志定位题号）: {msg.strip()[:60]}",
+                # 前端只给现象；原始消息进服务端日志，便于排查是哪个模块的文案不规范。
+                print(f"[证据未归位] 无法从日志定位题号: {msg.strip()[:120]}")
+                log_msg("有一道题的检查证据未能归位到题目卡片，该题结论可能缺失（技术信息已写入服务端日志）",
                         "warning")
         except Exception as _e_ev:
             log_msg(f"⚠ 逐题证据入库异常: {str(_e_ev)[:120]}", "warning")
@@ -885,7 +918,9 @@ def log_msg(msg: str, level: str = "info", evidence: list = None):
     #   触发条件：消息含"第N题 答错截图"且 evidence 带 type="wrong_shot" + screenshot 文件名
     if evidence and isinstance(evidence, list) and evidence:
         try:
-            m = re.match(r"\s*(?:第(\d+)大题·)?第(\d+)(?:题|小题)\s*答错截图", msg)
+            m = re.match(
+                r"\s*(?:第\s*(\d+)\s*大题[·\-]?)?第\s*(\d+)\s*(?:题|小题)"
+                r"\s*[：:]?\s*(?:答错截图|作答错误)", msg)
             if m:
                 qidx = int(m.group(2))
                 shot = ""
@@ -1078,7 +1113,7 @@ def run_login_task():
         time.sleep(2)
 
         adb.screenshot("login_done.png")
-        log_msg("✅ 登录完成！", "success")
+        log_msg("登录完成", "success")
         update_progress(6, 6, "登录成功")
 
     except SystemExit:
@@ -1301,7 +1336,7 @@ def run_full_task(version: str, grade: str, modules: list):
             adb.press_back(); time.sleep(1.5)
             adb.tap(*AD_CLOSE); time.sleep(1)
 
-        log_msg(f"✅ 完成! {version} {grade} {len(modules)}模块", "success")
+        log_msg(f"版本与年级已切换：{version} {grade}，共 {len(modules)} 个模块", "success")
         adb.screenshot("99_complete.png")
 
     except SystemExit:
@@ -1482,7 +1517,7 @@ def run_grade_scan_task():
             log_msg(f"  返回首页 ({cur}/{total})")
             update_progress(cur, total, "返回首页")
 
-        log_msg(f"✅ 全流程完成！版本={version}, 年级={grade}, 模块={len(modules)}个", "success")
+        log_msg(f"全流程结束：版本 {version}，年级 {grade}，共 {len(modules)} 个模块", "success")
         adb.screenshot("99_complete.png")
 
     except SystemExit:
@@ -1601,7 +1636,7 @@ def run_inspect_loop():
             time.sleep(1.5)
 
             if cur >= 40:
-                log_msg("✅ 40题完成!", "success")
+                log_msg("已完成 40 道题", "success")
                 break
 
         # 6. 保存报告
@@ -1844,7 +1879,7 @@ def run_quick_inspect_task(docx_file: str = "", unit: int = 0):
                 cur = new_cur
                 total_q = new_total or total_q
                 if new_cur >= (total_q or 40):
-                    log_msg(f"✅ {new_cur}题完成!", "success")
+                    log_msg(f"已完成 {new_cur} 道题", "success")
                     break
             else:
                 last += 1
@@ -2705,7 +2740,7 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
 
         log_msg(f"  APP当前: {current_grade or '未知'} | 用户期望: {target_grade or '未知'}")
         if current_grade and target_grade and current_grade != target_grade:
-            log_msg(f"  ⚠ 版本不匹配! 需要切换到 {target_grade}", "warning")
+            log_msg(f"版本不匹配，需要切换到 {target_grade}", "warning")
             record_step("3.5版本检查", "running", f"切换 {current_grade} → {target_grade}")
             for e in elements:
                 if current_grade in (e.text or ''):
@@ -2968,7 +3003,7 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
             # 先检查是否已经在考题页
             in_question = any(re.match(r'^\d+/\d+$', (e.text or "").strip()) for e in elements)
             if in_question:
-                log_msg("  已在考题页!", "success")
+                log_msg("已在答题页", "success")
                 break
             # 找"开始答题"/"去答题"按钮
             found_btn = False
@@ -3212,7 +3247,7 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
 
             # 完成
             if cur >= total_q:
-                log_msg(f"✅ 全部 {total_q} 题完成!", "success")
+                log_msg(f"全部 {total_q} 道题已完成", "success")
                 record_step("6.逐题巡检", "done", f"完成 {len(questions_reviewed)}/{total_q}")
                 record_step("7.生成报告", "running", "")
                 break
@@ -3225,7 +3260,7 @@ def run_listening_inspect(version_label: str, unit: int, stage: str, docx_file: 
 
         if not keep_running:
             set_done()
-        log_msg(f"✅ 听力专项巡检完成! {len(questions_reviewed)}题", "success")
+        log_msg(f"听力专项巡检完成：共 {len(questions_reviewed)} 道题", "success")
 
     except SystemExit:
         log_msg("⏹ 任务已被立即停止", "warning")
@@ -5058,7 +5093,7 @@ def run_quick_inspect_task(docx_file: str = "", unit: int = 0):
                 cur = new_cur
                 total_q = new_total or total_q
                 if new_cur >= (total_q or 40):
-                    log_msg(f"✅ {new_cur}题完成!", "success")
+                    log_msg(f"已完成 {new_cur} 道题", "success")
                     break
             else:
                 last += 1
@@ -5950,7 +5985,10 @@ def api_audio_run():
                 q2 = run_test_module(d)
                 log_msg(f"测试部分完成: {q2} 题")
 
-            log_msg(f"✅ 听力专项全部完成: 练习{q1} + 测试{q2} = {q1+q2} 题")
+            _q_all = int(q1 or 0) + int(q2 or 0)
+            log_msg(f"听力专项检测完成：练习 {q1} 道、测试 {q2} 道，合计 {_q_all} 道" if _q_all
+                    else "听力专项未检测到题目：练习与测试均已遍历，App 内未出现可检测的题目，不计为检测完成",
+                    "success" if _q_all else "warning")
             set_done()
         except SystemExit:
             log_msg("⏹ 任务已被立即停止", "warning")
@@ -6005,7 +6043,9 @@ def api_oral_run():
             log_msg("年级确认: 湘少版 五年级上册" if ok else "⚠ 年级切换失败，继续尝试")
 
             q = run_module(d)
-            log_msg(f"✅ 口语训练完成: {q} 题")
+            log_msg(f"口语训练检测完成：共 {q} 道题" if int(q or 0) > 0
+                    else "口语训练未检测到题目：本次已完整遍历该模块，App 内未出现可检测的题目，不计为检测完成",
+                    "success" if int(q or 0) > 0 else "warning")
             set_done()
         except SystemExit:
             log_msg("⏹ 任务已被立即停止", "warning")
@@ -6063,7 +6103,9 @@ def api_unit_run():
                 log_msg(f"年级确认: {_v or '湘少版'} {_g}" if ok else "⚠ 年级切换失败，继续尝试")
 
             q = run_module(d, units=units)
-            log_msg(f"✅ 单元自检完成: {q} 题")
+            log_msg(f"单元自检检测完成：共 {q} 道题" if int(q or 0) > 0
+                    else "单元自检未检测到题目：本次已完整遍历该模块，App 内未出现可检测的题目，不计为检测完成",
+                    "success" if int(q or 0) > 0 else "warning")
             set_done()
         except SystemExit:
             log_msg("⏹ 任务已被立即停止", "warning")
@@ -6117,7 +6159,9 @@ def api_knowledge_run():
             log_msg("年级确认: 湘少版 五年级上册" if ok else "⚠ 年级切换失败，继续尝试")
 
             q = run_module(d)
-            log_msg(f"✅ 知识过关完成: {q} 题")
+            log_msg(f"知识过关检测完成：共 {q} 道题" if int(q or 0) > 0
+                    else "知识过关未检测到题目：本次已完整遍历该模块，App 内未出现可检测的题目，不计为检测完成",
+                    "success" if int(q or 0) > 0 else "warning")
             set_done()
         except SystemExit:
             log_msg("⏹ 任务已被立即停止", "warning")
@@ -6173,7 +6217,9 @@ def api_voice_run():
             # ★ 语音评测内部处理版本/年级：主页当前版本+传入期望值兜底
             r = run_module(d, units=_units,
                            expected_grade=_grade, expected_version=_version)
-            log_msg(f"✅ 语音评测完成: {r} 个单元")
+            log_msg(f"语音评测检测结束：共完成 {r} 个单元" if int(r or 0) > 0
+                    else "语音评测未检测到题目：本次已完整遍历该模块，App 内未出现可检测的题目，不计为检测完成",
+                    "success" if int(r or 0) > 0 else "warning")
             set_done()
         except SystemExit:
             log_msg("⏹ 任务已被立即停止", "warning")
@@ -6226,7 +6272,9 @@ def api_qiaoji_run():
             log_msg("年级确认: 湘少版 五年级上册" if ok else "⚠ 年级切换失败，继续尝试")
 
             q = run_module(d)
-            log_msg(f"✅ 巧记单词完成: {q} 题")
+            log_msg(f"巧记单词检测完成：共 {q} 道题" if int(q or 0) > 0
+                    else "巧记单词未检测到题目：本次已完整遍历该模块，App 内未出现可检测的题目，不计为检测完成",
+                    "success" if int(q or 0) > 0 else "warning")
             set_done()
         except SystemExit:
             log_msg("⏹ 任务已被立即停止", "warning")
@@ -7147,8 +7195,8 @@ def api_modules_run():
                 from common.user_msg import human_error as _human_err
                 _hl, _act, _tech = _human_err(e)
             except Exception:
-                _hl, _act, _tech = "整轮检测中断", "请把这条日志发给维护人员，修好后重跑。", str(e)
-            log_msg(f"❌ 整轮检测中断：{_hl}", "error")
+                _hl, _act, _tech = "整轮检测中断", "请将本页日志与服务端日志一并提交给维护人员，修复后重新开始检测。", str(e)
+            log_msg(f"整轮检测中断：{_hl}", "error")
             log_msg(f"　　处理建议：{_act}", "info")
             print(f"[整轮中断] {_tech}")
             _LAST_MODULES_RESULT = {

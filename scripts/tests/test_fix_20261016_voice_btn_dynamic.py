@@ -204,7 +204,7 @@ print("T9 兜底仍在：定位失败时退回 S() 比例换算（且留 warning
 print("=" * 74)
 chk("record_layout 兜底 S(d, *BTN_RECORD_LAYOUT)", "S(d, *BTN_RECORD_LAYOUT)" in _src)
 chk("speech_btn_confirm 兜底 S(d, *BTN_CONFIRM_REPORT)", "S(d, *BTN_CONFIRM_REPORT)" in _src)
-chk("兜底路径有 step_log warning 留痕", _src.count("退回比例换算坐标") >= 2)
+chk("兜底路径有 step_log warning 留痕", _src.count("改为按屏幕比例定位") >= 2)
 
 print()
 print("=" * 74)

@@ -25,7 +25,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import uiautomator2 as u2
-from common.logger import step_log
+from common.logger import step_log, module_done
 from common.tools import (
     S, S_swipe, S_h, S_w,
     close_ad, dismiss_global_popups, ensure_grade, back_to_home, scroll_and_find,
@@ -197,7 +197,7 @@ def _test_answer_loop(d, max_q=45):
         if not xml_now:
             _blank += 1
             if _blank >= 5:
-                step_log(f"⚠ dump 连续失败 {_blank} 次，退出", "error")
+                step_log(f"连续 {_blank} 次无法读取页面内容，本模块检测中断", "error")
                 return q
             continue
 
@@ -215,7 +215,7 @@ def _test_answer_loop(d, max_q=45):
         if 'text="练习报告"' in xml_now:
             d(text="练习报告").click()
             print("      → 练习报告（本轮结束）")
-            step_log(f"📊 练习报告（本轮结束，共{q}题）", "success")
+            step_log(module_done("听力专项·练习", q))
             time.sleep(0.8)
             # 报告页 → 继续练习/back 退出
             if d(textContains="继续练习").exists(timeout=1.5):
@@ -226,7 +226,7 @@ def _test_answer_loop(d, max_q=45):
         if 'text="查看报告"' in xml_now:
             d(text="查看报告").click()
             print("      → 查看报告！测试完成")
-            step_log(f"📊 测试完成，共{q}题", "success")
+            step_log(module_done("听力专项·测试", q))
             time.sleep(0.8)
             return q
         # 答错后"下一题" → 点它
@@ -257,7 +257,7 @@ def _test_answer_loop(d, max_q=45):
                 print(f"      ⚠ 答错截图失败: {_e}")
             d(text="下一题").click()
             print("      → 下一题(答错)")
-            step_log(f"  第{q+1}题 答错截图", "warning",
+            step_log(f"第 {q+1} 题：作答错误，已截图", "warning",
                      evidence=[{"field": "错题截图", "type": "wrong_shot",
                                 "screenshot": _wrong_shot}] if _wrong_shot else None)
             # ★ 竞态修复：等新题加载（"下一题"消失 或 出现选项/录音/查看报告），
@@ -342,7 +342,7 @@ def _test_answer_loop(d, max_q=45):
                 else:
                     time.sleep(0.8)
                 xml_now = d.dump_hierarchy() if d else ""
-                step_log(f"  第{q+1}题 完整性检查", "info",
+                step_log(f"第 {q+1} 题：完整性检查", "info",
                          collect_ui_evidence(xml_now, qtype="听力专项测试"))
                 _ev_q = q
             except Exception:
@@ -388,13 +388,13 @@ def _test_answer_loop(d, max_q=45):
                     _handle_sort_question(d, {})   # 方框排序 模式B
             q += 1
             _idle = 0
-            step_log(f"  第{q}题(排序): 处理完毕 → 检查 (总题数 {total_q})", "info")
+            step_log(f"第 {q} 题（排序题）：处理完毕，执行检查；累计 {total_q} 道", "info")
             # 排序可能是最后一题 → 查看报告（界面已被排序处理点击过，需重新 dump；
             #   轮询最多 ~1.6s，等价原 exists(1.5) 但用字符串匹配更快）
             for _r in range(4):
                 if 'text="查看报告"' in d.dump_hierarchy():
                     d(text="查看报告").click()
-                    step_log(f"📊 测试完成，共{q}题", "success")
+                    step_log(module_done("听力专项·测试", q))
                     time.sleep(0.8)
                     return q
                 time.sleep(0.4)
@@ -437,7 +437,7 @@ def _test_answer_loop(d, max_q=45):
             _collect_test_q(d, xml_now, q, answer=opt)
             d.click(*opt_xy) if opt_xy else d(text=opt).click()
             print(f"      → 选 {opt}")
-            step_log(f"  第{q}题: 选 {opt} → 检查", "info")
+            step_log(f"第 {q} 题：选择 {opt}，执行检查", "info")
             time.sleep(0.15)
             # 等检查出现（★ 提速：缩短轮询间隔，通常首轮即命中）
             for _ in range(6):
@@ -489,7 +489,7 @@ def _test_answer_loop(d, max_q=45):
             # ★ 2026-09-15 图片题也进解析脚本：题干/选项/答案由视觉模型识别补全
             _collect_test_q(d, xml_now, q, answer="", image_path=_img_saved)
             print(f"      → 选 图片选项 (CheckBox)")
-            step_log(f"  第{q}题: 选图片选项 → 检查", "info")
+            step_log(f"第 {q} 题：选择图片选项，执行检查", "info")
             time.sleep(0.15)
             for _ in range(6):
                 if d(text="检查").exists(timeout=0.15):
@@ -519,11 +519,11 @@ def _test_answer_loop(d, max_q=45):
                 or 'text="查看报告"' in d.dump_hierarchy()):
             d(text="查看报告").click()
             print("      → 查看报告！测试完成")
-            step_log(f"📊 测试完成，共{q}题", "success")
+            step_log(module_done("听力专项·测试", q))
             time.sleep(0.8)
             return q
         if 'text="完成"' in xml_now or 'text="提交"' in xml_now:
-            step_log(f"📊 测试结束信号（完成/提交），共{q}题", "success")
+            step_log(module_done("听力专项·测试", q, "App 已返回完成或提交状态"))
             return q
         # ★ 异常页恢复（实测 web 运行曾在 Q1 连续 12 轮"无选项"退出 0 题）：
         #   ① 系统验证弹窗（点到广告触发，safecenter）→ back 退出 + 清广告；
@@ -561,13 +561,13 @@ def _test_answer_loop(d, max_q=45):
             #   多等几轮再退出（用户反馈：测试答题界面 T/F 按钮有时延迟出现）
             _qno_m = re.search(r"\d+/\d+", _no_opt_text)
             if _qno_m:
-                step_log(f"⚠ 答题页选项未渲染（{_idle}轮，题号 {_qno_m.group(0)}），继续等待…", "warning")
+                step_log(f"第 {_qno_m.group(0)} 题选项尚未渲染，已等待 {_idle} 轮，继续等待", "warning")
                 if _idle >= 25:
-                    step_log(f"⚠ 连续 {_idle} 轮无有效选项，退出", "warning")
+                    step_log(f"连续 {_idle} 轮未读取到有效选项，本模块检测中断", "warning")
                     return q
                 time.sleep(2.0)
                 continue
-            step_log(f"⚠ 连续 {_idle} 轮无有效选项（可能停在非答题页/最后一题未识别），退出", "warning")
+            step_log(f"连续 {_idle} 轮未读取到有效选项，可能已不在答题页，本模块检测中断", "warning")
             return q
         print(f"    ⚠ 无选项({_idle}): {_no_opt_list[:6]}")
         time.sleep(0.4)
@@ -659,7 +659,7 @@ def run_test_module(d, test_units=None):
             if _test_coll is not None:
                 _p = _test_coll.finish_unit(unit=unit_num)
                 if _p:
-                    step_log(f"📄 已生成解析脚本: {os.path.basename(_p)}（可在「审查脚本」区下载）",
+                    step_log(f"已生成解析脚本 {os.path.basename(_p)}，可在「审查脚本」区下载",
                              "success")
         except Exception as _e:
             print(f"  ⚠ 生成脚本失败: {_e}")

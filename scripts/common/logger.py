@@ -84,8 +84,34 @@ def should_stop():
             pass
     return False
 
+_cleaner = None
+
+def _clean_for_user(msg):
+    """懒加载 user_msg.clean_step_text（避免循环 import），失败则原样返回。"""
+    global _cleaner
+    if _cleaner is None:
+        try:
+            from common.user_msg import clean_step_text as _f
+        except Exception:
+            try:
+                from user_msg import clean_step_text as _f
+            except Exception:
+                _f = None
+        _cleaner = _f if _f else (lambda x: x)
+    try:
+        return _cleaner(msg)
+    except Exception:
+        return msg
+
+
 def step_log(msg, level="info", evidence=None):
-    """模块内部打流程日志 → 前端实时可见; evidence=结构化审查证据(差异高亮)"""
+    """模块内部打流程日志 → 前端实时可见; evidence=结构化审查证据(差异高亮)
+
+    ★ 2026-10-19：出口统一清洗（去 emoji / 坐标 / 异常 repr）。
+      前端日志的读者是「用这个工具测 App 的人」，不是写代码的人；
+      模块里即便残留图标或机器痕迹，也不会漏到使用者眼前。
+    """
+    msg = _clean_for_user(msg)
     if _log_callback:
         # ★ 2026-09-20：区分 None 与 []
         #   None = 调用方没提供证据（普通流程日志，不是一道题）
@@ -103,3 +129,24 @@ def step_log(msg, level="info", evidence=None):
             print(f"    [{level}] {msg}")
         except UnicodeEncodeError:
             print(f"    [{level}] {msg.encode('gbk', errors='replace').decode('gbk')}")
+
+
+def module_done(module, q, extra=""):
+    """模块跑完时的结算日志 —— 0 题一律记「未检测到题目」，不写「完成」。
+
+    旧写法散落在各模块：`step_log(f"XX完成，共{q}题", "success")`，
+    q=0 时也打 success，前端于是汇总出「5 个模块检测完成、累计 0 题」。
+    统一走 user_msg.module_log()，三态口径只有一个出口。
+    """
+    try:
+        from common.user_msg import module_log
+    except Exception:
+        try:
+            from user_msg import module_log
+        except Exception:
+            module_log = None
+    if module_log is None:
+        step_log(f"{module}结束，共{int(q or 0)}道题", "success" if int(q or 0) > 0 else "warning")
+        return
+    text, level = module_log(module, q, extra)
+    step_log(text, level)

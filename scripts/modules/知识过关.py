@@ -134,7 +134,7 @@ def _answer_loop(d, max_q=120):
                         break
                 time.sleep(0.8)   # ★ 题干渲染稳定（首题可更长，这里统一 0.8s）
                 _xml_ev = d.dump_hierarchy()
-                step_log(f"  第{q+1}题 完整性检查", "info",
+                step_log(f"第 {q+1} 题：完整性检查", "info",
                          collect_ui_evidence(_xml_ev, qtype="知识过关"))
                 _ev_q = q
             except Exception:
@@ -708,7 +708,7 @@ def run_module(d, units=None):
             if _coll is not None:
                 _script_path = _coll.finish_unit(unit=unit_num)
                 if _script_path:
-                    step_log(f"📄 已生成解析脚本: {os.path.basename(_script_path)}（可在「审查脚本」区下载）", "success")
+                    step_log(f"已生成解析脚本 {os.path.basename(_script_path)}，可在「审查脚本」区下载", "success")
         except Exception as _e:
             print(f"  ⚠ 生成脚本失败: {_e}")
         # back 回主页

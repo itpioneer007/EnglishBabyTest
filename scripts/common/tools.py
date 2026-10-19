@@ -421,7 +421,7 @@ def settle_ads(d, wait_total=10):
             if _round <= 3:
                 try:
                     from common.logger import step_log
-                    step_log(f"🧹 已关闭弹窗/广告（第{_round}轮）", "info")
+                    step_log(f"已关闭弹窗与广告（第 {_round} 轮）", "info")
                 except Exception:
                     pass
             time.sleep(0.5)

@@ -88,7 +88,7 @@ def check_paper_header(d, module_name: str = "", expect_title: str = ""):
         ans = _ask(llm, prompt, shot)
         passed = bool(ans and "通过" in ans and "不通过" not in ans)
         step_log(
-            f"📋 试卷首页检查: {'通过' if passed else '⚠ 发现问题'} | {ans[:200] if ans else 'LLM无返回'}",
+            f"试卷首页检查：{'通过' if passed else '未通过，发现问题'}。{ans[:200] if ans else '模型未返回内容'}",
             "info" if passed else "warning",
         )
         print(f"    [试卷首页检查] {'✅' if passed else '⚠'}: {(ans or '')[:120]}")
@@ -123,7 +123,7 @@ def check_report_page(d, module_name: str = ""):
         ans = _ask(llm, prompt, shot)
         passed = bool(ans and "通过" in ans and "不通过" not in ans)
         step_log(
-            f"📊 报告页核对: {'通过' if passed else '⚠ 发现问题'} | {ans[:200] if ans else 'LLM无返回'}",
+            f"报告页核对：{'通过' if passed else '未通过，发现问题'}。{ans[:200] if ans else '模型未返回内容'}",
             "info" if passed else "warning",
         )
         print(f"    [报告页核对] {'✅' if passed else '⚠'}: {(ans or '')[:120]}")
@@ -156,7 +156,7 @@ def check_score_display(d, expect_score: str = ""):
         ans = _ask(llm, prompt, shot)
         passed = bool(ans and "通过" in ans and "不通过" not in ans)
         step_log(
-            f"📏 分值检查: {'通过' if passed else '⚠ 分值异常'} | {ans[:200] if ans else 'LLM无返回'}",
+            f"分值检查：{'通过' if passed else '分值异常'}。{ans[:200] if ans else '模型未返回内容'}",
             "info" if passed else "warning",
         )
         return passed

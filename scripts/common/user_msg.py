@@ -11,12 +11,119 @@
   4. **语气对齐常规 App 报错**：第三人称陈述现象，随后给出处理建议；
      不用「你看一眼」「用不了」「一台都找不到」这类口语，也不用感叹号。
 
-对外只暴露四个函数：
+对外函数：
   human_error(exc, module)   → (现象说明, 处理建议, 技术细节)
   human_units(units)         → "单元：全部单元" / "单元：听力专项 U2、U4"
   status_of(result)          → "ok" | "empty" | "failed"
   summary_text(results)      → 本轮结算的一句话（含 0 题警示）
+  module_log(module, q)      → (模块结束的那句话, 日志级别)
+  clean_step_text(text)      → 清掉 emoji / 坐标 / 异常串等机器痕迹
 """
+
+import re
+
+# ============================================================
+# 模块层文案清洗（step_log 的唯一出口调用它）
+# ============================================================
+# ★ 2026-10-19 用户定调：「不需要特别口语化，就和正常 app 报错一样……
+#   以第三人称讲述」。模块里的 step_log 是使用者直接看的流程日志，
+#   因此不允许出现 emoji 图标、控件坐标、异常类名、内部变量名。
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001F000-\U0001FAFF"   # 图形符号（📖 📊 🎤 🎯 🎮 🏫 🏁 📄 ...）
+    "\U00002600-\U000027BF"   # ✅ ❌ ⚠ ✏ ✔ ✘ ★
+    "\U00002B00-\U00002BFF"   # ⭐ ⬇
+    "\U00002300-\U000023FF"   # ⏹ ⏳ ⏭
+    "\U000025A0-\U000025FF"   # ▶ ◀ ●
+    "\U00002190-\U000021FF"   # ← → ↔ ↩ ↺ ⇒
+    "\U00002500-\U0000257F"   # ─ │ ├ └ ═ ═
+    "\U0000FE0F\U000020E3"    # 变体选择符 / 键帽
+    "]+"
+)
+# 控件坐标：@(540,1200) —— 使用者看不出意义，只暴露实现细节
+_COORD_RE = re.compile(r"\s*@\(\s*-?\d+\s*,\s*-?\d+\s*\)")
+# 括号里的 Python 异常 repr：（KeyError: 'x'）/（TimeoutError）
+_EXC_IN_PAREN_RE = re.compile(
+    r"[（(]\s*(?:[A-Za-z_]+\.)*[A-Z][A-Za-z_]*(?:Error|Exception|Timeout)[^（）()]*[）)]"
+)
+# 连续空白
+_WS_RE = re.compile(r"[ \t]{2,}")
+# 日志尾巴上的裸异常：`登录失败: KeyError('x')` / `: URLError(...)`
+#   —— 使用者只需要知道"失败了"，异常类型与消息属于技术细节（服务端日志里有原文）。
+_EXC_TAIL_RE = re.compile(
+    r"[:：]\s*(?:[A-Za-z_][\w.]*(?:Error|Exception|Timeout|Warning)\b.*"
+    r"|\['.*$)", re.S)
+# 调试用的屏幕坐标：`at (540, 1200)` / `at 540,1200`
+_AT_COORD_RE = re.compile(r"\s+at\s+\(?\s*-?\d+\s*,\s*-?\d+\s*\)?")
+# 置信度等调试字段：`(conf=0.87)`
+_DEBUG_FIELD_RE = re.compile(r"\s*\((?:conf|rid|id|idx)=[^)]*\)")
+
+
+# 括号里的内部字段名：（卡片 rid）/（resource-id / xpath / bounds）
+_BRACKET_TECH_RE = re.compile(
+    r"[（(][^）()]*\b(?:rid|resource-id|resourceId|xpath|bounds|selector)\b[^）()]*[）)]",
+    re.I)
+
+
+def clean_step_text(text) -> str:
+    """把模块日志清成「给使用者看的一句话」。
+
+    只做确定性清理，不改语义：
+      1. 去掉 emoji / 装饰符号（用户明确要求前端不出现图标）；
+      2. 去掉 `@(x,y)` 控件坐标；
+      3. 去掉括号里的异常 repr（`（KeyError: 'x'）`）；
+      4. 折叠多余空白，去掉行首缩进。
+    真正的措辞问题（0 题却写「完成」、口语化）由各模块源码改，不靠这里兜。
+    """
+    s = str(text if text is not None else "")
+    s = _EMOJI_RE.sub("", s)
+    s = _COORD_RE.sub("", s)
+    s = _EXC_IN_PAREN_RE.sub("", s)
+    s = _BRACKET_TECH_RE.sub("", s)
+    s = _WS_RE.sub(" ", s)
+    s = s.replace("\u200b", "").replace("\ufeff", "")
+    return s.strip()
+
+
+def clean_log_text(text) -> str:
+    """web_server.log_msg 出口用的强化清洗（在 clean_step_text 之上）。
+
+    额外处理三类「只有写代码的人才看得懂」的残渣：
+      - 行尾裸异常：`巡检失败: KeyError('x')` → `巡检失败`；
+      - 调试坐标：`at (540, 1200)` → 删除；
+      - 调试字段：`(conf=0.87)` → 删除。
+    异常原文仍由 log_msg 打印到 server_output.log，排查时不受影响。
+    """
+    s = clean_step_text(text)
+    s = _EXC_TAIL_RE.sub("", s)
+    s = _AT_COORD_RE.sub("", s)
+    s = _DEBUG_FIELD_RE.sub("", s)
+    return s.strip().rstrip("：:，,；;")
+
+
+# ============================================================
+# 模块结束 → 三态结算文案
+# ============================================================
+def module_log(module: str, q, extra: str = ""):
+    """模块跑完时该写的那句话，返回 (文案, 日志级别)。
+
+    核心约束（试用反馈的根因）：**0 题不是完成**。
+    旧代码无论 q 是几都写「XXX完成，共0题」+ success，
+    前端于是出现「5 个模块检测完成、累计 0 题」这种自相矛盾的结论。
+    """
+    name = str(module or "").strip() or "本模块"
+    try:
+        q = int(q or 0)
+    except Exception:
+        q = 0
+    tail = clean_step_text(extra or "")
+    if q > 0:
+        text = f"{name}检测完成，共检测到 {q} 道题"
+        return ((text + (f"；{tail}" if tail else "") + "。"), "success")
+    text = "本次已完整遍历该模块，App 内未出现可检测的题目，不计入检测结果"
+    if tail:
+        text += f"（{tail}）"
+    return (f"{name}未检测到题目：{text}。", "warning")
 
 _STATUS_OK = "ok"          # 真的测到了题
 _STATUS_EMPTY = "empty"    # 跑完了，但一道题都没有 → 不算检测完成
