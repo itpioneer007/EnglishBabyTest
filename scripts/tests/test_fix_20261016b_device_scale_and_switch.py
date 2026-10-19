@@ -225,7 +225,8 @@ try:
     chk("目标不可达 → ok=False", _ok is False)
     chk("信息含目标串号", "127.0.0.1:16384" in _msg, _msg)
     chk("信息含当前在线设备（告诉人该切到哪台）", "SKSCIF4T7PFMQS5X" in _msg, _msg)
-    chk("信息给了处置动作（启动/切换设备）", ("启动" in _msg and "切换" in _msg), _msg)
+    chk("信息给了处置动作（连接设备/切换设备）",
+        ("连接设备" in _msg or "USB" in _msg) and "切换" in _msg, _msg)
     # 正向：可达时不拦
     ws.refresh_device_scale = lambda serial="", reason="": {
         "serial": "S", "resolution": [1080, 2400], "scale": [1.0, 1.0], "ok": True}

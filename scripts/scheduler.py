@@ -59,7 +59,7 @@ def _stage_log(label: str, q: int):
     if q > 0:
         step_log(f"✅ {label} 检测完成：{q} 题", "success")
     else:
-        step_log(f"⚠ {label} 没有题目可测（0 题），未计入检测结果", "warning")
+        step_log(f"⚠ {label} 未检测到题目（0 题），不计入检测结果", "warning")
 
 
 def _wait_home_ready(d, timeout=25):
@@ -114,9 +114,9 @@ def _switch_if_needed(d, version, grade):
             except Exception:
                 pass
             time.sleep(2)
-    step_log(f"❌ 版本/年级没切到「{version} {grade}」，本轮已中止"
-             f"（不拿错年级的结果冒充检测结论）", "error")
-    step_log("　　→ 怎么办：上面几条日志已写明卡在哪一步，按提示处理后再重跑。", "info")
+    step_log(f"❌ 版本/年级未切换至「{version} {grade}」，本轮已中止"
+             f"（不使用错误年级的检测结果作为结论）", "error")
+    step_log("　　处理建议：上述日志已记录中断位置，请按提示处理后重新检测。", "info")
     return False
 
 
@@ -227,8 +227,8 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
             raise RuntimeError("设备离线")
     except Exception as e:
         _hl, _act, _tech = human_error(e)
-        step_log(f"❌ 手机/模拟器用不了，本轮无法开始：{_hl}", "error")
-        step_log(f"　　→ 怎么办：{_act}", "info")
+        step_log(f"❌ 设备不可用，本轮无法开始检测：{_hl}", "error")
+        step_log(f"　　处理建议：{_act}", "info")
         print(f"[设备不可用] {_tech}")
         return {name: {"q": 0, "t": 0, "ok": False, "status": "failed",
                        "error": _hl, "error_action": _act}
@@ -259,7 +259,7 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
         #   实测日志：21:25:05 重启 App → 21:25:10 切年级 → ✘ 无法回到主页（仅隔 5s）。
         #   改为轮询等待主页特征就绪（最多 25s），就绪后才继续。
         if not _wait_home_ready(d, timeout=25):
-            step_log("⚠ App 启动 25s 内未回到主页（可能被开屏广告/系统弹窗遮挡），仍尝试继续",
+            step_log("⚠ App 启动 25 秒内未进入首页（可能被开屏广告或系统弹窗遮挡），将继续尝试",
                      "warning")
     except Exception as e:
         step_log(f"⚠ App 重启异常: {e}", "error")
@@ -295,8 +295,8 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
         if name not in MODULE_MAP:
             print(f"未知模块: {name}（可选: {list(MODULE_MAP.keys())}）")
             results[name] = {"q": 0, "t": 0, "ok": False, "status": "failed",
-                             "error": "程序里没有这个模块，无法检测"}
-            step_log(f"❌ {name} 没有测成：程序里没有这个模块", "error")
+                             "error": "当前版本不支持该模块，无法检测"}
+            step_log(f"❌ {name} 无法检测：当前版本不支持该模块", "error")
             continue
 
         # 该模块的单元范围（未指定 → None = 默认全部）
@@ -384,13 +384,13 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
                 step_log(f"✅ {name} 检测完成：{q} 题，用时 {elapsed} 秒", "success")
             else:
                 step_log(
-                    f"⚠ {name} 没有题目可测（0 题）：这个模块从头走到尾，App 里没有出现任何"
-                    f"可检测的题目，**不算检测完成**。如果 App 里这个模块确实有题目，"
-                    f"说明进入或翻页失败，请重跑该模块。", "warning")
+                    f"⚠ {name} 未检测到题目（0 题）：该模块已完整遍历，App 内未出现可检测的题目，"
+                    f"不计入检测完成。若 App 内该模块确有题目，则说明进入或翻页失败，"
+                    f"请重新检测该模块。", "warning")
                 if elapsed <= 5:
                     step_log(
-                        f"　　这次只用了 {elapsed} 秒，说明连模块入口都没进去 —— "
-                        f"请确认当前版本/年级的首页上有「{name}」这个入口；没有就取消勾选它。",
+                        f"　　本次耗时 {elapsed} 秒，模块入口可能未被进入。"
+                        f"请确认当前版本/年级的首页存在「{name}」入口；若不存在，请在模块列表中取消勾选。",
                         "info")
             # ★ 模块完成后回调（web_server 用它跑 LLM 脚本审查，不阻塞下一模块）
             if on_module_done is not None:
@@ -421,8 +421,8 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
             # ★ 2026-10-19：前端只给人话 + 下一步动作；调用栈 print 到服务端日志。
             #   旧写法把 `device 'xxx' not found [ ' File "C:\...\adb.py", line 192…`
             #   直接甩到测试员面前（试用反馈最刺眼的一条）。
-            step_log(f"❌ {name} 没有测成：{_headline}", "error")
-            step_log(f"　　→ 怎么办：{_action}", "info")
+            step_log(f"❌ {name} 检测中断：{_headline}", "error")
+            step_log(f"　　处理建议：{_action}", "info")
             print(f"[模块中断] {name} → {_tech}")
             import traceback as _tb
             _tb.print_exc()
@@ -430,9 +430,9 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
         # 模块间回到主页（★ 修复：真正 back 回主页，保证下一模块干净起点；
         #   之前只打日志不动作 → 卡顿+重启 App。不再切换年级，调度器只在开头切一次）
         if results.get(name, {}).get("status") == "failed":
-            step_log("↩ 本模块已中断，回到主页继续下一个模块…", "info")
+            step_log("↩ 本模块已中断，返回首页继续下一模块…", "info")
         else:
-            step_log("↩ 回到主页，准备下一个模块…", "info")
+            step_log("↩ 返回首页，准备下一模块…", "info")
         _back_to_home(d)
 
     # 汇总：口径统一走 user_msg（0 题不算成功，失败不说完成）

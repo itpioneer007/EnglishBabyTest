@@ -484,7 +484,7 @@ def refresh_device_scale(serial: str = "", reason: str = "", allow_substitute=No
         "reason": reason or "手动",
     }
     print(f"  [坐标缩放] 刷新（{info['reason']}）: 目标={_s}"
-          + (f"（配置目标 {_configured} 不在线，已自动替代）" if _dev["substituted"] else "")
+          + (f"（配置目标 {_configured} 不在线，已自动改用在线设备）" if _dev["substituted"] else "")
           + f" 分辨率={info['resolution']} 缩放=X{_scale_x:.3f}/Y{_scale_y:.3f}")
     return info
 
@@ -499,7 +499,7 @@ def _preflight_target_device():
         info = refresh_device_scale(reason="任务开始前预检")
     except Exception as e:
         print(f"[设备预检异常] {e}")
-        return False, "检查设备时出错了。请确认手机连着电脑、App 在首页，然后重新开始。"
+        return False, "设备检查未能完成。请确认设备已连接且 App 停留在首页，然后重新开始检测。"
     # 把最终目标写回 ANDROID_SERIAL：u2.connect() 与刚探测到的分辨率必须指向同一台，
     # 否则多设备在线时读环境变量为空会直接报 "more than one device/emulator"。
     if info.get("serial"):
@@ -523,14 +523,14 @@ def _preflight_target_device():
             online = []
     _extra = ""
     if info.get("substituted"):
-        _extra = f"（原先选的 {_cfg} 也不在线，已尝试改用 {_s}）"
-    _online_txt = ("电脑上目前能找到的设备：" + "、".join([str(x) for x in online])) \
-        if online else "电脑上现在一台设备都找不到"
+        _extra = f"（原选定设备 {_cfg} 亦不在线，已尝试改用 {_s}）"
+    _online_txt = ("当前在线设备：" + "、".join([str(x) for x in online])) \
+        if online else "当前无在线设备"
     return False, (
-        f"这台设备现在连不上：{_s}。{_extra}"
+        f"目标设备 {_s} 不可用。{_extra}"
         f"{_online_txt}。"
-        f"请先启动模拟器或插好数据线（确认手机没锁屏）；"
-        f"也可以在页面顶部把设备切换成在线的那一台，再重新开始。"
+        f"请确认设备已连接并开启 USB 调试、屏幕未锁定，"
+        f"或在页面顶部将设备切换为在线设备后重新开始检测。"
     )
 
 
@@ -1143,9 +1143,9 @@ def run_version_detect_task():
             from common.user_msg import human_error as _he
             _hl, _act, _tech = _he(e)
         except Exception:
-            _hl, _act, _tech = "读取 App 里的版本列表失败", "请确认手机连着、App 在首页，然后重试。", str(e)
-        log_msg(f"❌ 读不到版本列表：{_hl}", "error")
-        log_msg(f"　　→ 怎么办：{_act}", "info")
+            _hl, _act, _tech = ("版本列表读取失败", "请确认设备已连接且 App 停留在首页，然后重新检测。", str(e))
+        log_msg(f"❌ 版本列表读取失败：{_hl}", "error")
+        log_msg(f"　　处理建议：{_act}", "info")
         print(f"[版本检测失败] {_tech}")
     finally:
         set_done()
@@ -5447,9 +5447,9 @@ def api_grades():
             from common.user_msg import human_error as _he
             _hl, _act, _tech = _he(e)
         except Exception:
-            _hl, _act, _tech = "读取 App 里的年级列表失败", "请确认手机连着、App 在首页，然后重试。", str(e)
-        log_msg(f"❌ 读不到年级列表：{_hl}", "error")
-        log_msg(f"　　→ 怎么办：{_act}", "info")
+            _hl, _act, _tech = ("年级列表读取失败", "请确认设备已连接且 App 停留在首页，然后重新检测。", str(e))
+        log_msg(f"❌ 年级列表读取失败：{_hl}", "error")
+        log_msg(f"　　处理建议：{_act}", "info")
         print(f"[年级检测失败] {_tech}")
         return jsonify({"error": f"{_hl}。{_act}", "grades": []})
 
@@ -6896,28 +6896,35 @@ def api_modules_run():
         _scale_info = refresh_device_scale(_cur_serial, reason="多模块检测开始前",
                                            allow_substitute=False)
         if _dev_pick.get("substituted"):
-            log_msg(f"⚠ 首选设备 {_configured or '(未指定)'} 现在不在线，本轮自动改用在线设备 "
+            log_msg(f"⚠ 首选设备 {_configured or '(未指定)'} 当前不在线，本轮改用在线设备 "
                     f"{_cur_serial or '(未指定)'}", "warning")
         if _cur_serial:
             _set_dev(_cur_serial)      # u2.connect() 与实际操作目标保持一致
         if not _dev_ok(_cur_serial or None):
             _online = _dev_pick.get("online") or []
-            _online_txt = ("电脑上目前能找到的设备：" + "、".join([str(x) for x in _online])) \
-                if _online else "电脑上现在一台设备都找不到"
-            log_msg(f"❌ 现在没有可用的设备，本轮无法开始（要用的那台：{_cur_serial or '未指定'}）。"
+            _online_txt = ("当前在线设备：" + "、".join([str(x) for x in _online])) \
+                if _online else "当前无在线设备"
+            log_msg(f"❌ 无可用设备，本轮无法开始检测（目标设备：{_cur_serial or '未指定'}）。"
                     f"{_online_txt}。", "error")
             return jsonify({"error": (
-                f"这台设备现在连不上：{_cur_serial or '(未指定)'}。{_online_txt}。"
-                f"请先插好数据线（确认手机没锁屏）或启动模拟器，"
-                f"然后回到页面重新点「开始检测」。"
+                f"目标设备 {_cur_serial or '(未指定)'} 不可用。{_online_txt}。"
+                f"请连接设备并确认已在设备端开启 USB 调试（屏幕未锁定），"
+                f"随后重新开始检测。"
             )}), 400
-        log_msg(f"✅ 设备就绪：{_cur_serial or '(默认设备)'}"
+        log_msg(f"✅ 设备已就绪：{_cur_serial or '(默认设备)'}"
                 f"（屏幕 {_scale_info['resolution'][0]}×{_scale_info['resolution'][1]}）", "success")
     except SystemExit:
         log_msg("⏹ 任务已被立即停止", "warning")
     except Exception as e:
-        log_msg(f"❌ 设备检查失败: {e}", "error")
-        return jsonify({"error": f"设备检查失败: {e}"}), 500
+        try:
+            from common.user_msg import human_error as _he_dev
+            _hl, _act, _tech = _he_dev(e)
+        except Exception:
+            _hl, _act, _tech = "设备检查中断", "请重新连接设备后重新开始检测。", str(e)
+        log_msg(f"❌ 设备检查失败：{_hl}", "error")
+        log_msg(f"　　处理建议：{_act}", "info")
+        print(f"[设备检查失败] {_tech}")
+        return jsonify({"error": f"{_hl}。{_act}"}), 500
 
     # 清空审查结果区（避免上次任务的题目残留）
     # ★ 2026-08-25 修复：必须同步清空磁盘文件 data/inspection_state.json！
@@ -6995,7 +7002,7 @@ def api_modules_run():
             try:
                 _t_ok, _v_ok, _llm_detail = _llm_health_check()
                 if _t_ok and _v_ok:
-                    log_msg("✅ AI 判题服务正常（文字和图片都能判）", "success")
+                    log_msg("✅ AI 判题服务正常（文字与图片判题均可用）", "success")
                 else:
                     _bad = []
                     if not _t_ok:
@@ -7003,15 +7010,15 @@ def api_modules_run():
                     if not _v_ok:
                         _bad.append("图片判题")
                     log_msg(
-                        f"⚠ AI 判题服务现在用不了（{'、'.join(_bad)}），"
-                        f"本轮只检查界面（按钮能不能点、音频有没有声音、图片有没有显示），"
-                        f"不给出「题目内容对不对」的结论 —— 这部分结论本轮请勿采信。"
-                        f"这不是 App 的问题，需要维护人员更换 AI 密钥或充值后重跑。",
+                        f"⚠ AI 判题服务暂不可用（{'、'.join(_bad)}）。"
+                        f"本轮仅执行界面级检查（控件可点击、音频可播放、图片可显示），"
+                        f"不产出「题目内容是否正确」的结论，该部分结论本轮不予采信。"
+                        f"此问题与 App 无关，需维护人员更换密钥或充值后重新检测。",
                         "warning",
                     )
                     print(f"[AI 体检失败] {_llm_detail}")
             except Exception as _e:
-                log_msg("⚠ AI 判题服务状态没查出来，本轮继续跑（不影响自动答题）", "warning")
+                log_msg("⚠ AI 判题服务状态读取失败，本轮将继续执行（不影响自动答题）", "warning")
                 print(f"[AI 体检异常] {_e}")
             import importlib
             sys.path.insert(0, str(Path(__file__).parent / "scripts"))
@@ -7113,8 +7120,8 @@ def api_modules_run():
                 from common.user_msg import status_of as _st_of, status_text as _st_txt
             except Exception:
                 _st_of = lambda _r: ("ok" if (_r or {}).get("ok") else "failed")
-                _st_txt = lambda _s: {"ok": "检测完成", "empty": "没有题目，未检测",
-                                       "failed": "中途失败，没有测成"}.get(_s, "未检测")
+                _st_txt = lambda _s: {"ok": "检测完成", "empty": "未检测到题目",
+                                       "failed": "检测中断"}.get(_s, "未检测")
             for _name, _r in results.items():
                 _st = _st_of(_r)
                 _lv = {"ok": "success", "empty": "warning", "failed": "error"}.get(_st, "info")
@@ -7142,7 +7149,7 @@ def api_modules_run():
             except Exception:
                 _hl, _act, _tech = "整轮检测中断", "请把这条日志发给维护人员，修好后重跑。", str(e)
             log_msg(f"❌ 整轮检测中断：{_hl}", "error")
-            log_msg(f"　　→ 怎么办：{_act}", "info")
+            log_msg(f"　　处理建议：{_act}", "info")
             print(f"[整轮中断] {_tech}")
             _LAST_MODULES_RESULT = {
                 "done": True,
@@ -7230,17 +7237,16 @@ if __name__ == "__main__":
         # ★ 2026-10-16：配置目标离线时**自动改用在线设备**，并把原因打出来。
         #   典型场景：server_target.txt 残留上一轮的 MuMu（127.0.0.1:16384），
         #   而本次只插了真机 —— 旧行为会一直显示"目标=MuMu"，让人误以为控的是模拟器。
-        print(f"  [设备选择] ⚠ 配置目标 {_configured_serial or '(未指定)'} 不在线 —— "
-              f"已自动改用在线设备 {_selected_serial}（在线: {_boot_info['online']}）。")
-        print(f"             如要固定为某台设备："
-              f"`python tools/restart_server.py --device <串号>` 重启，"
-              f"或在页面上切换设备。")
+        print(f"  [设备选择] ⚠ 配置目标 {_configured_serial or '(未指定)'} 当前不在线，"
+              f"已改用在线设备 {_selected_serial}（当前在线：{_boot_info['online']}）。")
+        print(f"             如需固定设备：`python tools/restart_server.py --device <串号>`，"
+              f"或在页面中切换设备。")
     if _detected_res is None:
-        print(f"  [坐标缩放] ⚠ 目标设备 {_selected_serial or '(未指定)'} 当前不可达 —— "
-              f"坐标暂按基准 {REFERENCE_RES[0]}x{REFERENCE_RES[1]} 使用"
-              f"（当前在线设备: {_boot_info['online'] or '无'}）。"
-              f"设备就绪后无需重启：在页面上切换一次设备、或直接开始任务"
-              f"（任务开始前会自动重新探测并重算缩放）。")
+        print(f"  [坐标缩放] ⚠ 目标设备 {_selected_serial or '(未指定)'} 当前不可达，"
+              f"坐标暂按基准 {REFERENCE_RES[0]}×{REFERENCE_RES[1]} 计算"
+              f"（当前在线设备：{_boot_info['online'] or '无'}）。"
+              f"设备就绪后无需重启：在页面中切换一次设备或开始检测，"
+              f"系统会重新探测并重算缩放。")
 
     # ★ 常驻实时截图（前端「手机画面」随时可见，不再只在任务运行时才有）
     _start_live_screenshot_daemon()

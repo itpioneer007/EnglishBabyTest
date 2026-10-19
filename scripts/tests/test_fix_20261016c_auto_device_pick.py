@@ -222,7 +222,7 @@ ws.refresh_device_scale = lambda serial="", reason="": {
 _ok, _msg = ws._preflight_target_device()
 chk("ok is False", _ok is False)
 chk("信息含目标串号", MUMU in _msg, _msg)
-chk("信息告诉人电脑上有哪些设备（测试员视角，不用技术术语）", "电脑上" in _msg, _msg)
+chk("信息列出当前在线设备", "当前在线设备" in _msg, _msg)
 chk("信息含处置动作（切换/启动）", "切换" in _msg or "启动" in _msg, _msg)
 ws.refresh_device_scale = _orig_refresh
 
@@ -308,7 +308,7 @@ try:
     _ok2, _msg2 = ws._preflight_target_device()
     chk("ok is False", _ok2 is False)
     chk("回退查到在线设备并写进报错信息", PHONE in _msg2, _msg2)
-    chk("信息告诉人有哪台设备可用（人话）", "电脑上" in _msg2, _msg2)
+    chk("信息列出当前在线设备（回退查询）", "当前在线设备" in _msg2, _msg2)
 finally:
     ws.refresh_device_scale, ws._device_list = _orig_refresh3, _orig_dl
 

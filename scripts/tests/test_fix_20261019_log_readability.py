@@ -73,19 +73,19 @@ print("=" * 74)
 
 _hl, _act, _tech = um.human_error(
     AdbError("device 'SKSCIF4T7PFMQS5X' not found"))
-chk("现场报错 → 说明是设备掉线", "掉线" in _hl, _hl)
-chk("给出动作（数据线/模拟器 + 重跑）",
-    ("数据线" in _act or "模拟器" in _act) and "重跑" in _act, _act)
+chk("现场报错 → 说明是设备离线", "离线" in _hl, _hl)
+chk("给出动作（数据线/模拟器 + 重新开始检测）",
+    ("数据线" in _act or "模拟器" in _act) and "重新开始检测" in _act, _act)
 chk("技术细节保留异常原文（供服务端日志）", "not found" in _tech, _tech)
 
 _hl2, _a2, _ = um.human_error(RuntimeError("more than one device/emulator"))
-chk("多设备 → 说明不知道该操作哪台", "不止一台" in _hl2, _hl2)
-chk("多设备 → 动作是只留一台", "只保留一台" in _a2, _a2)
+chk("多设备 → 说明无法确定操作目标", "多台设备" in _hl2, _hl2)
+chk("多设备 → 动作是仅保留一台", "仅保留一台" in _a2, _a2)
 
 _hl3, _a3, _ = um.human_error(
     RuntimeError("UiObjectNotFoundError: 找不到节点 text=我"))
-chk("控件找不到 → 说明 App 不在预期页面", "预期的页面" in _hl3, _hl3)
-chk("控件找不到 → 动作是看屏幕/回首页", "屏幕" in _a3 or "首页" in _a3, _a3)
+chk("控件找不到 → 说明 App 不在预期页面", "预期页面" in _hl3, _hl3)
+chk("控件找不到 → 动作是确认首页状态", "首页" in _a3, _a3)
 
 _hl4, _, _ = um.human_error(TimeoutError("Read timed out"))
 chk("超时 → 说明等待 App 响应超时", "超时" in _hl4, _hl4)
@@ -127,6 +127,40 @@ chk("6 类异常的『说明+怎么办』均无技术串", not _bad, str(_bad))
 
 print()
 print("=" * 74)
+print("T2b 【语气】面向使用者的文案为第三人称陈述，不含口语词与感叹号")
+print("=" * 74)
+
+# ★ 2026-10-19 二次校准（用户反馈）：
+#   「也不需要特别口语化，就和正常 app 报错一样……是以一种第三人称讲述，现在感觉不太严谨」
+#   故把口语化表达列成黑名单，任何一条出现在使用者可见文案里即失败。
+_COLLOQUIAL = [
+    "重跑", "用不了", "一台都找不到", "看一眼", "掉线了", "搞定",
+    "吧", "连不上", "没有测成", "怎么办", "！", "!!",
+]
+
+_pool = []
+for _e in _samples + [OSError("something odd")]:
+    _hh, _aa, _ = um.human_error(_e)
+    _pool += [_hh, _aa]
+_pool += [
+    um.status_text("ok"), um.status_text("empty"), um.status_text("failed"),
+]
+_bad2 = sorted({w for w in _COLLOQUIAL if any(w in _t for _t in _pool)})
+chk("【反向】说明与建议不含口语词/感叹号", not _bad2, str(_bad2))
+
+# 说明句陈述现象，建议句以「请」引出动作 —— 两者职责不能混
+_hl_all, _act_all = [], []
+for _e in _samples + [OSError("something odd")]:
+    _hh, _aa, _ = um.human_error(_e)
+    _hl_all.append(_hh)
+    _act_all.append(_aa)
+chk("【反向】现象说明不以『请』开头（它是陈述，不是指令）",
+    not any(t.startswith("请") for t in _hl_all), str(_hl_all))
+chk("处理建议以『请』开头（明确给出动作）",
+    all(t.startswith("请") or t.startswith("此为") for t in _act_all), str(_act_all))
+
+print()
+print("=" * 74)
 print("T3 human_units 不再打印 dict repr")
 print("=" * 74)
 
@@ -163,7 +197,7 @@ print("=" * 74)
 _zero = {n: {"q": 0, "t": 30, "ok": True, "status": "empty"}
          for n in ["听力专项", "口语训练", "单元自检", "知识过关", "语音评测"]}
 _s = um.summary_text(_zero)
-chk("全 0 题 → 明写『没有一道题被检测到』", "没有一道题被检测到" in _s, _s)
+chk("全 0 题 → 明写『未检测到任何题目』", "未检测到任何题目" in _s, _s)
 chk("全 0 题 → 含『0 题』", "0 题" in _s, _s)
 chk("【反向】全 0 题不提『成功』", "成功" not in _s, _s)
 chk("【反向】全 0 题不提『全部完成』", "全部完成" not in _s, _s)
@@ -176,12 +210,14 @@ _mix = {
                  "error": "手机掉线了"},
 }
 _s2 = um.summary_text(_mix)
-chk("混合 → 三个口径都出现", all(k in _s2 for k in ("检测完成", "没有题目", "中途失败")), _s2)
+chk("混合 → 三个口径都出现", all(k in _s2 for k in ("检测完成", "未检测到题目", "检测中断")), _s2)
 chk("混合 → 累计题数正确", "12" in _s2, _s2)
+chk("【语气】结算句不含口语词/感叹号",
+    not [w for w in _COLLOQUIAL if w in _s or w in _s2], f"{_s} | {_s2}")
 
 print()
 print("=" * 74)
-print("T6 run_all 失败分支：人话 + 怎么办，调用栈不进前端日志")
+print("T6 run_all 失败分支：可读说明 + 处理建议，调用栈不进前端日志")
 print("=" * 74)
 
 import scheduler as sch  # noqa: E402
@@ -256,16 +292,16 @@ try:
 
     chk("结果 status=failed", _r.get("status") == "failed", str(_r))
     chk("ok=False（旧字段仍准确）", _r.get("ok") is False, str(_r))
-    chk("说明是人话（设备掉线）", "掉线" in str(_r.get("error", "")), str(_r))
-    chk("带『怎么办』字段", bool(_r.get("error_action")), str(_r))
+    chk("说明是设备离线", "离线" in str(_r.get("error", "")), str(_r))
+    chk("带『处理建议』字段", bool(_r.get("error_action")), str(_r))
 
-    chk("日志出现『没有测成』", "没有测成" in _text, _text[-300:])
-    chk("日志出现『怎么办』", "怎么办" in _text, _text[-300:])
+    chk("日志出现『检测中断』", "检测中断" in _text, _text[-300:])
+    chk("日志出现『处理建议』", "处理建议" in _text, _text[-300:])
     chk("【反向】日志里没有调用栈 File \"C:\\…\"",
         'File "' not in _text, _text[-300:])
     chk("【反向】日志里没有 adbutils 路径", "site-packages" not in _text, _text[-300:])
-    chk("【反向】失败后不再打『完成』",
-        "完成" not in _text.replace("没有测成", ""), _text[-300:])
+    chk("【反向】失败后不再打『检测完成』",
+        "检测完成" not in _text, _text[-300:])
     chk("调用栈被 print 到服务端日志（不丢信息）",
         "AdbError" in _out and "check_okay" in _out, _out[-200:])
 finally:
@@ -284,7 +320,7 @@ try:
     _r2 = _res2.get("__ZERO__", {})
     _text2 = "\n".join(m for _, m in _logs)
     chk("0 题 → status=empty（不算检测完成）", _r2.get("status") == "empty", str(_r2))
-    chk("日志写明『没有题目可测』", "没有题目可测" in _text2, _text2[-300:])
+    chk("日志写明『未检测到题目』", "未检测到题目" in _text2, _text2[-300:])
     chk("【反向】不出现『检测完成：0 题』",
         "检测完成：0 题" not in _text2, _text2[-300:])
 finally:
@@ -332,11 +368,14 @@ print("=" * 74)
 _html = io.open(os.path.join(ROOT, "templates", "index.html"), encoding="utf-8").read()
 chk("【反向】不再出现『全部完成！』这种误导文案", "全部完成！" not in _html)
 chk("有 _modStatus 三态判定", "_modStatus" in _html)
-chk("有『没有题目，未检测』文案", "没有题目，未检测" in _html)
-chk("有『中途失败，没有测成』文案", "中途失败，没有测成" in _html)
+chk("有『未检测到题目』文案", "未检测到题目" in _html)
+chk("有『检测中断』文案", "检测中断" in _html)
 chk("有 run 去重标记（防刷屏）", "_serveRenderedRun" in _html)
-chk("0 题时汇总明写『没有任何内容被检测』", "没有任何内容被检测" in _html)
+chk("0 题时汇总明写『无有效检测内容』", "无有效检测内容" in _html)
 chk("有 empty 态样式", ".serve-card.empty" in _html)
+# 单元范围不得再以 JSON / dict repr 形式进日志（旧：单元范围: {"听力专项":null}）
+chk("【反向】日志不再打印单元 JSON", 'JSON.stringify(unitsMap)' not in _html)
+chk("有 _fmtUnits（单元范围 → 可读文本）", "_fmtUnits" in _html)
 
 # ══════════════════════════════════════════════════════════════
 # 结果

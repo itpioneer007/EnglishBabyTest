@@ -2655,6 +2655,37 @@
       }
 
       /* ========== 日志（点击 + 审查合并流） ========== */
+      // 单元范围 → 可读文本（与后端 common/user_msg.human_units 同口径）
+      //   入参形如 {"听力专项": "2,4", "单元自检": null}
+      //   输出形如「听力专项 U2、U4；单元自检 全部单元」
+      function _fmtUnits(units) {
+        const fmtOne = (v) => {
+          const s = String(v == null ? "" : v).trim();
+          if (!s || s.toUpperCase() === "NONE") return "全部单元";
+          const out = [];
+          s.replace(/，/g, ",")
+            .replace(/、/g, ",")
+            .split(",")
+            .forEach((part) => {
+              const p = part.trim();
+              if (!p) return;
+              const m = p.match(/^(\d+)\s*-\s*(\d+)$/);
+              if (m) {
+                out.push("U" + m[1] + "–U" + m[2]);
+              } else if (/^\d+$/.test(p)) {
+                out.push("U" + p);
+              } else {
+                out.push(p);
+              }
+            });
+          return out.length ? out.join("、") : "全部单元";
+        };
+        const keys = Object.keys(units || {});
+        if (!keys.length) return "全部单元";
+        return keys
+          .map((k) => String(k).replace("_测试", "·测试") + " " + fmtOne(units[k]))
+          .join("；");
+      }
       function addLog(level, msg, evidence) {
         const t = new Date().toLocaleTimeString();
         const el = $("logWrap");
@@ -2931,7 +2962,9 @@
         }
         addLog("step", "开始分析清单 → 准备调用模块: " + modules.join("、"));
         addLog("info", "版本/年级: " + version + " " + grade);
-        if (hasUnits) addLog("info", "单元范围: " + JSON.stringify(unitsMap));
+        // ★ 2026-10-19：单元范围不再打 JSON（旧日志形如 {"听力专项":null}），
+        //   改成「听力专项 U2、U4」这种可读写法，口径与后端 human_units 一致。
+        if (hasUnits) addLog("info", "单元范围: " + _fmtUnits(unitsMap));
         try {
           const body = hasUnits
             ? { version, grade, modules, units: unitsMap, docxMap }
@@ -3009,7 +3042,7 @@
       }
 
       /* ========== 结果展示 ========== */
-      // ★ 2026-10-19：三态（检测完成 / 没有题目 / 中途失败）。
+      // ★ 2026-10-19：三态（检测完成 / 未检测到题目 / 检测中断）。
       //   旧逻辑只看 r.ok，于是"跑完但 0 题"被算成成功 → 出现过
       //   「全部完成…5 个模块全成功…累计 0 题」这种自相矛盾的汇总，
       //   测试员以为已经测过，其实一道题都没检查。
@@ -3022,8 +3055,8 @@
       }
       const _STATUS_META = {
         ok: { cls: "ok", label: "检测完成" },
-        empty: { cls: "empty", label: "没有题目，未检测" },
-        failed: { cls: "fail", label: "中途失败，没有测成" },
+        empty: { cls: "empty", label: "未检测到题目" },
+        failed: { cls: "fail", label: "检测中断" },
       };
 
       async function renderServe(data) {
@@ -3046,7 +3079,7 @@
             ? data.error
             : totalQ > 0
               ? "本轮检测结果"
-              : "本轮没有检测到任何题目"
+              : "本轮未检测到任何题目"
         }</div><div class="serve-cards">`;
         names.forEach((n) => {
           const r = rs[n] || {};
@@ -3065,19 +3098,19 @@
         let sumTxt;
         const _ver = `${data.version || ""} ${data.grade || ""}`.trim();
         if (!names.length) {
-          sumTxt = data.error ? `${data.error}` : "本轮没有跑任何模块";
+          sumTxt = data.error ? `${data.error}` : "本轮未执行任何模块";
         } else if (totalQ === 0) {
           sumTxt =
             `${names.length} 个模块：检测完成 <b style="color:var(--red)">0</b> 个` +
-            ` · 没有题目 ${nEmpty} 个` +
-            ` · 中途失败 <b style="color:var(--red)">${nFail}</b> 个` +
-            ` · 合计 0 题 —— 本轮没有任何内容被检测，请核对版本 / 年级 / 单元后重跑` +
+            ` · 未检测到题目 ${nEmpty} 个` +
+            ` · 检测中断 <b style="color:var(--red)">${nFail}</b> 个` +
+            ` · 合计 0 题 —— 本轮无有效检测内容，请核对版本 / 年级 / 单元后重新检测` +
             (_ver ? ` · ${_ver}` : "");
         } else {
           sumTxt =
             `${names.length} 个模块 · 检测完成 <b style="color:var(--ok-ink)">${nOk}</b> 个` +
-            (nEmpty ? ` · 没有题目 ${nEmpty} 个` : "") +
-            (nFail ? ` · 中途失败 <b style="color:var(--red)">${nFail}</b> 个` : "") +
+            (nEmpty ? ` · 未检测到题目 ${nEmpty} 个` : "") +
+            (nFail ? ` · 检测中断 <b style="color:var(--red)">${nFail}</b> 个` : "") +
             ` · 累计答题 <b style="color:var(--ok-ink)">${totalQ}</b> 题` +
             (_ver ? ` · ${_ver}` : "");
         }
@@ -3094,16 +3127,16 @@
             "error",
             "本轮结束：" +
               names.length +
-              " 个模块，没有一道题被检测到（0 题）—— 这不等于检测通过，请核对版本/年级/单元后重跑",
+              " 个模块，未检测到任何题目（0 题），不计为检测通过。请核对版本、年级与单元设置后重新检测。",
           );
         } else {
           addLog(
             nFail ? "warning" : "success",
             "本轮结束：检测完成 " +
               nOk +
-              " 个 · 没有题目 " +
+              " 个 · 未检测到题目 " +
               nEmpty +
-              " 个 · 中途失败 " +
+              " 个 · 检测中断 " +
               nFail +
               " 个 · 共 " +
               totalQ +

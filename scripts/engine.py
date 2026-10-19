@@ -1580,11 +1580,11 @@ def run_single_module(d, module_name, config):
         #   于是 App 里没有该入口时前端只看到"0 题"，测试员根本不知道发生了什么
         #   （试用反馈："教科版五上这几个模块显示未找到"）。
         step_log(
-            f"❌ 首页上找不到「{entry}」入口，本模块没有开始检测。\n"
-            f"　　原因通常是：当前版本/年级的 App 里没有这个模块，或首页还没加载完。\n"
-            f"　　怎么办：确认首页在「{os.environ.get('YYB_VERSION', '')}"
-            f"{os.environ.get('YYB_GRADE', '')}」下、把首页下拉刷新一次；"
-            f"如果这个版本本来就没有「{entry}」，请取消勾选该模块。",
+            f"❌ 首页未找到「{entry}」入口，本模块未开始检测。\n"
+            f"　　可能原因：当前版本/年级的 App 内不存在该模块，或首页尚未加载完成。\n"
+            f"　　处理建议：确认首页处于「{os.environ.get('YYB_VERSION', '')}"
+            f"{os.environ.get('YYB_GRADE', '')}」，将首页下拉刷新后重新检测；"
+            f"若该版本不提供「{entry}」，请在模块列表中取消勾选。",
             "error")
         print(f"  ❌ 未找到模块: {entry}")
         return 0
