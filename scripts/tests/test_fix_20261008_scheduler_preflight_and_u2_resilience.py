@@ -307,8 +307,10 @@ try:
         isinstance(res, dict) and set(res) == {"口语训练"}
         and res["口语训练"]["ok"] is False,
         f"实际={res}")
+    _err = str(res["口语训练"].get("error", ""))
     chk("F2 拦停原因写明『版本/年级切换失败』",
-        "切换失败" in str(res["口语训练"].get("error", "")), f"实际={res}")
+        "切换" in _err and ("失败" in _err or "没有切换成功" in _err),
+        f"实际={res}")
     chk("F3 未进入模块执行（没有 dump_hierarchy 等设备操作）",
         "dump_hierarchy" not in _dev.calls, f"实际={_dev.calls}")
     chk("F4 拦停前确实重启过 App（顺序正确）",

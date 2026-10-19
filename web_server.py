@@ -15,6 +15,11 @@ import os
 import sys
 import io
 
+# ★ adb 自定义端口：腾讯管家(QQPCTray)占用默认 5037，导致 adb daemon 无法启动、
+#   设备枚举失败。改用空闲端口 15038，并固化到进程环境变量，使 web_server 无论
+#   从脚本还是命令行启动，其内部 adbutils/uiautomator2 都走该端口。
+os.environ.setdefault("ANDROID_ADB_SERVER_PORT", "15038")
+
 # Windows 控制台默认 GBK 无法输出 emoji(✅❌⚠ 等)，全局切换为 UTF-8
 # ★ 必须用 reconfigure 而非替换对象：替换 sys.stdout 会让原 wrapper 被 GC
 #   时连带关闭共享 buffer，导致 "I/O operation on closed file" 崩溃
@@ -493,7 +498,8 @@ def _preflight_target_device():
     try:
         info = refresh_device_scale(reason="任务开始前预检")
     except Exception as e:
-        return False, f"设备预检异常: {e}"
+        print(f"[设备预检异常] {e}")
+        return False, "检查设备时出错了。请确认手机连着电脑、App 在首页，然后重新开始。"
     # 把最终目标写回 ANDROID_SERIAL：u2.connect() 与刚探测到的分辨率必须指向同一台，
     # 否则多设备在线时读环境变量为空会直接报 "more than one device/emulator"。
     if info.get("serial"):
@@ -517,11 +523,14 @@ def _preflight_target_device():
             online = []
     _extra = ""
     if info.get("substituted"):
-        _extra = f"（配置目标 {_cfg} 不在线，已尝试自动改用在线设备 {_s}）"
+        _extra = f"（原先选的 {_cfg} 也不在线，已尝试改用 {_s}）"
+    _online_txt = ("电脑上目前能找到的设备：" + "、".join([str(x) for x in online])) \
+        if online else "电脑上现在一台设备都找不到"
     return False, (
-        f"目标设备 {_s} 不可达（adb wm size 无返回，分辨率探测失败）。{_extra}"
-        f"当前在线设备: {online if online else '无'}。"
-        f"请先启动目标模拟器/连接真机并确认 ADB 已就绪，或在页面上把设备切换为在线设备。"
+        f"这台设备现在连不上：{_s}。{_extra}"
+        f"{_online_txt}。"
+        f"请先启动模拟器或插好数据线（确认手机没锁屏）；"
+        f"也可以在页面顶部把设备切换成在线的那一台，再重新开始。"
     )
 
 
@@ -761,8 +770,40 @@ def _detect_content_dimension(module: str = ""):
 
 
 
+# ============================================================
+# 日志护栏：前端日志是给"使用这个工具测 App 的人"看的
+# ============================================================
+# ★ 2026-10-19 新增（试用反馈：日志里出现
+#   `device 'SKSCIF…' not found [ ' File "C:\...\adbutils\_adb.py", line 192…`
+#   测试员完全看不懂，也不知道该做什么）。
+#   单点出口统一兜底：任何一条日志里混入调用栈 / 源码路径 / 库内部信息，
+#   都在这里被截断成人话，原文完整打印到服务端日志（server_output.log）。
+_TB_MARK = re.compile(
+    r"Traceback \(most recent call last\)"
+    r"|'\s*File \"[A-Za-z]:"
+    r"|File \"[A-Za-z]:[\\/]"
+    r"|\bline \d+, in\b"
+    r"|site-packages[\\/]"
+)
+
+
+def _strip_traceback_from_log(msg):
+    """把用户不可读的技术片段从日志里摘掉（原文由调用方另外 print）。"""
+    if not isinstance(msg, str):
+        return msg
+    m = _TB_MARK.search(msg)
+    if not m:
+        return msg
+    head = msg[: m.start()].rstrip(" |:：,，·-")
+    if not head:
+        head = "这一步执行中断"
+    return head + "（详细技术信息已写入服务端日志）"
+
+
 def log_msg(msg: str, level: str = "info", evidence: list = None):
     """添加日志, 可选附带结构化证据(审查差异高亮展示)"""
+    _raw_msg = msg
+    msg = _strip_traceback_from_log(msg)
     entry = {
         "time": datetime.now().strftime("%H:%M:%S"),
         "msg": msg,
@@ -785,6 +826,12 @@ def log_msg(msg: str, level: str = "info", evidence: list = None):
         except Exception:
             pass
         threading.Thread(target=_detect_content_dimension, args=(_cm_cur,), daemon=True).start()
+    if msg != _raw_msg:
+        # 被截断的原文仍完整留在服务端日志里，方便排查
+        try:
+            print(f"[{entry['time']}] [原文] {_raw_msg}")
+        except Exception:
+            pass
     try:
         print(f"[{entry['time']}] [{level}] {msg}")
     except UnicodeEncodeError:
@@ -1092,7 +1139,14 @@ def run_version_detect_task():
     except SystemExit:
         log_msg("⏹ 任务已被立即停止", "warning")
     except Exception as e:
-        log_msg(f"❌ 版本检测失败: {e}", "error")
+        try:
+            from common.user_msg import human_error as _he
+            _hl, _act, _tech = _he(e)
+        except Exception:
+            _hl, _act, _tech = "读取 App 里的版本列表失败", "请确认手机连着、App 在首页，然后重试。", str(e)
+        log_msg(f"❌ 读不到版本列表：{_hl}", "error")
+        log_msg(f"　　→ 怎么办：{_act}", "info")
+        print(f"[版本检测失败] {_tech}")
     finally:
         set_done()
 
@@ -5389,8 +5443,15 @@ def api_grades():
     except SystemExit:
         log_msg("⏹ 任务已被立即停止", "warning")
     except Exception as e:
-        log_msg(f"❌ 年级检测失败: {e}", "error")
-        return jsonify({"error": str(e), "grades": []})
+        try:
+            from common.user_msg import human_error as _he
+            _hl, _act, _tech = _he(e)
+        except Exception:
+            _hl, _act, _tech = "读取 App 里的年级列表失败", "请确认手机连着、App 在首页，然后重试。", str(e)
+        log_msg(f"❌ 读不到年级列表：{_hl}", "error")
+        log_msg(f"　　→ 怎么办：{_act}", "info")
+        print(f"[年级检测失败] {_tech}")
+        return jsonify({"error": f"{_hl}。{_act}", "grades": []})
 
 
 @app.route("/api/screenshot/<filename>")
@@ -6835,21 +6896,23 @@ def api_modules_run():
         _scale_info = refresh_device_scale(_cur_serial, reason="多模块检测开始前",
                                            allow_substitute=False)
         if _dev_pick.get("substituted"):
-            log_msg(f"⚠ 配置目标 {_configured or '(未指定)'} 不在线，已自动改用在线设备 "
+            log_msg(f"⚠ 首选设备 {_configured or '(未指定)'} 现在不在线，本轮自动改用在线设备 "
                     f"{_cur_serial or '(未指定)'}", "warning")
         if _cur_serial:
             _set_dev(_cur_serial)      # u2.connect() 与实际操作目标保持一致
         if not _dev_ok(_cur_serial or None):
             _online = _dev_pick.get("online") or []
-            log_msg(f"❌ 目标设备未就绪，无法开始检测（目标: {_cur_serial or '未指定'}；"
-                    f"在线: {_online or '无'}）", "error")
+            _online_txt = ("电脑上目前能找到的设备：" + "、".join([str(x) for x in _online])) \
+                if _online else "电脑上现在一台设备都找不到"
+            log_msg(f"❌ 现在没有可用的设备，本轮无法开始（要用的那台：{_cur_serial or '未指定'}）。"
+                    f"{_online_txt}。", "error")
             return jsonify({"error": (
-                f"目标设备 {_cur_serial or '(未指定)'} 未就绪。当前在线设备: "
-                f"{_online or '无'}。请在页面上切换到在线设备，或先启动目标模拟器/连接真机。"
+                f"这台设备现在连不上：{_cur_serial or '(未指定)'}。{_online_txt}。"
+                f"请先插好数据线（确认手机没锁屏）或启动模拟器，"
+                f"然后回到页面重新点「开始检测」。"
             )}), 400
-        log_msg(f"✅ 设备就绪: {_cur_serial or '(默认)'}"
-                f"（分辨率 {_scale_info['resolution']}，"
-                f"缩放 X{_scale_info['scale'][0]:.3f}/Y{_scale_info['scale'][1]:.3f}）", "success")
+        log_msg(f"✅ 设备就绪：{_cur_serial or '(默认设备)'}"
+                f"（屏幕 {_scale_info['resolution'][0]}×{_scale_info['resolution'][1]}）", "success")
     except SystemExit:
         log_msg("⏹ 任务已被立即停止", "warning")
     except Exception as e:
@@ -6902,6 +6965,7 @@ def api_modules_run():
 
     def _run():
         _register_task_thread()  # 记录线程 id，供"立即停止"注入异常
+        _TASK_STARTED_AT = time.time()   # 供 run_id 去重（前端只渲染一次结果）
         try:
             set_running("多模块检测")
             # ★ 记录版本/单元到巡检状态（实时错题报告标题/路径需要）
@@ -6914,29 +6978,41 @@ def api_modules_run():
             if units:
                 _first_unit = str(next(iter(units.values()), "?"))
                 _inspection_state["unit"] = _first_unit
-            units_desc = f"（单元: {units}）" if units else ""
-            log_msg(f"多模块检测启动: {version} {grade} → {'、'.join(module_names)}{units_desc}")
+            # ★ 2026-10-19：单元不再打印 dict repr
+            #   旧日志：单元：{'听力专项': None, '听力专项_测试': None}
+            #   测试员看不懂。改成「单元：全部单元」/「单元：听力专项 U2、U4」。
+            try:
+                from common.user_msg import human_units as _human_units
+                _units_txt = _human_units(units) if units else "单元：全部单元"
+            except Exception:
+                _units_txt = "单元：全部单元"
+            log_msg(f"多模块检测启动：{version} {grade} → {'、'.join(module_names)}（{_units_txt}）")
             # ★ 2026-09-10 LLM 体检：额度耗尽时流程不会报错、只会静默降级，
             #   所以开跑前明确告知"本次 AI 结论是否可信"，避免用户误判成"AI 瞎判"。
+            # ★ 2026-10-19：文案改写为"使用者能看懂 + 知道找谁"。
+            #   旧日志把 `HTTP Error 404: Not Found`、供应商名、402/403 码甩给测试员
+            #   （试用反馈原话："你报这个错误，别人哪里看得懂"）。技术细节改 print 到服务端日志。
             try:
                 _t_ok, _v_ok, _llm_detail = _llm_health_check()
                 if _t_ok and _v_ok:
-                    log_msg("✅ AI 核查可用（文本 + 视觉模型均正常）", "success")
+                    log_msg("✅ AI 判题服务正常（文字和图片都能判）", "success")
                 else:
                     _bad = []
                     if not _t_ok:
-                        _bad.append("文本")
+                        _bad.append("文字判题")
                     if not _v_ok:
-                        _bad.append("视觉")
+                        _bad.append("图片判题")
                     log_msg(
-                        f"⚠ AI 核查不可用（{'/'.join(_bad)}模型调用失败）：{_llm_detail}"
-                        f"本次将只做界面级检查，AI 相关结论不可信；"
-                        f"请检查各供应商额度/密钥（DeepSeek 余额耗尽→402、"
-                        f"通义千问免费额度用尽→403）后重新运行",
+                        f"⚠ AI 判题服务现在用不了（{'、'.join(_bad)}），"
+                        f"本轮只检查界面（按钮能不能点、音频有没有声音、图片有没有显示），"
+                        f"不给出「题目内容对不对」的结论 —— 这部分结论本轮请勿采信。"
+                        f"这不是 App 的问题，需要维护人员更换 AI 密钥或充值后重跑。",
                         "warning",
                     )
+                    print(f"[AI 体检失败] {_llm_detail}")
             except Exception as _e:
-                log_msg(f"⚠ LLM 体检异常（不影响自动化答题）: {str(_e)[:90]}", "warning")
+                log_msg("⚠ AI 判题服务状态没查出来，本轮继续跑（不影响自动答题）", "warning")
+                print(f"[AI 体检异常] {_e}")
             import importlib
             sys.path.insert(0, str(Path(__file__).parent / "scripts"))
             sched = importlib.import_module("scheduler")
@@ -7026,24 +7102,32 @@ def api_modules_run():
             global _LAST_MODULES_RESULT
             _LAST_MODULES_RESULT = {
                 "done": True,
+                "run_id": f"{version}|{grade}|{int(_TASK_STARTED_AT)}",
                 "version": version,
                 "grade": grade,
                 "results": results,
             }
-            # 逐模块汇总日志
-            for name, r in results.items():
-                status = "成功" if r.get("ok") else "失败"
-                lv = "success" if r.get("ok") else "error"
-                log_msg(f"  [{status}] {name}: {r['q']}题 {r['t']}s", lv)
+            # 逐模块结果：scheduler 内部已结算过一次，这里只补「哪个模块什么状态」，
+            # 不再重复打「多模块检测完成：N 个模块」——同一件事写两遍只会让人以为跑了两轮。
+            try:
+                from common.user_msg import status_of as _st_of, status_text as _st_txt
+            except Exception:
+                _st_of = lambda _r: ("ok" if (_r or {}).get("ok") else "failed")
+                _st_txt = lambda _s: {"ok": "检测完成", "empty": "没有题目，未检测",
+                                       "failed": "中途失败，没有测成"}.get(_s, "未检测")
+            for _name, _r in results.items():
+                _st = _st_of(_r)
+                _lv = {"ok": "success", "empty": "warning", "failed": "error"}.get(_st, "info")
+                log_msg(f"  {_name}：{_st_txt(_st)}（{_r.get('q', 0)} 题，"
+                        f"用时 {_r.get('t', 0)} 秒）", _lv)
             if _is_stop_requested():
-                log_msg("⏹ 任务已被手动停止", "warning")
-            else:
-                log_msg(f"多模块检测完成: {len(results)} 个模块", "success")
+                log_msg("⏹ 任务已被手动停止，上面的结果是停止前跑完的部分", "warning")
         except SystemExit:
             # 前端"立即停止"注入的异常：记录并正常收尾
             log_msg("⏹ 任务已被立即停止", "warning")
             _LAST_MODULES_RESULT = {
                 "done": True,
+                "run_id": f"{version}|{grade}|{int(_TASK_STARTED_AT)}",
                 "version": version,
                 "grade": grade,
                 "stopped": True,
@@ -7051,12 +7135,21 @@ def api_modules_run():
                 "results": {},
             }
         except Exception as e:
-            log_msg(f"多模块检测异常: {e}", "error")
+            # ★ 2026-10-19：整轮中断也只给人话；异常原文 print 到服务端日志
+            try:
+                from common.user_msg import human_error as _human_err
+                _hl, _act, _tech = _human_err(e)
+            except Exception:
+                _hl, _act, _tech = "整轮检测中断", "请把这条日志发给维护人员，修好后重跑。", str(e)
+            log_msg(f"❌ 整轮检测中断：{_hl}", "error")
+            log_msg(f"　　→ 怎么办：{_act}", "info")
+            print(f"[整轮中断] {_tech}")
             _LAST_MODULES_RESULT = {
                 "done": True,
+                "run_id": f"{version}|{grade}|{int(_TASK_STARTED_AT)}",
                 "version": version,
                 "grade": grade,
-                "error": str(e),
+                "error": _hl,
                 "results": {},
             }
         finally:

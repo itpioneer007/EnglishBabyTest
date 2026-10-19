@@ -1574,8 +1574,20 @@ def run_single_module(d, module_name, config):
 
     # 1. 找模块入口
     print(f"  [1] 查找「{entry}」...")
+    step_log(f"正在首页找「{entry}」入口…", "step")
     if not scroll_and_find(d, entry):
-        print(f"  ❌ 未找到模块: {entry}"); return 0
+        # ★ 2026-10-19：这条必须进前端日志。原来只有 print（仅服务端可见），
+        #   于是 App 里没有该入口时前端只看到"0 题"，测试员根本不知道发生了什么
+        #   （试用反馈："教科版五上这几个模块显示未找到"）。
+        step_log(
+            f"❌ 首页上找不到「{entry}」入口，本模块没有开始检测。\n"
+            f"　　原因通常是：当前版本/年级的 App 里没有这个模块，或首页还没加载完。\n"
+            f"　　怎么办：确认首页在「{os.environ.get('YYB_VERSION', '')}"
+            f"{os.environ.get('YYB_GRADE', '')}」下、把首页下拉刷新一次；"
+            f"如果这个版本本来就没有「{entry}」，请取消勾选该模块。",
+            "error")
+        print(f"  ❌ 未找到模块: {entry}")
+        return 0
     # ★ 点击入口【前】必须先清广告：广告延迟加载并覆盖入口卡片，直接点文字坐标会
     #   点到广告上 → 打开外链触发 OPPO 系统验证弹窗（使用面部验证/密码验证）→ 全流程卡死。
     #   （用户定位：只有点到广告才会弹这个验证框）

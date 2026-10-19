@@ -920,6 +920,15 @@
         border-color: var(--red);
         background: var(--red-bg);
       }
+      /* ★ 2026-10-19：第三态「跑完了但一道题都没有」——琥珀色，
+         既不是成功（绿）也不是失败（红），一眼区分"没测到"和"测出错"。 */
+      .serve-card.empty {
+        border-color: #d8c38d;
+        background: #fdf7e6;
+      }
+      .serve-card.empty .sc-q {
+        color: #8a6d1f;
+      }
       .serve-card .sc-name {
         font-size: 12.5px;
         font-weight: 600;
@@ -2942,6 +2951,7 @@
           addLog("success", "任务已启动，共 " + j.modules.length + " 个模块");
           $("serveWrap").innerHTML = "";
           $("serveWrap").style.display = "none";
+          _serveRenderedRun = null; // 新任务 → 允许渲染新一轮结果
           pollCookResult(modules);
         } catch (e) {
           alert("启动失败: " + e.message);
@@ -2999,41 +3009,107 @@
       }
 
       /* ========== 结果展示 ========== */
+      // ★ 2026-10-19：三态（检测完成 / 没有题目 / 中途失败）。
+      //   旧逻辑只看 r.ok，于是"跑完但 0 题"被算成成功 → 出现过
+      //   「全部完成…5 个模块全成功…累计 0 题」这种自相矛盾的汇总，
+      //   测试员以为已经测过，其实一道题都没检查。
+      let _serveRenderedRun = null; // 已渲染的 run_id：同一轮结果只渲染一次、只记一条日志
+      function _modStatus(r) {
+        const s = (r && r.status) || "";
+        if (s === "ok" || s === "empty" || s === "failed") return s;
+        if (!r || !r.ok) return "failed";
+        return (r.q || 0) > 0 ? "ok" : "empty";
+      }
+      const _STATUS_META = {
+        ok: { cls: "ok", label: "检测完成" },
+        empty: { cls: "empty", label: "没有题目，未检测" },
+        failed: { cls: "fail", label: "中途失败，没有测成" },
+      };
+
       async function renderServe(data) {
         const rs = data.results || {};
         const names = Object.keys(rs);
+        const runKey =
+          (data.run_id || "") +
+          "|" +
+          names.map((n) => n + ":" + _modStatus(rs[n]) + ":" + (rs[n].q || 0)).join(",");
+        if (_serveRenderedRun === runKey) return; // 防重复：轮询到同一条结果不再刷屏
+        _serveRenderedRun = runKey;
+
         const totalQ = names.reduce((s, n) => s + (rs[n].q || 0), 0);
-        const okN = names.filter((n) => rs[n].ok).length;
-        let html =
-          '<div class="serve-hdr">检测完成</div><div class="serve-cards">';
+        const nOk = names.filter((n) => _modStatus(rs[n]) === "ok").length;
+        const nEmpty = names.filter((n) => _modStatus(rs[n]) === "empty").length;
+        const nFail = names.filter((n) => _modStatus(rs[n]) === "failed").length;
+
+        let html = `<div class="serve-hdr">${
+          !names.length && data.error
+            ? data.error
+            : totalQ > 0
+              ? "本轮检测结果"
+              : "本轮没有检测到任何题目"
+        }</div><div class="serve-cards">`;
         names.forEach((n) => {
-          const r = rs[n];
-          const ok = r.ok;
-          html += `<div class="serve-card ${ok ? "ok" : "fail"}">
+          const r = rs[n] || {};
+          const meta = _STATUS_META[_modStatus(r)] || _STATUS_META.empty;
+          const note = r.error_action
+            ? ` · ${r.error_action}`
+            : r.error
+              ? ` · ${r.error}`
+              : "";
+          html += `<div class="serve-card ${meta.cls}">
       <div class="sc-name">${n}</div>
       <div class="sc-stat"><span class="sc-q">${r.q || 0}<small> 题</small></span></div>
-      <div class="sc-detail">${ok ? "完成" : "失败"} · ${r.t || 0}s${r.error ? " · " + r.error : ""}</div>
+      <div class="sc-detail">${meta.label} · ${r.t || 0} 秒${note}</div>
     </div>`;
         });
+        let sumTxt;
+        const _ver = `${data.version || ""} ${data.grade || ""}`.trim();
+        if (!names.length) {
+          sumTxt = data.error ? `${data.error}` : "本轮没有跑任何模块";
+        } else if (totalQ === 0) {
+          sumTxt =
+            `${names.length} 个模块：检测完成 <b style="color:var(--red)">0</b> 个` +
+            ` · 没有题目 ${nEmpty} 个` +
+            ` · 中途失败 <b style="color:var(--red)">${nFail}</b> 个` +
+            ` · 合计 0 题 —— 本轮没有任何内容被检测，请核对版本 / 年级 / 单元后重跑` +
+            (_ver ? ` · ${_ver}` : "");
+        } else {
+          sumTxt =
+            `${names.length} 个模块 · 检测完成 <b style="color:var(--ok-ink)">${nOk}</b> 个` +
+            (nEmpty ? ` · 没有题目 ${nEmpty} 个` : "") +
+            (nFail ? ` · 中途失败 <b style="color:var(--red)">${nFail}</b> 个` : "") +
+            ` · 累计答题 <b style="color:var(--ok-ink)">${totalQ}</b> 题` +
+            (_ver ? ` · ${_ver}` : "");
+        }
         html += `</div><div class="serve-summary" id="serveSummary">
-    ${names.length} 个模块 · 成功 <b style="color:var(--ok-ink)">${okN}</b> 个 ·
-    累计答题 <b style="color:var(--ok-ink)">${totalQ}</b> 题 · ${data.version || ""} ${data.grade || ""}
+    ${sumTxt}
     <span id="errSummary"><span class="animate-pulse inline-block ml-2" style="color:var(--gray)">加载错题…</span></span>
   </div>`;
         const el = $("serveWrap");
         el.innerHTML = html;
         el.style.display = "block";
         el.scrollIntoView({ behavior: "smooth" });
-        addLog(
-          "success",
-          "全部完成！" +
-            names.length +
-            "个模块，" +
-            okN +
-            "个成功，累计" +
-            totalQ +
-            "题",
-        );
+        if (totalQ === 0) {
+          addLog(
+            "error",
+            "本轮结束：" +
+              names.length +
+              " 个模块，没有一道题被检测到（0 题）—— 这不等于检测通过，请核对版本/年级/单元后重跑",
+          );
+        } else {
+          addLog(
+            nFail ? "warning" : "success",
+            "本轮结束：检测完成 " +
+              nOk +
+              " 个 · 没有题目 " +
+              nEmpty +
+              " 个 · 中途失败 " +
+              nFail +
+              " 个 · 共 " +
+              totalQ +
+              " 题",
+          );
+        }
 
         // 异步加载错题汇总
         try {

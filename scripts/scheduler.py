@@ -26,6 +26,9 @@ except Exception:
 from common.setup import switch_version_grade
 from common.tools import close_ad, dismiss_global_popups, settle_ads
 from common.logger import step_log
+# ★ 2026-10-19：面向使用者的错误翻译层。前端日志只留人话，
+#   技术细节（异常类名/调用栈）走 print → server_output.log。
+from common.user_msg import human_error, summary_text, fmt_unit_value, status_of
 
 # ═══════════ 模块注册表：新增模块只需在此加一行 ═══════════
 MODULE_MAP = {
@@ -41,6 +44,22 @@ MODULE_MAP = {
 APP_PACKAGE = "com.dinoenglish.yyb"
 DEFAULT_GRADE = "五年级上册"
 DEFAULT_VERSION = "湘少版"
+
+
+def _stage_log(label: str, q: int):
+    """子阶段（如听力专项·练习）结束时的日志：0 题绝不能写成「完成」。
+
+    ★ 2026-10-19：试用反馈"检测完了 5 个、累计零题"就是在这一步骗人的 ——
+      旧日志无论题数多少都写「✅ xx 完成: 0 题」，测试员据此以为已经测过。
+    """
+    try:
+        q = int(q or 0)
+    except Exception:
+        q = 0
+    if q > 0:
+        step_log(f"✅ {label} 检测完成：{q} 题", "success")
+    else:
+        step_log(f"⚠ {label} 没有题目可测（0 题），未计入检测结果", "warning")
 
 
 def _wait_home_ready(d, timeout=25):
@@ -95,7 +114,9 @@ def _switch_if_needed(d, version, grade):
             except Exception:
                 pass
             time.sleep(2)
-    step_log(f"❌ 版本/年级切换失败（{version} {grade} 未生效）→ 本轮结果不可用，已中止", "error")
+    step_log(f"❌ 版本/年级没切到「{version} {grade}」，本轮已中止"
+             f"（不拿错年级的结果冒充检测结论）", "error")
+    step_log("　　→ 怎么办：上面几条日志已写明卡在哪一步，按提示处理后再重跑。", "info")
     return False
 
 
@@ -205,8 +226,13 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
         if not info:
             raise RuntimeError("设备离线")
     except Exception as e:
-        step_log(f"❌ 设备不可用: {e}，请先连接设备再开始", "error")
-        return {name: {"q": 0, "t": 0, "ok": False, "error": f"设备不可用: {e}"} for name in (module_names or MODULE_MAP.keys())}
+        _hl, _act, _tech = human_error(e)
+        step_log(f"❌ 手机/模拟器用不了，本轮无法开始：{_hl}", "error")
+        step_log(f"　　→ 怎么办：{_act}", "info")
+        print(f"[设备不可用] {_tech}")
+        return {name: {"q": 0, "t": 0, "ok": False, "status": "failed",
+                       "error": _hl, "error_action": _act}
+                for name in (module_names or MODULE_MAP.keys())}
 
     if module_names is None:
         module_names = list(MODULE_MAP.keys())
@@ -245,7 +271,8 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
     if not _switch_if_needed(d, version, grade):
         # ★ 版本/年级没切到位 → 继续跑只会产出"错年级的结论"。
         #   宁可不测：全部模块标记失败并原样返回，让用户在日志里一眼看到拦停原因。
-        return {name: {"q": 0, "t": 0, "ok": False, "error": "版本/年级切换失败"}
+        return {name: {"q": 0, "t": 0, "ok": False, "status": "failed",
+                       "error": "版本/年级没有切换成功，本模块没有开始检测"}
                 for name in module_names}
 
     # 1.5 关广告（与单模块 main() 一致：先清全局弹窗 + 关广告，再操作界面，
@@ -267,13 +294,15 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
             break
         if name not in MODULE_MAP:
             print(f"未知模块: {name}（可选: {list(MODULE_MAP.keys())}）")
-            results[name] = {"q": 0, "t": 0, "ok": False, "error": "未知模块"}
+            results[name] = {"q": 0, "t": 0, "ok": False, "status": "failed",
+                             "error": "程序里没有这个模块，无法检测"}
+            step_log(f"❌ {name} 没有测成：程序里没有这个模块", "error")
             continue
 
         # 该模块的单元范围（未指定 → None = 默认全部）
         module_units = units.get(name)
-        units_desc = f"{module_units}" if module_units else "全部"
-        step_log(f"▶ 开始检测第 {i+1}/{len(module_names)} 个模块: {name}（单元: {units_desc}）", "step")
+        units_desc = fmt_unit_value(module_units) or "全部单元"
+        step_log(f"▶ 第 {i+1}/{len(module_names)} 个模块：{name}（{units_desc}）", "step")
         # ★ 设置模块上下文（供错题定位：哪个模块·哪个子模块）
         try:
             from common.logger import set_current_module
@@ -295,42 +324,50 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
                 _p_res = None
                 _t_res = None
                 if _p_on and _t_on:
-                    step_log(f"📌 听力专项: 练习单元{practice_units} + 测试单元{test_units} 分开检测", "step")
+                    step_log(f"📌 听力专项：练习 {fmt_unit_value(practice_units)}，测试 {fmt_unit_value(test_units)}，分开检测", "step")
                     set_current_module("听力专项", "练习")
                     _p_q = mod.run_module(d, units=practice_units) if _p_on else 0
-                    step_log(f"✅ 听力专项·练习 完成: {_p_q} 题", "success")
-                    _p_res = {"q": _p_q, "t": 0, "ok": True, "stage": "练习"}
+                    _stage_log("听力专项·练习", _p_q)
+                    _p_res = {"q": _p_q, "t": 0, "ok": True, "stage": "练习",
+                              "status": "ok" if _p_q > 0 else "empty"}
                     set_current_module("听力专项", "测试")
                     _t_q = mod.run_test_module(d, test_units=test_units) if _t_on else 0
-                    step_log(f"✅ 听力专项·测试 完成: {_t_q} 题", "success")
-                    _t_res = {"q": _t_q, "t": 0, "ok": True, "stage": "测试"}
+                    _stage_log("听力专项·测试", _t_q)
+                    _t_res = {"q": _t_q, "t": 0, "ok": True, "stage": "测试",
+                              "status": "ok" if _t_q > 0 else "empty"}
                     q = _p_q + _t_q
                 elif _p_on:
                     set_current_module("听力专项", "练习")
                     _p_q = mod.run_module(d, units=practice_units)
-                    step_log(f"📌 听力专项: 仅练习（测试未勾选）完成 {_p_q} 题", "info")
-                    _p_res = {"q": _p_q, "t": 0, "ok": True, "stage": "练习"}
+                    step_log(f"📌 听力专项：只测练习（测试未勾选）", "info")
+                    _stage_log("听力专项·练习", _p_q)
+                    _p_res = {"q": _p_q, "t": 0, "ok": True, "stage": "练习",
+                              "status": "ok" if _p_q > 0 else "empty"}
                     q = _p_q
                 elif _t_on:
                     set_current_module("听力专项", "测试")
                     _t_q = mod.run_test_module(d, test_units=test_units)
-                    step_log(f"📌 听力专项: 仅测试（练习未勾选）完成 {_t_q} 题", "info")
-                    _t_res = {"q": _t_q, "t": 0, "ok": True, "stage": "测试"}
+                    step_log(f"📌 听力专项：只测测试（练习未勾选）", "info")
+                    _stage_log("听力专项·测试", _t_q)
+                    _t_res = {"q": _t_q, "t": 0, "ok": True, "stage": "测试",
+                              "status": "ok" if _t_q > 0 else "empty"}
                     q = _t_q
                 elif practice_units == "NONE" and test_units == "NONE":
                     # 前端明确"练/测 都不勾选" → 跳过听力专项（不跑）
-                    step_log(f"📌 听力专项: 练/测均未勾选，跳过", "warning")
+                    step_log("📌 听力专项：练习和测试都没勾选，本模块跳过", "warning")
                     q = 0
                 else:
                     # 都未指定（旧调用，无 units 传参）→ 都跑，兼容
                     set_current_module("听力专项", "练习")
                     _p_q = mod.run_module(d, units=module_units) if module_units else mod.run_module(d)
-                    _p_res = {"q": _p_q, "t": 0, "ok": True, "stage": "练习"}
+                    _p_res = {"q": _p_q, "t": 0, "ok": True, "stage": "练习",
+                              "status": "ok" if _p_q > 0 else "empty"}
                     set_current_module("听力专项", "测试")
                     _t_q = mod.run_test_module(d, test_units=module_units) if module_units else mod.run_test_module(d)
-                    _t_res = {"q": _t_q, "t": 0, "ok": True, "stage": "测试"}
+                    _t_res = {"q": _t_q, "t": 0, "ok": True, "stage": "测试",
+                              "status": "ok" if _t_q > 0 else "empty"}
                     q = _p_q + _t_q
-                    step_log(f"📌 听力专项: 练习+测试 全部完成（{q} 题）", "info")
+                    step_log(f"📌 听力专项：练习 + 测试都跑完了，合计 {q} 题", "info")
             else:
                 # ★ 其他模块：设置模块上下文（模块名 + 子模块从模块内部 step_log 更新）
                 set_current_module(name, "")
@@ -339,8 +376,22 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
                 else:
                     q = mod.run_module(d)
             elapsed = round(time.time() - t0)
-            results[name] = {"q": q, "t": elapsed, "ok": True}
-            step_log(f"✅ {name} 完成: {q} 题, 耗时 {elapsed}s", "success")
+            # ★ 2026-10-19：三态落库。q>0 才是「检测完成」；
+            #   跑完但 0 题 → empty（没有题目，未检测）—— 不许再算成功。
+            _st = "ok" if int(q or 0) > 0 else "empty"
+            results[name] = {"q": q, "t": elapsed, "ok": True, "status": _st}
+            if _st == "ok":
+                step_log(f"✅ {name} 检测完成：{q} 题，用时 {elapsed} 秒", "success")
+            else:
+                step_log(
+                    f"⚠ {name} 没有题目可测（0 题）：这个模块从头走到尾，App 里没有出现任何"
+                    f"可检测的题目，**不算检测完成**。如果 App 里这个模块确实有题目，"
+                    f"说明进入或翻页失败，请重跑该模块。", "warning")
+                if elapsed <= 5:
+                    step_log(
+                        f"　　这次只用了 {elapsed} 秒，说明连模块入口都没进去 —— "
+                        f"请确认当前版本/年级的首页上有「{name}」这个入口；没有就取消勾选它。",
+                        "info")
             # ★ 模块完成后回调（web_server 用它跑 LLM 脚本审查，不阻塞下一模块）
             if on_module_done is not None:
                 # ★ 听力专项：练习/测试分别完成后回调（stage 区分，避免脚本错配比对）
@@ -360,23 +411,39 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
                         on_module_done(name, results[name])
                     except Exception as _e:
                         step_log(f"⚠ {name} 完成后回调异常: {_e}", "warning")
+        except SystemExit:
+            raise
         except Exception as e:
             elapsed = round(time.time() - t0)
-            results[name] = {"q": 0, "t": elapsed, "ok": False, "error": str(e)}
-            # ★ 附带完整 traceback 便于定位（Errno 22 等偶发错误需要调用栈）
+            _headline, _action, _tech = human_error(e, name)
+            results[name] = {"q": 0, "t": elapsed, "ok": False, "status": "failed",
+                             "error": _headline, "error_action": _action}
+            # ★ 2026-10-19：前端只给人话 + 下一步动作；调用栈 print 到服务端日志。
+            #   旧写法把 `device 'xxx' not found [ ' File "C:\...\adb.py", line 192…`
+            #   直接甩到测试员面前（试用反馈最刺眼的一条）。
+            step_log(f"❌ {name} 没有测成：{_headline}", "error")
+            step_log(f"　　→ 怎么办：{_action}", "info")
+            print(f"[模块中断] {name} → {_tech}")
             import traceback as _tb
-            _tb_str = _tb.format_exc()
-            step_log(f"❌ {name} 检测失败: {e} | {_tb_str.splitlines()[-3:] if _tb_str else ''}", "error")
+            _tb.print_exc()
 
         # 模块间回到主页（★ 修复：真正 back 回主页，保证下一模块干净起点；
         #   之前只打日志不动作 → 卡顿+重启 App。不再切换年级，调度器只在开头切一次）
-        step_log(f"↩ {name} 完成，返回主页准备下一个模块…", "info")
+        if results.get(name, {}).get("status") == "failed":
+            step_log("↩ 本模块已中断，回到主页继续下一个模块…", "info")
+        else:
+            step_log("↩ 回到主页，准备下一个模块…", "info")
         _back_to_home(d)
 
-    # 汇总
-    total_q = sum(r.get("q", 0) for r in results.values())
-    ok_n = sum(1 for r in results.values() if r.get("ok"))
-    step_log(f"✅ 全部检测完成！{len(results)} 个模块, {ok_n} 个成功, 累计 {total_q} 题", "success")
+    # 汇总：口径统一走 user_msg（0 题不算成功，失败不说完成）
+    if results:
+        _sum = summary_text(results)
+        _lv = "success"
+        if any(status_of(r) == "failed" for r in results.values()):
+            _lv = "warning"
+        if sum(int((r or {}).get("q") or 0) for r in results.values()) == 0:
+            _lv = "error"
+        step_log(_sum, _lv)
     return results
 
 
