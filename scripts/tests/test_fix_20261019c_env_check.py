@@ -306,10 +306,42 @@ chk("环境块不含 emoji",
 
 
 print("=" * 68)
-print("T11  真实自检可执行（当前无设备时不得抛异常）")
+print("T11  /api/hardware-info 不引未定义常量、单条 adb 失败不拖垮整块")
 print("=" * 68)
-ec._online_serials = _orig_online
+_hw_src = _read("web_server.py")
+_ap_lines = [_l.strip() for _l in _hw_src.split("\n")
+             if "APP_PACKAGE" in _l and not _l.strip().startswith("#")]
+chk("不再引用裸 APP_PACKAGE（注释除外）", not _ap_lines, _ap_lines[:3])
+chk("包名从 config 取并有兜底", '_pkg = getattr(getattr(config, "app", None), "package"' in _hw_src)
+chk("_p 单条失败返回空串", "单条命令失败不应让整块信息全空" in _hw_src)
+chk("emulator 在 try 外赋值（不受 adb 失败影响）",
+    '_intended_serial() or config.device.serial' in _hw_src
+    and 'info = {"serial": serial, "screen": "", "emulator":' in _hw_src)
+
+try:
+    os.environ["no_proxy"] = "127.0.0.1,localhost"
+    import web_server as _wsv  # noqa: E402
+    _c = _wsv.app.test_client()
+    _rh = _c.get("/api/hardware-info")
+    _jh = _rh.get_json() or {}
+    chk("/api/hardware-info 返回 200", _rh.status_code == 200, str(_rh.status_code))
+    chk("返回体含 emulator 字段（bool）", isinstance(_jh.get("emulator"), bool), str(_jh))
+    chk("返回体含 serial 字段", "serial" in _jh)
+    if _jh.get("screen"):
+        chk("screen 形如 WxH", re.fullmatch(r"\d+x\d+", _jh["screen"]) is not None,
+            _jh.get("screen"))
+    print("     hardware:", {k: _jh.get(k) for k in
+                             ("serial", "model", "screen", "density", "dp",
+                              "app_version", "emulator")})
+except Exception as _e:
+    chk("/api/hardware-info 可调用", False, repr(_e))
+
+
+print("=" * 68)
+print("T12  真实自检可执行（当前无设备时不得抛异常）")
+print("=" * 68)
 ec._run = _orig_run
+ec._online_serials = _orig_online
 try:
     _real = ec.run_check("", remember=False)
     chk("run_check 可执行", isinstance(_real, dict))

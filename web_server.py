@@ -5801,16 +5801,26 @@ def api_hardware_info():
     """
     config = load_config()
     serial = _intended_serial() or config.device.serial
-    info = {"serial": serial, "screen": ""}
+    # ⚠ 包名取配置（web_server 里没有 APP_PACKAGE 常量；写死的字面量一旦与 config
+    #   不一致，App 版本就永远读不到，而这里恰好是排查"设备差异"的关键字段）
+    try:
+        _pkg = getattr(getattr(config, "app", None), "package", "") or "com.dinoenglish.yyb"
+    except Exception:
+        _pkg = "com.dinoenglish.yyb"
+    info = {"serial": serial, "screen": "", "emulator": ":" in (serial or "")}
     try:
         # ★ 跨机器可移植：自动定位 adb（不再写死任何人的绝对路径）
         adb_path = ADBController._find_adb()
 
         def _p(*args, timeout=5):
-            r = sp.run([adb_path, "-s", serial, "shell", *args],
-                       capture_output=True, text=True, timeout=timeout,
-                       encoding="utf-8", errors="replace")
-            return (r.stdout or "").strip() if r.returncode == 0 else ""
+            try:
+                r = sp.run([adb_path, "-s", serial, "shell", *args],
+                           capture_output=True, text=True, timeout=timeout,
+                           encoding="utf-8", errors="replace")
+                return (r.stdout or "").strip() if r.returncode == 0 else ""
+            except Exception:
+                # 单条命令失败不应让整块信息全空（旧写法一处超时 → 后面字段全丢）
+                return ""
 
         info["model"] = _p("getprop", "ro.product.model")
         info["brand"] = _p("getprop", "ro.product.brand")
@@ -5827,11 +5837,10 @@ def api_hardware_info():
                 d = int(m2.group(1))
                 if d > 0:
                     info["dp"] = [round(w * 160 / d), round(h * 160 / d)]
-        ver = _p("dumpsys", "package", APP_PACKAGE, timeout=10)
+        ver = _p("dumpsys", "package", _pkg, timeout=10)
         mv = re.search(r"versionName=([^\s]+)", ver)
         if mv:
             info["app_version"] = mv.group(1)
-        info["emulator"] = ":" in (serial or "")
     except Exception as e:
         print(f"[硬件信息] 读取失败: {e}")
     return jsonify(info)
