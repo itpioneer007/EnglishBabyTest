@@ -402,13 +402,24 @@ def build_from_docx(docx_paths: list[str] = None):
     kb = KnowledgeBase()
 
     if not docx_paths:
-        # 默认搜索常见路径
-        base = r"D:\压缩包存储"
-        if Path(base).exists():
-            docx_paths = [str(p) for p in Path(base).rglob("*.docx")]
+        # ★ 2026-10-19：不再默认 D:\压缩包存储（作者本机路径，别人机器上不存在，
+        #   于是"知识库构建失败"却没人知道）。改为：
+        #   环境变量 YYB_DOCX_DIR → 项目内 uploads/ → 项目内 scripts/。
+        import os as _os
+        from pathlib import Path as _P
+        _root = _P(__file__).resolve().parent.parent
+        for _cand in (_os.environ.get("YYB_DOCX_DIR", ""),
+                      str(_root / "uploads"), str(_root / "scripts")):
+            if _cand and _P(_cand).is_dir():
+                _found = [str(p) for p in _P(_cand).rglob("*.docx")]
+                if _found:
+                    docx_paths = _found
+                    print(f"从 {_cand} 找到 {len(_found)} 个 DOCX")
+                    break
 
     if not docx_paths:
-        print("⚠ 未找到 DOCX 文件")
+        print("未找到 DOCX 文件。请把脚本放到 uploads/ 目录，"
+              "或设置环境变量 YYB_DOCX_DIR 指向脚本所在目录。")
         return kb
 
     print(f"📚 导入 {len(docx_paths)} 个 DOCX 文件到知识库...")

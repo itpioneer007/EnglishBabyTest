@@ -237,6 +237,8 @@ def detect_module_from_filename(filename: str):
 # ============================================================
 REFERENCE_RES = (1080, 2400)
 _detected_res = None
+_detected_dpi = None
+_layout_shifted = None       # True=该设备 dp 与基准不同（布局已重排，坐标换算不可靠）
 _scale_x = 1.0
 _scale_y = 1.0
 
@@ -388,9 +390,16 @@ def detect_screen_resolution(adb_serial: str = ""):
 
     ★ 2026-10-16：每次探测前先把缩放**复位为 1:1**。原来失败时保留上一次的值，
       更容易掩盖问题；复位后"探测失败"必定表现为 1:1，与日志告警一致、可解释。
+    ★ 2026-10-19：同时读 `wm density`，算出逻辑尺寸（dp）并与基准 360x800dp 比较。
+      Android 的布局按 dp 排布：分辨率比例换算只有在 dp 也等比时才成立。
+      真机 1080x2400@480dpi 恰好等于基准，所以作者本机一直"没问题"；
+      换一台 dp 不同的手机或模拟器，布局是**重排**而不是等比拉伸 → 按像素比例
+      算出来的坐标只能近似 → 出现"点了没反应/进错页面"，且日志里看不出原因。
+      这里把该事实显式打出来，并透出到 /api/status 与报告。
     """
-    global _detected_res, _scale_x, _scale_y
-    _detected_res, _scale_x, _scale_y = None, 1.0, 1.0
+    global _detected_res, _detected_dpi, _layout_shifted, _scale_x, _scale_y
+    _detected_res, _detected_dpi, _layout_shifted = None, None, None
+    _scale_x, _scale_y = 1.0, 1.0
     try:
         # ★ 跨机器自动定位 adb（复用 ADBController 的探测逻辑，不写死任何用户路径）
         adb_path = ADBController._find_adb()
@@ -407,6 +416,28 @@ def detect_screen_resolution(adb_serial: str = ""):
             _scale_x = w / REFERENCE_RES[0]
             _scale_y = h / REFERENCE_RES[1]
             print(f"  [坐标缩放] 检测到分辨率 {w}x{h}, 缩放比 X={_scale_x:.3f} Y={_scale_y:.3f}")
+            # ---- 逻辑尺寸（dp）----
+            try:
+                cmd2 = [adb_path]
+                if adb_serial:
+                    cmd2.extend(["-s", adb_serial])
+                cmd2.extend(["shell", "wm", "density"])
+                r2 = sp.run(cmd2, capture_output=True, text=True, timeout=5,
+                            encoding="utf-8", errors="replace")
+                m2 = re.search(r"(\d+)", r2.stdout or "")
+                if m2:
+                    _detected_dpi = int(m2.group(1))
+                    if _detected_dpi > 0:
+                        dp_w = round(w * 160 / _detected_dpi)
+                        dp_h = round(h * 160 / _detected_dpi)
+                        _layout_shifted = not (
+                            abs(dp_w - 360) <= 24 and abs(dp_h - 800) <= 24)
+                        print(f"  [坐标缩放] 逻辑尺寸 {dp_w}x{dp_h}dp (dpi={_detected_dpi})"
+                              + ("  ⚠ 与基准 360x800dp 不同：布局为「重排」，"
+                                 "按比例换算的坐标只能近似，关键操作已优先走元素定位"
+                                 if _layout_shifted else "  与基准一致"))
+            except Exception as e:
+                print(f"  [坐标缩放] 读取 density 失败（不影响分辨率缩放）: {e}")
         else:
             print(f"  [坐标缩放] ⚠ 无法解析分辨率（设备 {adb_serial or '默认'} 可能未连接）: "
                   f"{r.stdout.strip()!r} → 坐标按基准 "
@@ -479,6 +510,12 @@ def refresh_device_scale(serial: str = "", reason: str = "", allow_substitute=No
         "online": _dev["online"],
         "resolution": list(_detected_res) if _detected_res else None,
         "scale": [_scale_x, _scale_y],
+        # ★ 2026-10-19：逻辑尺寸与"布局是否重排" —— 跨设备结果差异的硬件主因
+        "density": _detected_dpi,
+        "dp": ([round(_detected_res[0] * 160 / _detected_dpi),
+                round(_detected_res[1] * 160 / _detected_dpi)]
+               if (_detected_res and _detected_dpi) else None),
+        "layout_shifted": _layout_shifted,
         "ok": _detected_res is not None,
         "before": list(before),
         "reason": reason or "手动",
@@ -534,11 +571,100 @@ def _preflight_target_device():
     )
 
 
+# ============================================================
+# 环境自检（跨设备差异的显式化）
+# ★ 2026-10-19 新增。背景：同一份代码在 A 同学的手机、B 同学的模拟器、作者的
+#   真机上跑出的结论不同，但日志里看不出来"条件变了"——因为下列差异全都在
+#   静默降级：屏幕 dp 不同（布局重排）、模拟器无录音、参考图库指向原作者电脑、
+#   App 版本不同、LLM 密钥/额度不同。
+#   这一层只做两件事：**阻断项说清楚**、**降级项写进日志与报告**。
+# ============================================================
+_ENV_CACHE = {"t": 0.0, "serial": "", "result": None}
+_ENV_TTL = 15.0
+_LAST_ENV = {}          # 本轮任务的 env 结果（报告 meta 用）
+
+
+def _env_mod():
+    """延迟导入 env_check（scripts 在 sys.path 时才可用）。"""
+    try:
+        sys.path.insert(0, str(Path(__file__).parent / "scripts"))
+        from common import env_check as _ec
+        return _ec
+    except Exception as e:
+        print(f"[环境自检] 模块加载失败: {e}")
+        return None
+
+
+def get_env_report(serial: str = "", force: bool = False) -> dict:
+    """取环境自检结果（带 15s 缓存，/api/status 每 2s 轮询也扛得住）。"""
+    ec = _env_mod()
+    if ec is None:
+        return {"ok": True, "blockers": [], "warnings": [],
+                "capabilities": {}, "device": {}, "local": {},
+                "unavailable": True}
+    s = (serial or "").strip() or _intended_serial()
+    now = time.time()
+    if (not force and _ENV_CACHE["result"]
+            and _ENV_CACHE["serial"] == s
+            and (now - _ENV_CACHE["t"]) < _ENV_TTL):
+        return _ENV_CACHE["result"]
+    try:
+        res = ec.run_check(s, remember=force)
+    except Exception as e:
+        print(f"[环境自检] 执行失败: {e}")
+        return {"ok": True, "blockers": [], "warnings": [],
+                "capabilities": {}, "device": {}, "local": {},
+                "unavailable": True}
+    _ENV_CACHE.update({"t": now, "serial": s, "result": res})
+    return res
+
+
+def _preflight_env(serial: str = "", persist: bool = True) -> tuple:
+    """任务开始前的环境自检。
+
+    返回 (ok, message)：
+      - ok=False 时 message 是给使用者看的阻断说明（阻断项已逐条写入日志）
+      - ok=True  时把能力降级逐条写入日志，供使用者判断本轮结论的适用范围
+    """
+    global _LAST_ENV
+    res = get_env_report(serial, force=True)
+    if persist:
+        _LAST_ENV = res
+    if res.get("unavailable"):
+        return True, ""
+    try:
+        ec = _env_mod()
+        lines = ec.format_lines(res)
+    except Exception:
+        lines = []
+    for ln in lines:
+        lvl = "error" if ln.startswith("检测未开始") else (
+            "warning" if ln.startswith("能力边界") else "info")
+        try:
+            log_msg(ln, lvl)
+        except Exception:
+            pass
+    if not res.get("ok"):
+        blockers = res.get("blockers") or []
+        if blockers:
+            return False, blockers[0]
+        return False, "环境检查未通过。请按日志中的提示修正后重新开始检测。"
+    return True, ""
+
+
 def get_adb():
-    """获取 ADBController 实例 (截图保存到 screenshots/)"""
+    """获取 ADBController 实例 (截图保存到 screenshots/)
+
+    ★ 2026-10-19：串号改用 `_intended_serial()`，不再直接读 config.yaml。
+      原写法在看别人电脑上必然失败——config.yaml 里写的是作者的真机串号
+      （SKSCIF4T7PFMQS5X），而同事的电脑上没有这台设备，`adb -s SKSCIF...`
+      一律报 device not found；偏偏主流程走 u2 用的是 ANDROID_SERIAL，
+      于是出现"主流程能跑、辅助截图/登录功能全挂"的分裂状态。
+    """
     config = load_config()
     # 用相对路径避免 adb pull 在 Windows 上拼接出错
-    return ADBController(serial=config.device.serial, screenshot_dir="screenshots")
+    return ADBController(serial=_intended_serial() or config.device.serial,
+                         screenshot_dir="screenshots")
 
 
 
@@ -1919,9 +2045,9 @@ def run_inspect_questions_task():
 
         # 1. 启动APP
         log_msg("启动APP...")
-        sp.run([adb_path, '-s', config.device.serial, 'shell', 'am', 'force-stop', 'com.dinoenglish.yyb'])
+        sp.run([adb_path, '-s', adb.serial, 'shell', 'am', 'force-stop', 'com.dinoenglish.yyb'])
         time.sleep(2)
-        sp.run([adb_path, '-s', config.device.serial, 'shell', 'am', 'start', '-n', 'com.dinoenglish.yyb/.base.SplashActivity'])
+        sp.run([adb_path, '-s', adb.serial, 'shell', 'am', 'start', '-n', 'com.dinoenglish.yyb/.base.SplashActivity'])
         time.sleep(5)
         adb.tap(*AD_CLOSE)  # 关启动广告
         time.sleep(3)
@@ -1983,9 +2109,9 @@ def run_inspect_questions_task():
 
             # 截图
             shot_path = out_dir / f"q_{q_idx+1:02d}.png"
-            sp.run([adb_path, '-s', config.device.serial, 'shell', 'screencap', '-p', '/sdcard/_q.png'])
-            sp.run([adb_path, '-s', config.device.serial, 'pull', '/sdcard/_q.png', str(shot_path)])
-            sp.run([adb_path, '-s', config.device.serial, 'shell', 'rm', '/sdcard/_q.png'])
+            sp.run([adb_path, '-s', adb.serial, 'shell', 'screencap', '-p', '/sdcard/_q.png'])
+            sp.run([adb_path, '-s', adb.serial, 'pull', '/sdcard/_q.png', str(shot_path)])
+            sp.run([adb_path, '-s', adb.serial, 'shell', 'rm', '/sdcard/_q.png'])
 
             # 检测题目类型
             question_type = "未知"
@@ -2103,11 +2229,83 @@ def api_status():
         "devices": _device_list(),
         # ★ 坐标缩放可观测（原来只在服务端 stdout 打一行，前端完全看不到）
         "target_resolution": list(_detected_res) if _detected_res else None,
+        "target_density": _detected_dpi,
+        "target_dp": ([round(_detected_res[0] * 160 / _detected_dpi),
+                       round(_detected_res[1] * 160 / _detected_dpi)]
+                      if (_detected_res and _detected_dpi) else None),
+        "coord_layout_shifted": _layout_shifted,
         "coord_scale": [_scale_x, _scale_y],
         "coord_scale_ok": _detected_res is not None,
         "current_version": _get_current_version_from_config(),
         "task_status": task_status,
+        # ★ 2026-10-19：环境自检摘要（设备能力边界）。前端据此显示
+        #   「模拟器 / 布局与基准不同 / 录音不可用 / 参考图库缺失」等提示，
+        #   让"换个设备结果就不一样"在界面上就有解释。
+        "env": _env_brief(device_ok),
     })
+
+
+def _env_brief(device_ok: bool = True) -> dict:
+    """环境自检的轻量摘要（给 /api/status 用，不重复探测）。"""
+    if not device_ok:
+        return {"available": False}
+    try:
+        res = get_env_report()
+    except Exception:
+        return {"available": False}
+    if res.get("unavailable"):
+        return {"available": False}
+    dev = res.get("device") or {}
+    caps = res.get("capabilities") or {}
+    ec = _env_mod()
+    try:
+        text = ec.summary(res) if ec else ""
+    except Exception:
+        text = ""
+    return {
+        "available": True,
+        "ok": bool(res.get("ok")),
+        "summary": text,
+        "env_changed": bool(res.get("env_changed")),
+        "capabilities": caps,
+        "warnings": res.get("warnings") or [],
+        "blockers": res.get("blockers") or [],
+        "device": {
+            "model": dev.get("model"),
+            "brand": dev.get("brand"),
+            "android": dev.get("android"),
+            "size": dev.get("size"),
+            "density": dev.get("density"),
+            "dp": dev.get("dp"),
+            "emulator": dev.get("emulator"),
+            "layout_matches_reference": dev.get("layout_matches_reference"),
+            "app_version": dev.get("app_version"),
+            "record_capable": dev.get("record_capable"),
+        },
+    }
+
+
+@app.route("/api/env/check", methods=["GET"])
+def api_env_check():
+    """完整环境自检（设备 + 本机 + 能力边界）。
+
+    查询参数：
+      serial  可选，指定要探测的设备（默认按目标设备口径）
+      force   1 / true 时不使用缓存，且记录环境指纹（用于"与上轮是否同环境"）
+    """
+    serial = (request.args.get("serial") or "").strip()
+    force = (request.args.get("force") or "").lower() in ("1", "true", "yes")
+    res = get_env_report(serial, force=force)
+    ec = _env_mod()
+    lines = []
+    if ec:
+        try:
+            lines = ec.format_lines(res)
+        except Exception:
+            lines = []
+    out = dict(res)
+    out["lines"] = lines
+    return jsonify(out)
 
 
 @app.route("/api/budget")
@@ -2449,6 +2647,10 @@ def api_run_full():
     if not _ok:
         log_msg(f"❌ 设备预检未通过: {_msg}", "error")
         return jsonify({"error": _msg}), 400
+    # ★ 2026-10-19：环境自检（App 是否安装 / 依赖 / 目录 / 参考图库 / 录音能力）
+    _env_ok, _env_msg = _preflight_env()
+    if not _env_ok:
+        return jsonify({"error": _env_msg}), 400
 
     t = threading.Thread(target=run_full_task, args=(version, grade, modules), daemon=True)
     t.start()
@@ -3453,6 +3655,38 @@ def _save_inspection_state_merge():
     p.write_text(json.dumps(_merged, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _env_report_meta() -> dict:
+    """报告里要写的环境信息（设备 / 能力边界 / 降级提示）。
+
+    ★ 2026-10-19：报告必须自带"在什么设备上、哪些维度没做"。否则同事拿同一份
+      脚本在另一台手机上跑出不同结论时，双方都只能猜。
+    """
+    res = _LAST_ENV or {}
+    if not res:
+        try:
+            res = get_env_report()
+        except Exception:
+            return {}
+    if res.get("unavailable"):
+        return {"available": False}
+    dev = res.get("device") or {}
+    return {
+        "available": True,
+        "ok": bool(res.get("ok")),
+        "device": {
+            "brand": dev.get("brand"), "model": dev.get("model"),
+            "android": dev.get("android"),
+            "size": dev.get("size"), "density": dev.get("density"),
+            "dp": dev.get("dp"), "emulator": dev.get("emulator"),
+            "app_version": dev.get("app_version"),
+            "layout_matches_reference": dev.get("layout_matches_reference"),
+            "record_capable": dev.get("record_capable"),
+        },
+        "capabilities": res.get("capabilities") or {},
+        "warnings": res.get("warnings") or [],
+    }
+
+
 def _live_regen_error_report():
     """
     ★ 实时重新生成"仅错误"的可折叠卡片 HTML 报告（审查中每出一道错题即调用）。
@@ -3479,6 +3713,8 @@ def _live_regen_error_report():
             # ★ 2026-09-21：脚本溯源（本次拿哪份脚本比对、是否适配）——报告据此
             #   在头部写明"脚本层结论是否可信"，避免用户看到一份来源不明的错题单。
             "script_provenance": state.get("_script_provenance") or {},
+            # ★ 2026-10-19：检测环境与能力边界（设备差异在报告里自解释）
+            "env": _env_report_meta(),
         }
         exp = ReportExporter()
         path = exp.export_html_live(qs_all, meta)
@@ -5558,24 +5794,46 @@ def api_log():
 
 @app.route("/api/hardware-info")
 def api_hardware_info():
-    """获取手机信息"""
+    """获取手机信息
+
+    ★ 2026-10-19：不再硬编码 config.yaml 的串号与 "1080x2400"。原写法在同事电脑上
+      要么报 device not found，要么把分辨率说成基准值（与真实设备不符，误导排查）。
+    """
     config = load_config()
-    info = {"serial": config.device.serial, "screen": "1080x2400"}
+    serial = _intended_serial() or config.device.serial
+    info = {"serial": serial, "screen": ""}
     try:
         # ★ 跨机器可移植：自动定位 adb（不再写死任何人的绝对路径）
         adb_path = ADBController._find_adb()
-        r = sp.run([adb_path, "-s", config.device.serial, "shell", "getprop", "ro.product.model"],
-                   capture_output=True, text=True, timeout=5,
-                   encoding="utf-8", errors="replace")
-        if r.returncode == 0:
-            info["model"] = r.stdout.strip()
-        r2 = sp.run([adb_path, "-s", config.device.serial, "shell", "getprop", "ro.product.brand"],
-                    capture_output=True, text=True, timeout=5,
-                    encoding="utf-8", errors="replace")
-        if r2.returncode == 0:
-            info["brand"] = r2.stdout.strip()
-    except Exception:
-        pass
+
+        def _p(*args, timeout=5):
+            r = sp.run([adb_path, "-s", serial, "shell", *args],
+                       capture_output=True, text=True, timeout=timeout,
+                       encoding="utf-8", errors="replace")
+            return (r.stdout or "").strip() if r.returncode == 0 else ""
+
+        info["model"] = _p("getprop", "ro.product.model")
+        info["brand"] = _p("getprop", "ro.product.brand")
+        size = _p("wm", "size")
+        m = re.search(r"(\d+)x(\d+)", size)
+        if m:
+            info["screen"] = f"{m.group(1)}x{m.group(2)}"
+        dpi = _p("wm", "density")
+        m2 = re.search(r"(\d+)", dpi)
+        if m2:
+            info["density"] = int(m2.group(1))
+            if m:
+                w, h = int(m.group(1)), int(m.group(2))
+                d = int(m2.group(1))
+                if d > 0:
+                    info["dp"] = [round(w * 160 / d), round(h * 160 / d)]
+        ver = _p("dumpsys", "package", APP_PACKAGE, timeout=10)
+        mv = re.search(r"versionName=([^\s]+)", ver)
+        if mv:
+            info["app_version"] = mv.group(1)
+        info["emulator"] = ":" in (serial or "")
+    except Exception as e:
+        print(f"[硬件信息] 读取失败: {e}")
     return jsonify(info)
 
 
@@ -6961,6 +7219,12 @@ def api_modules_run():
             )}), 400
         log_msg(f"✅ 设备已就绪：{_cur_serial or '(默认设备)'}"
                 f"（屏幕 {_scale_info['resolution'][0]}×{_scale_info['resolution'][1]}）", "success")
+        # ★ 2026-10-19：设备可达之后再做环境自检 —— 把"哪些维度本轮做不了"
+        #   写在开跑前。阻断项（App 未安装/目录不可写/依赖缺失）直接拒绝开始，
+        #   能力降级（无参考图库/无视觉密钥/模拟器无麦克风）写进日志与报告。
+        _env_ok, _env_msg = _preflight_env(_cur_serial)
+        if not _env_ok:
+            return jsonify({"error": _env_msg}), 400
     except SystemExit:
         log_msg("⏹ 任务已被立即停止", "warning")
     except Exception as e:

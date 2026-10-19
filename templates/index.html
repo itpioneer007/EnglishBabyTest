@@ -1450,6 +1450,18 @@
           >
             使用指南
           </button>
+          <button
+            id="envBtn"
+            onclick="openEnv()"
+            title="检查当前设备与本机环境，确认本轮能做哪些检测维度"
+            class="bg-white/15 hover:bg-white/25 border border-white/25 px-3 py-1.5 rounded-lg transition flex items-center gap-1.5"
+          >
+            <span
+              id="envDot"
+              class="w-2 h-2 rounded-full bg-white/50 inline-block"
+            ></span>
+            环境
+          </button>
           <span class="flex items-center gap-1.5"
             ><span
               id="devDot"
@@ -2246,6 +2258,37 @@
 
     <!-- 列3（右侧面板）：脚本上传 / 知识库 / 审查智能体 → 来自 bunana 分支 -->
 
+    <!-- ===== 运行环境自检弹层（2026-10-19） =====
+         为什么要有：同一份脚本在不同手机/模拟器上结论不同，多半是运行条件不同
+         （屏幕 dp 不同导致布局重排、模拟器无麦克风、缺参考图库或视觉密钥、
+           App 版本不同）。把这些条件摆在界面上，比事后猜"是不是代码随机"有用。 -->
+    <div class="guide-mask" id="envMask" onclick="closeEnv()">
+      <div class="guide" onclick="event.stopPropagation()">
+        <div
+          class="flex items-center justify-between px-5 py-3 bg-gradient-to-r from-[#1b4332] to-[#2d6a4f] text-white"
+        >
+          <h2 class="font-bold text-[15px]">运行环境自检</h2>
+          <div class="flex items-center gap-2">
+            <button
+              class="bg-white/20 hover:bg-white/35 rounded-lg px-3 py-1 text-[12px] transition"
+              onclick="loadEnv(true)"
+            >
+              重新检查
+            </button>
+            <button
+              class="bg-white/20 hover:bg-white/35 rounded-lg px-3 py-1 text-[12px] transition"
+              onclick="closeEnv()"
+            >
+              关闭
+            </button>
+          </div>
+        </div>
+        <div class="p-5 text-[13px] leading-relaxed" id="envBody">
+          正在检查设备与环境…
+        </div>
+      </div>
+    </div>
+
     <!-- ===== 使用指南弹层 ===== -->
     <div class="guide-mask" id="guideMask" onclick="closeGuide()">
       <div class="guide" onclick="event.stopPropagation()">
@@ -2412,6 +2455,168 @@
         $("shotLightbox").classList.remove("open");
       }
 
+      /* ========== 运行环境自检 ========== */
+      function openEnv() {
+        document.getElementById("envMask").classList.add("open");
+        loadEnv(false);
+      }
+      function closeEnv() {
+        document.getElementById("envMask").classList.remove("open");
+      }
+      function _envEsc(s) {
+        return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
+          return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+        });
+      }
+      async function loadEnv(force) {
+        const body = $("envBody");
+        if (!body) return;
+        body.innerHTML = '<span class="opacity-60">正在检查设备与环境…</span>';
+        try {
+          const r = await (
+            await fetch("/api/env/check" + (force ? "?force=1" : ""))
+          ).json();
+          body.innerHTML = renderEnv(r);
+        } catch (e) {
+          body.innerHTML =
+            '<div class="text-[#a33]">环境检查未能完成。请确认服务仍在运行，然后点击「重新检查」。</div>';
+        }
+      }
+      function renderEnv(r) {
+        if (!r || r.unavailable) {
+          return '<div class="opacity-70">当前无法读取环境信息（设备未连接或检查模块未加载）。</div>';
+        }
+        const d = r.device || {},
+          caps = r.capabilities || {};
+        const blockers = r.blockers || [],
+          warns = r.warnings || [];
+        const ok = !!r.ok;
+
+        // 结论
+        let html = "";
+        if (ok) {
+          html +=
+            '<div class="rounded-lg bg-[#eaf5ee] border border-[#c7e3d2] text-[#1b4332] px-3 py-2 mb-3">' +
+            "环境检查通过，可以开始检测。" +
+            (warns.length
+              ? " 有 " +
+                warns.length +
+                " 项能力降级，对应维度会记为未判定，不会被误判为不通过。"
+              : "") +
+            "</div>";
+        } else {
+          html +=
+            '<div class="rounded-lg bg-[#fdecea] border border-[#f5c2c0] text-[#a3261b] px-3 py-2 mb-3">' +
+            "检测无法开始：发现 " +
+            blockers.length +
+            " 项阻断问题。请按下方逐条处理后重新检测。" +
+            "</div>";
+        }
+        if (r.env_changed) {
+          html +=
+            '<div class="rounded-lg bg-[#fff8e1] border border-[#f0d894] text-[#7a5c00] px-3 py-2 mb-3">' +
+            "本次使用的设备或 App 与上一次不同，两轮的题目数与结论不具备直接可比性。" +
+            "</div>";
+        }
+
+        // 设备信息
+        const rows = [];
+        const add = function (k, v) {
+          if (v === undefined || v === null || String(v).trim() === "") return;
+          rows.push(
+            '<div class="flex gap-3 py-0.5"><div class="w-24 shrink-0 text-[#6b7a72]">' +
+              k +
+              '</div><div class="flex-1 break-all">' +
+              _envEsc(v) +
+              "</div></div>"
+          );
+        };
+        add("设备", [d.brand, d.model].filter(Boolean).join(" "));
+        add("系统", d.android ? "Android " + d.android : "");
+        add(
+          "分辨率",
+          d.size
+            ? d.size.join("×") + (d.density ? " · " + d.density + "dpi" : "")
+            : ""
+        );
+        add("逻辑尺寸", d.dp ? d.dp.join("×") + "dp" : "");
+        add("App 版本", d.app_version);
+        add(
+          "设备类型",
+          d.emulator === true ? "模拟器" : d.emulator === false ? "真机" : ""
+        );
+        add(
+          "录音能力",
+          d.record_capable === true
+            ? "可用"
+            : d.record_capable === false
+            ? "不可用"
+            : "未知"
+        );
+        if (d.layout_matches_reference === false) {
+          add("布局", "与坐标基准不同（已优先使用元素定位）");
+        }
+        if (rows.length) {
+          html +=
+            '<div class="rounded-lg border border-[#dfe7e2] px-3 py-2 mb-3"><div class="font-semibold text-[#1b4332] mb-1">设备</div>' +
+            rows.join("") +
+            "</div>";
+        }
+
+        // 能力边界
+        const capOn = [],
+          capOff = [];
+        const caps_ = [
+          ["配图内容核对", caps.vision_ref],
+          ["文字类 AI 核查", caps.llm_text],
+          ["图片题视觉核对", caps.llm_vision],
+        ];
+        caps_.forEach(function (p) {
+          (p[1] ? capOn : capOff).push(p[0]);
+        });
+        if (caps.record === true) capOn.push("录音类题");
+        else if (caps.record === false) capOff.push("录音类题");
+        else capOff.push("录音类题（设备能力未知）");
+        if (capOn.length || capOff.length) {
+          html +=
+            '<div class="rounded-lg border border-[#dfe7e2] px-3 py-2 mb-3"><div class="font-semibold text-[#1b4332] mb-1">本轮能力边界</div>';
+          if (capOn.length)
+            html +=
+              '<div class="py-0.5"><span class="text-[#1b4332]">可做：</span>' +
+              _envEsc(capOn.join("、")) +
+              "</div>";
+          if (capOff.length)
+            html +=
+              '<div class="py-0.5 text-[#7a5c00]"><span>不做：</span>' +
+              _envEsc(capOff.join("、")) +
+              "<span class=\"opacity-70\">（记为未判定，不计为不通过）</span></div>";
+          html += "</div>";
+        }
+
+        // 阻断 / 提示
+        if (blockers.length) {
+          html +=
+            '<div class="rounded-lg bg-[#fdecea] border border-[#f5c2c0] px-3 py-2 mb-3"><div class="font-semibold text-[#a3261b] mb-1">阻断问题</div><ul class="list-disc ml-5 space-y-1">';
+          blockers.forEach(function (b) {
+            html += "<li>" + _envEsc(b) + "</li>";
+          });
+          html += "</ul></div>";
+        }
+        if (warns.length) {
+          html +=
+            '<div class="rounded-lg bg-[#fff8e1] border border-[#f0d894] px-3 py-2 mb-1"><div class="font-semibold text-[#7a5c00] mb-1">环境提示</div><ul class="list-disc ml-5 space-y-1">';
+          warns.forEach(function (w) {
+            html += "<li>" + _envEsc(w) + "</li>";
+          });
+          html += "</ul></div>";
+        }
+        html +=
+          '<div class="text-[11px] opacity-50 mt-2">检查时间 ' +
+          _envEsc(r.time || "") +
+          "</div>";
+        return html;
+      }
+
       /* ========== 使用指南 ========== */
       function openGuide() {
         document.getElementById("guideMask").classList.add("open");
@@ -2487,6 +2692,26 @@
               s.coord_scale_ok === false || sub
                 ? "text-[11px] text-amber-600"
                 : "text-[11px] opacity-60";
+          }
+          // ★ 2026-10-19：环境角标（绿=正常，琥珀=有能力降级，红=存在阻断）
+          const env = s.env || {};
+          const _ed = $("envDot");
+          if (_ed) {
+            _ed.className =
+              "w-2 h-2 rounded-full inline-block " +
+              (!env.available
+                ? "bg-white/40"
+                : !env.ok
+                ? "bg-red-400"
+                : (env.warnings || []).length
+                ? "bg-amber-300"
+                : "bg-green-300");
+          }
+          const _eb = $("envBtn");
+          if (_eb) {
+            _eb.title = env.available
+              ? env.summary || "环境正常"
+              : "无法读取环境信息（设备未连接或检查模块未加载）";
           }
           const now = Date.now();
           if (now - _devListTs > 8000) {

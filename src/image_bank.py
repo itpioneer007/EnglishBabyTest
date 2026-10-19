@@ -21,29 +21,52 @@ class ImageBank:
     索引方式: 中文文件名 + 知识库英文词汇(自动关联)
     """
 
-    DEFAULT_BASE = r"D:\压缩包存储"
+    # ★ 2026-10-19：不再硬编码 D:\压缩包存储（那是作者本机的路径）。
+    #   别人机器上该目录不存在 → 图库为空 → 视觉配图核对静默跳过，
+    #   而报告仍写着"检测完成"，于是同一份脚本在不同电脑上结论不同。
+    #   现在只认 config.yaml 的 image_dir（+ .env 的 YYB_IMAGE_DIR），
+    #   相对路径以**项目根**解析，缺失时明确打印告警（不静默）。
+    DEFAULT_BASE = ""
 
     def __init__(self, base_dirs: list = None):
-        # 优先级: 传参 > config.yaml > DEFAULT_BASE
-        self.base_dirs = []
+        root = Path(__file__).resolve().parent.parent
+        raw = []
+        # 优先级: 传参 > config.yaml > .env YYB_IMAGE_DIR
         if base_dirs:
-            self.base_dirs = [Path(d) for d in (base_dirs if isinstance(base_dirs, list) else [base_dirs])]
+            raw = list(base_dirs) if isinstance(base_dirs, list) else [base_dirs]
         else:
             try:
-                cfg_path = Path(__file__).parent.parent / "config.yaml"
+                cfg_path = root / "config.yaml"
                 if cfg_path.exists():
                     import yaml
-                    cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+                    cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
                     d = cfg.get("image_dir", [])
                     if isinstance(d, str):
-                        self.base_dirs = [Path(d)]
+                        raw = [d]
                     elif isinstance(d, list):
-                        self.base_dirs = [Path(x) for x in d]
+                        raw = list(d)
             except Exception:
                 pass
-        # 如果都没配, 用默认值并在DEFAULT_BASE下找 U*图片/ 目录
+            try:
+                for ln in (root / ".env").read_text(encoding="utf-8", errors="replace").splitlines():
+                    if ln.strip().startswith("YYB_IMAGE_DIR="):
+                        _v = ln.split("=", 1)[1].strip().strip('"').strip("'")
+                        raw += [x.strip() for x in _v.replace("|", ";").split(";") if x.strip()]
+                        break
+            except Exception:
+                pass
+        # 相对路径按项目根解析（否则从别的目录启动服务时会指错位置）
+        self.base_dirs = []
+        for x in raw:
+            if not str(x).strip():
+                continue
+            p = Path(str(x))
+            if not p.is_absolute():
+                p = root / p
+            self.base_dirs.append(p)
         if not self.base_dirs:
-            self.base_dirs = [Path(self.DEFAULT_BASE)]
+            print("[ImageBank] 未配置参考图库（config.yaml 的 image_dir 为空）→ "
+                  "配图内容核对将跳过，相关维度记为未判定")
         self.index: dict = {}
         self._loaded = False
 

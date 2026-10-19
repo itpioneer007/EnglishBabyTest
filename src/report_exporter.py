@@ -1350,6 +1350,70 @@ class ReportExporter:
         self.organize_output_dir(version, unit, stage)
         return str(out_path)
 
+    # ---------------------------------------------------------------
+    # 检测环境（设备 / 能力边界）
+    # ---------------------------------------------------------------
+    _CAP_LABEL = {
+        "vision_ref": "配图内容核对",
+        "llm_text": "文字类 AI 核查",
+        "llm_vision": "图片题视觉核对",
+    }
+
+    def _render_env_block(self, meta: dict) -> str:
+        """渲染「这份报告是在什么设备上、用哪些能力跑出来的」。
+
+        用途：同一份脚本在不同手机/模拟器上跑出不同题数与结论时，报告自身
+        就能解释差异来源（设备不同、布局重排、缺参考图库、无视觉密钥、
+        模拟器无麦克风），无需回头翻服务端日志。
+        """
+        env = meta.get("env") or {}
+        if not env or env.get("unavailable"):
+            return ""
+        dev = env.get("device") or {}
+        caps = env.get("capabilities") or {}
+        warns = env.get("warnings") or []
+
+        head = []
+        if dev.get("brand") or dev.get("model"):
+            head.append(f"{dev.get('brand') or ''} {dev.get('model') or ''}".strip())
+        if dev.get("size"):
+            head.append("×".join(str(x) for x in dev["size"]))
+        if dev.get("density"):
+            head.append(f"{dev['density']}dpi")
+        if dev.get("dp"):
+            head.append("逻辑 %s" % "×".join(str(x) for x in dev["dp"]) + "dp")
+        if dev.get("app_version"):
+            head.append("App " + str(dev["app_version"]))
+        if dev.get("emulator"):
+            head.append("模拟器")
+        if dev.get("layout_matches_reference") is False:
+            head.append("布局与坐标基准不同")
+
+        off = [label for k, label in self._CAP_LABEL.items() if not caps.get(k)]
+        if caps.get("record") is False:
+            off.append("录音类题")
+        elif caps.get("record") is None:
+            off.append("录音类题（设备能力未知）")
+
+        parts = []
+        if head:
+            parts.append(
+                '<div style="font-size:12px;color:#555;margin:2px 0 6px">'
+                "检测环境：" + html.escape("，".join(head)) + "</div>")
+        if off:
+            parts.append(
+                '<div style="font-size:12px;color:#8a6d00;background:#fff8e1;'
+                'border-left:3px solid #f0b400;padding:6px 9px;margin:0 0 8px">'
+                "本轮未做：" + html.escape("、".join(off))
+                + "（对应维度记为未判定，不计为不通过）。</div>")
+        if warns:
+            lis = "".join(f"<li>{html.escape(str(w))}</li>" for w in warns)
+            parts.append(
+                '<details style="font-size:12px;color:#555;margin:0 0 10px">'
+                f"<summary style=\"cursor:pointer\">环境提示（{len(warns)} 项）</summary>"
+                f'<ul style="margin:6px 0 0 18px;line-height:1.6">{lis}</ul></details>')
+        return "\n  ".join(parts)
+
     def _render_live_html(self, questions: list[dict], meta: dict) -> str:
         version = meta.get("version", "未知版本")
         unit = meta.get("unit", "?")
@@ -1381,6 +1445,9 @@ class ReportExporter:
         prov_html = "\n  ".join(
             f'<div class="prov prov-{_lv}">{html.escape(_t)}</div>'
             for _lv, _t in self._script_provenance_lines(meta))
+        # ★ 2026-10-19：检测环境块。同一份脚本在不同手机/模拟器上结论不同时，
+        #   报告必须自带"这台设备是什么、哪些维度没做"，否则只能怀疑代码随机。
+        env_html = self._render_env_block(meta)
         title = f"实时错题报告 — {version} · U{unit} · {stage}"
         return f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -1396,6 +1463,8 @@ class ReportExporter:
   <div class="sub">生成于 {date_str} · {failed} 道不通过 · {undet} 道未判定 · 脚本自检 {sc_total} 处 · 审查中实时更新</div>
 
   {prov_html}
+
+  {env_html}
 
   <div class="stats">
     <div class="stat s-fail"><div class="num">{failed}</div><div class="lab">不通过</div></div>

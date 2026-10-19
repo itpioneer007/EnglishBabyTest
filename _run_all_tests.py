@@ -3,7 +3,9 @@
 import os, glob, subprocess, sys
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-PY = r"C:\Users\19507\AppData\Local\Programs\Python\Python312\python.exe"
+# ★ 2026-10-19：不再写死某个人的 Python 安装路径。用当前解释器即可 ——
+#   测试本来就该用"跑得起来的那一个"来跑。需要指定时用 YYB_PYTHON。
+PY = os.environ.get("YYB_PYTHON", "").strip() or sys.executable
 
 pats = ["scripts/tests/*.py", "mock_test_*.py", "verify_*.py", "tools/test_*.py"]
 files = []

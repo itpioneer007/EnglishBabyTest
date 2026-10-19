@@ -111,6 +111,10 @@ data/*.bak*
 #   含 data/llm_budget.json 与其原子写临时文件 .json.tmp
 data/llm_budget.json*
 
+# 上次运行的环境指纹（设备/App 版本/模型名）。属运行产物，且每台机器都不同，
+# 入库会让别人看到"与上轮环境不同"的假告警。见 scripts/common/env_check.py
+data/env_last.json
+
 # 运行时状态文件（记录当前目标设备序列号，各机器不同）
 server_target.txt
 

@@ -191,6 +191,50 @@ def _ensure_screen_on(d):
         print(f"  ⚠ 亮屏检查异常: {e}")
 
 
+_T_SCALE_CACHE = None
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _timeout_scale(d=None) -> float:
+    """当前设备的超时倍数（真机 1.0，模拟器默认 2.0）。
+
+    ★ 2026-10-19 新增。根因：模拟器的渲染与 UI 响应明显慢于真机，而代码里
+      大量等待是"真机实测出来的秒数"。同一份代码在 MuMu 上会频繁超时 →
+      控件找不到 → 该题被记成"未检测到/不通过"；在作者真机上则一切正常。
+      于是"换个设备结果就不一样"，但日志看不出是超时导致的。
+
+    取值：config.yaml 的 runtime.emulator_timeout_scale（默认 2.0）；真机恒为 1.0。
+    """
+    global _T_SCALE_CACHE
+    if _T_SCALE_CACHE is not None:
+        return _T_SCALE_CACHE
+    scale = 1.0
+    try:
+        is_emu = ":" in (os.environ.get("ANDROID_SERIAL", "").strip())
+        if not is_emu and d is not None:
+            try:
+                is_emu = ((d.shell("getprop ro.kernel.qemu", timeout=3) or "").strip() == "1")
+            except Exception:
+                is_emu = False
+        if is_emu:
+            scale = 2.0
+            try:
+                import yaml
+                with open(os.path.join(_PROJECT_ROOT, "config.yaml"), encoding="utf-8") as fh:
+                    cfg = yaml.safe_load(fh) or {}
+                v = float((cfg.get("runtime") or {}).get("emulator_timeout_scale", 2.0))
+                if 1.0 <= v <= 5.0:
+                    scale = v
+            except Exception:
+                pass
+    except Exception:
+        scale = 1.0
+    _T_SCALE_CACHE = scale
+    if scale != 1.0:
+        print(f"  [自适应] 检测到模拟器，等待时间按 {scale:.1f} 倍放宽")
+    return scale
+
+
 def run_all(module_names=None, d=None, version=None, grade=None, units=None, stop_check=None, on_module_done=None):
     """依次跑指定模块（默认全部），返回 {模块: {q, t, ok}}
 
@@ -202,10 +246,13 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
     """
     # ★ 全局 u2 操作超时：默认 300s，设备断连时每个操作挂 5 分钟 = 看起来"卡死"
     #   设为 15s，设备异常时快速失败并报错
+    # ★ 2026-10-19：再乘设备系数（模拟器 2.0）。固定 15s 在模拟器上太紧 ——
+    #   dump_hierarchy 一次就要 2~4s，连点两次就超时，表现为"控件找不到"。
+    _ts = _timeout_scale(d)
     try:
         import uiautomator2 as _u2
-        _u2.HTTP_TIMEOUT = 15
-        _u2.WAIT_FOR_DEVICE_TIMEOUT = 10
+        _u2.HTTP_TIMEOUT = int(15 * _ts)
+        _u2.WAIT_FOR_DEVICE_TIMEOUT = int(10 * _ts)
     except Exception:
         pass
 
@@ -258,8 +305,8 @@ def run_all(module_names=None, d=None, version=None, grade=None, units=None, sto
         #     → 整轮跑在【上一个年级】上，结论全部作废却毫无提示。
         #   实测日志：21:25:05 重启 App → 21:25:10 切年级 → ✘ 无法回到主页（仅隔 5s）。
         #   改为轮询等待主页特征就绪（最多 25s），就绪后才继续。
-        if not _wait_home_ready(d, timeout=25):
-            step_log("App 在 25 秒内未进入首页，可能被开屏广告或系统弹窗遮挡，继续尝试",
+        if not _wait_home_ready(d, timeout=int(25 * _ts)):
+            step_log(f"App 在 {int(25 * _ts)} 秒内未进入首页，可能被开屏广告或系统弹窗遮挡，继续尝试",
                      "warning")
     except Exception as e:
         step_log("App 重启失败，继续尝试", "error")

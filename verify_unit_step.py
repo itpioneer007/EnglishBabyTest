@@ -29,8 +29,29 @@ def dump_texts(d, n=30):
     return [t for t in re.findall(r'text="([^"]+)"', xml) if t.strip()][:n]
 
 
+def _pick_serial():
+    """选择要连接的真实设备（不再写死作者的真机串号）。
+
+    ★ 2026-10-19：原写法在别人的电脑上必然报 "device not online"，
+      这条验证于是永远跑不起来，被当成"环境问题"忽略。
+    顺序：ANDROID_SERIAL → 在线真机 → 在线任意设备 → 空（u2 默认）。
+    """
+    s = os.environ.get("ANDROID_SERIAL", "").strip()
+    if s:
+        return s
+    try:
+        from adbutils import adb
+        devs = [x.serial for x in adb.device_list()]
+        real = [x for x in devs if ":" not in x]
+        return (real or devs or [""])[0]
+    except Exception:
+        return ""
+
+
 def main():
-    d = u2.connect("SKSCIF4T7PFMQS5X")
+    _serial = _pick_serial()
+    print("  目标设备:", _serial or "(u2 默认)")
+    d = u2.connect(_serial) if _serial else u2.connect()
     print("✅ 设备已连接", d.window_size())
     d.press("home"); time.sleep(0.5)
     d.app_stop(APP_PACKAGE); time.sleep(1)
